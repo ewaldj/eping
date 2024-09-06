@@ -17,9 +17,9 @@ Displays the number of status changes.
 
 
 ```
-» eping.py -h
-usage: eping.py [-h] [-f HOSTFILE] [-df] [-n NETWORK_CIDR] [-r [NETWORK_RANGE ...]] [-B BACKOFF] [-t TIMEOUT] [-o LOGFILE] [-dl] [-cl]
-                [-up UP_HOSTS_CHECK] [-p NUM_OF_THREADS]
+~ »eping.py -h 
+usage: eping.py [-h] [-f HOSTFILE] [-df] [-n NETWORK_CIDR] [-n1 NETWORK_CIDR1] [-n2 NETWORK_CIDR2] [-n3 NETWORK_CIDR3] [-n4 NETWORK_CIDR4] [-r [NETWORK_RANGE ...]] [-r1 [NETWORK_RANGE1 ...]] [-r2 [NETWORK_RANGE2 ...]] [-r3 [NETWORK_RANGE3 ...]] [-r4 [NETWORK_RANGE4 ...]] [-B BACKOFF] [-t TIMEOUT] [-o LOGFILE]
+                   [-dl] [-cl] [-up UP_HOSTS_CHECK] [-p NUM_OF_THREADS]
 
 options:
   -h, --help            show this help message and exit
@@ -29,8 +29,24 @@ options:
                         disable hostsfile
   -n NETWORK_CIDR, --network NETWORK_CIDR
                         network instead of the hostfile e.g. 172.17.17.0/24 minimum lenght is /18
+  -n1 NETWORK_CIDR1, --network1 NETWORK_CIDR1
+                        network instead of the hostfile e.g. 10.0.0.0/30 minimum lenght is /18
+  -n2 NETWORK_CIDR2, --network2 NETWORK_CIDR2
+                        network instead of the hostfile e.g. 192.168.100/25 minimum lenght is /18
+  -n3 NETWORK_CIDR3, --network3 NETWORK_CIDR3
+                        network instead of the hostfile e.g. 10.10.0.0/22 minimum lenght is /18
+  -n4 NETWORK_CIDR4, --network4 NETWORK_CIDR4
+                        network instead of the hostfile e.g. 10.180.0.0/21 minimum lenght is /18
   -r [NETWORK_RANGE ...], --network_range [NETWORK_RANGE ...]
-                        ip range e.g. 172.17.17.1 172.17.17.20 maximum 16384 hosts
+                        ip range e.g. 10.180.0.0 10.180.3.255
+  -r1 [NETWORK_RANGE1 ...], --network_range1 [NETWORK_RANGE1 ...]
+                        ip range e.g. 172.17.1.1 172.17.1.20
+  -r2 [NETWORK_RANGE2 ...], --network_range2 [NETWORK_RANGE2 ...]
+                        ip range e.g. 192.168.1.1 192.168.1.60
+  -r3 [NETWORK_RANGE3 ...], --network_range3 [NETWORK_RANGE3 ...]
+                        ip range e.g. 1.1.1.0 1.1.1.255
+  -r4 [NETWORK_RANGE4 ...], --network_range4 [NETWORK_RANGE4 ...]
+                        ip range e.g. 8.8.8.8 8.8.8.8
   -B BACKOFF, --backoff BACKOFF
                         set exponential backoff factor to N (default: 1.5)
   -t TIMEOUT, --timeout TIMEOUT
@@ -43,5 +59,6 @@ options:
   -up UP_HOSTS_CHECK, --up UP_HOSTS_CHECK
                         display and check only host the are up x runs
   -p NUM_OF_THREADS, --threads NUM_OF_THREADS
-                        default is 3 parallel threads
+                        default is 3 parallel threads maximum 120
+jeitler@D16FNQHTJ6:~ »
 ```
