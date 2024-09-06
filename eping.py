@@ -28,7 +28,7 @@ import subprocess
 import threading
 import datetime
 
-version = '0.90'
+version = '0.91'
 
 def error_handler(message):
     screen=curses.initscr()
@@ -291,14 +291,22 @@ if __name__=='__main__':
     parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='network instead of the hostfile e.g. 172.17.17.0/24  minimum lenght is /18'  )
-    parser.add_argument('-r', '--network_range', default='', nargs = '*' ,dest='network_range', help='ip range  e.g. 172.17.17.1 172.17.17.20  maximum 16384 hosts')
+    parser.add_argument('-n1', '--network1', default='', dest='network_cidr1', help='network instead of the hostfile e.g. 10.0.0.0/30  minimum lenght is /18'  )
+    parser.add_argument('-n2', '--network2', default='', dest='network_cidr2', help='network instead of the hostfile e.g. 192.168.100/25  minimum lenght is /18'  )
+    parser.add_argument('-n3', '--network3', default='', dest='network_cidr3', help='network instead of the hostfile e.g. 10.10.0.0/22  minimum lenght is /18'  )
+    parser.add_argument('-n4', '--network4', default='', dest='network_cidr4', help='network instead of the hostfile e.g. 10.180.0.0/21  minimum lenght is /18'  )
+    parser.add_argument('-r', '--network_range', default='', nargs = '*' ,dest='network_range', help='ip range  e.g. 10.180.0.0 10.180.3.255')
+    parser.add_argument('-r1', '--network_range1', default='', nargs = '*' ,dest='network_range1', help='ip range  e.g. 172.17.1.1 172.17.1.20')
+    parser.add_argument('-r2', '--network_range2', default='', nargs = '*' ,dest='network_range2', help='ip range  e.g. 192.168.1.1 192.168.1.60')
+    parser.add_argument('-r3', '--network_range3', default='', nargs = '*' ,dest='network_range3', help='ip range  e.g. 1.1.1.0 1.1.1.255')
+    parser.add_argument('-r4', '--network_range4', default='', nargs = '*' ,dest='network_range4', help='ip range  e.g. 8.8.8.8 8.8.8.8')
     parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5)" )
-    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms)" )
+    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms)") 
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
-    parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads" )
+    parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads maximum 120" )
     
     
     # read arguments from command line
@@ -317,21 +325,86 @@ if __name__=='__main__':
     
     if args.delete_files:
         delete_files('eping-l*')
-    
+
+# --- network range r to r4 
+
     # get ipv4 ips from network range 
     if args.network_range:
         try:
             hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range[0]),(args.network_range[1]),32768))
         except TypeError as error_msg:
             error_handler(error_msg)
-    
+
+    # get ipv4 ips from network range (r1)
+    if args.network_range1:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range1[0]),(args.network_range1[1]),32768))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # get ipv4 ips from network range (r2)
+    if args.network_range2:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range2[0]),(args.network_range2[1]),32768))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # get ipv4 ips from network range (r3)
+    if args.network_range3:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range3[0]),(args.network_range3[1]),32768))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # get ipv4 ips from network range (r4)
+    if args.network_range4:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range4[0]),(args.network_range4[1]),32768))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+# --- cidr  n to n4 
+
     # get ipv4 ips from cidr  
     if args.network_cidr:
         try:
             hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr),15,32))
         except TypeError as error_msg:
             error_handler(error_msg)
-        
+
+
+    # get ipv4 ips from cidr  
+    if args.network_cidr1:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr1),15,32))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # get ipv4 ips from cidr  
+    if args.network_cidr2:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr2),15,32))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # get ipv4 ips from cidr  
+    if args.network_cidr3:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr3),15,32))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # get ipv4 ips from cidr  
+    if args.network_cidr4:
+        try:
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr4),15,32))
+        except TypeError as error_msg:
+            error_handler(error_msg)
+
+    # num_of_threads maximum check 
+    if int(args.num_of_threads) > 120: 
+        error_handler('ERROR: Maximum threads are 120 ')
+
     # create sample file if not exists and no special file is given 
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
         data = ["127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222 \n", "208.67.220.220 \n","www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n", "ö3.at www.orf.at www.jeitler.cc\n" ]
