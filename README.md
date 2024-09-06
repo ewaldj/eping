@@ -62,3 +62,16 @@ options:
                         default is 3 parallel threads maximum 120
 jeitler@D16FNQHTJ6:~ »
 ```
+# epinganalysis.py 
+## epinganalysis.py 
+
+```
+./epinganalysis.py -h                                                          2 ↵
+usage: epinganalysis.py [-h] [-f FILENAME]
+
+options:
+  -h, --help            show this help message and exit
+  -f FILENAME, --logfile FILENAME
+                        logfilename
+```
+
