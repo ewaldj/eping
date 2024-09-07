@@ -5,7 +5,7 @@ import sys
 import argparse
 import datetime
 
-version = '0.02'
+version = '0.03'
 
 def error_handler(message):
 #    screen=curses.initscr()
@@ -64,9 +64,18 @@ if __name__=='__main__':
     except TypeError as error_msg:
         error_handler(error_msg)
 
+    try:
+        try: 
+            if "HOSTNAME" in log_data_list[0] and "RTT" in log_data_list[0] and "RTT" in log_data_list[0] and "PREVIOUS_STATE" in log_data_list[0]:
+                pass
+        except:
+            error_handler('ERROR: the file ' + args.filename + ' is not a eping.py logfile') 
+    except TypeError as error_msg:
+        error_handler(error_msg)
 
     hostlist =[]
     hosts_with_changes =[]
+
     for row in log_data_list:
         timestamp = (row['TIMESTAMP'])
         hostname = (row['HOSTNAME'])
@@ -102,10 +111,15 @@ if __name__=='__main__':
                     hosts_allways_no_dns.append((row))
                     break
 
+    print ('')
+    print ('--------------------------------------------------------------------------------------')
+    print ('--------------- epinganalysis.py version ' + version + ' by Ewald Jeitler -----------------------')
+    print ('--------------------------------------------------------------------------------------')
+    print ('')
 
     for row in hosts_with_changes:
         i=0
-        print (' ')
+        print ('')
         print ('-------- HOST: ' + row + '  --------')
         for row2 in log_data_list:
             if (row2['HOSTNAME']) == row:
@@ -116,41 +130,40 @@ if __name__=='__main__':
                     time1 = datetime.datetime.strptime((row2['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
                     time2 = datetime.datetime.strptime(timestamp_1, "%d/%m/%Y %H:%M:%S")
                     time_delta = time1  - time2
+                    hostname_out = (row).ljust(30)
 
 
                     if (row2['CURRENT_STATE']) == 'UP':
-                        print ((row2['TIMESTAMP']) + ' | ' + (row) + ' | change state to '   + CGREEN + (row2['CURRENT_STATE']) + CEND + '     | ' + str(time_delta) )
+                        print ((row2['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row2['CURRENT_STATE']) + CEND + '    | ∆ ' + str(time_delta) )
                         i=0
                     elif (row2['CURRENT_STATE']) == 'DOWN':
-                        print ((row2['TIMESTAMP']) + ' | ' + (row) + ' | change state to '   + CRED + (row2['CURRENT_STATE']) + CEND + '   | ' + str(time_delta) )
+                        print ((row2['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row2['CURRENT_STATE']) + CEND + '   | ∆ '  + str(time_delta) )
                         i=0
                     elif (row2['CURRENT_STATE']) == 'NO-DNS':
-                        print ((row2['TIMESTAMP']) + ' | ' + (row) + ' | change state to '   + CRED + (row2['CURRENT_STATE']) + CEND + ' | ' + str(time_delta) )
+                        print ((row2['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row2['CURRENT_STATE']) + CEND + ' | ∆ ' + str(time_delta) )
                         i=0
 
-
-
-
+    print ("\n\n")
+    print ("--- ALL HOSTS---------------------------------------------")
+    print (*hostlist,sep=' | ')
+    print ("----------------------------------------------------------")
     print ("")
-    print ("--ALL HOSTS---------------------------------------------")
-    print (hostlist)
-    print ("--------------------------------------------------------")
+    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP   --------------------------" + CEND)
+    print (*hosts_allways_up, sep=" | ")
+    print ("----------------------------------------------------------")
     print ("")
-    print (CGREEN + "--STABLE HOSTS - ALLWAYS UP   --------------------------" + CEND)
-    print (hosts_allways_up)
-    print ("--------------------------------------------------------")
+    print (CRED +"--- STABLE HOSTS - ALLWAYS DOWN --------------------------"+ CEND)
+    print (*hosts_allways_down, sep=" | ")
+    print ("----------------------------------------------------------")
     print ("")
-    print (CRED +"--STABLE HOSTS - ALLWAYS DOWN --------------------------"+ CEND)
-    print (hosts_allways_down)
-    print ("--------------------------------------------------------")
-    print ("")
-    print (CRED +"--STABLE HOSTS - NO-DNS --------------------------------"+ CEND)
-    print (hosts_allways_no_dns)
-    print ("--------------------------------------------------------")
+    print (CRED +"--- STABLE HOSTS - NO-DNS --------------------------------"+ CEND)
+    print (*hosts_allways_no_dns, sep=" | ")
+    print ("----------------------------------------------------------")
     print ("")
 #    print ("--STABLE HOSTS - NO CHANGES  ---------------------------")
 #    print (hosts_without_changes)
-    print (CORANGE +"--FLAPPING HOSTS - STATE CHANGES -----------------------"+ CEND)
-    print (hosts_with_changes)
-    print ("--------------------------------------------------------")
+    print (CORANGE +"--- FLAPPING HOSTS ---------------------------------------"+ CEND)
+    print (*hosts_with_changes, sep =" | ")
+    print ("----------------------------------------------------------")
     print ("")
+    print ("THX for using epinganalysis.py version " + version )
