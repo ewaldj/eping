@@ -60,8 +60,13 @@ options:
                         display and check only host the are up x runs
   -p NUM_OF_THREADS, --threads NUM_OF_THREADS
                         default is 3 parallel threads maximum 120
-jeitler@D16FNQHTJ6:~ »
+
+
 ```
+
+![grafik](https://github.com/user-attachments/assets/c64e6af1-1db3-4cac-80bd-5d4cfd37dfba)
+
+
 # epinganalysis.py 
 ## epinganalysis.py 
 
@@ -74,4 +79,7 @@ options:
   -f FILENAME, --logfile FILENAME
                         logfilename
 ```
+
+![grafik](https://github.com/user-attachments/assets/ebb35fcc-a593-4802-a15b-6b4b37c5bd92)
+
 
