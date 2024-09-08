@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import re
+import os 
 import csv
 import sys
 import argparse
 import datetime
 import ipaddress
 import signal
-
-version = '0.04'
+import time 
+version = '0.06'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -25,16 +26,6 @@ def check_python_version(mrv):
     else:
         return False
 
-def open_csv(filename):
-    log_data = {}
-    try:
-        with open(filename, 'r', encoding='UTF8' ) as csvfile:
-            reader = csv.DictReader(csvfile)
-            log_data = list(reader)
-        csvfile.close()
-        return (log_data)
-    except:
-        raise TypeError('ERROR: Unable to open logfile: ' + filename)
 
 def match_re(word,name_re):
     m = eval(name_re).match(word)
@@ -54,6 +45,28 @@ def sort_fqdn_ip(fping_result_data):
     sorted_fping_result_ip = sorted(fping_result_ip, key=lambda x: int(ipaddress.ip_address(x)))
     sorted_fping_result_fqdn = sorted(fping_result_fqdn, key=lambda x: x[0])
     return (sorted_fping_result_ip + sorted_fping_result_fqdn)
+
+def get_filename(extention):
+    result_filelist=[]
+    all_files_in_dir = [f.name for f in os.scandir() if f.is_file()]
+    for f in all_files_in_dir:
+        if f.endswith(extention):
+            result_filelist.append(f)
+    return(result_filelist)
+
+def check_file(filename):
+    print (os.path.isfile(filename))
+
+def open_csv(csv_filename):
+    log_data = {}
+    try:
+        with __builtins__.open(csv_filename, 'r', encoding='UTF8' ) as csvfile:
+            reader = csv.DictReader(csvfile)
+            log_data = list(reader)
+        csvfile.close()
+        return (log_data)
+    except:
+        raise TypeError('ERROR: Unable to open logfile: ' + csv_filename)
 
 
 # MAIN MAIN MAIN
@@ -81,10 +94,40 @@ if __name__=='__main__':
     args = parser.parse_args()
 
     if not args.filename:
-        error_handler('Please specify log file -f <filename>')
+        print ("--- select csv logfile -----------------------------------")
+        print ("|  NO | FILENAME ")
+        print ("----------------------------------------------------------")
+  
+        x = 1
+        all_filenames=get_filename("csv")
+  
+        for list_x in all_filenames:
+            print ('| ' + str(x).rjust(3) + ' |  ' + list_x)
+            x=x+1 
+        print ("----------------------------------------------------------")
+  
+        fileno=input("enter no of file or \"e\" for exit: ")
+        while True:
+            if fileno == "e" or fileno =="E":
+                sys.exit(0)
+            if fileno.isdigit():
+                if int(fileno)<x and int(fileno)>=1:
+                    break
+                else:
+                    print ("Invalid input. Try again. Range is from 1 to " + str(x-1) +" or e for exit")
+                    fileno=input("select logfile by number: ") 
+            else:
+                print ("Invalid input. Try again. Range is from 1 to " + str(x-1) +" or e for exit")
+                fileno=input("select logfile by number: ")
+  
+        csv_filename = (all_filenames[int(fileno)-1])
+
+    else:
+        csv_filename = args.filename
 
     try:
-        log_data_list=open_csv(args.filename)
+        log_data_list=open_csv(csv_filename)
+
     except TypeError as error_msg:
         error_handler(error_msg)
 
@@ -93,7 +136,7 @@ if __name__=='__main__':
             if "HOSTNAME" in log_data_list[0] and "RTT" in log_data_list[0] and "RTT" in log_data_list[0] and "PREVIOUS_STATE" in log_data_list[0]:
                 pass
         except:
-            error_handler('ERROR: the file ' + args.filename + ' is not a eping.py logfile') 
+            error_handler('ERROR: the file ' + csv_filename + ' is not a eping.py logfile') 
     except TypeError as error_msg:
         error_handler(error_msg)
 
@@ -211,4 +254,5 @@ if __name__=='__main__':
     print ("----------------------------------------------------------")
     print ("")
     print ("THX for using epinganalysis.py version " + version )
+
 
