@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-
+import re
 import csv
 import sys
 import argparse
 import datetime
+import ipaddress
+import signal
 
-version = '0.03'
+version = '0.04'
 
 def error_handler(message):
-#    screen=curses.initscr()
-#   screen=curses.endwin()
     print ('\n ' + str(message) + '\n')
     sys.exit(0)
 
 def sigint_handler(signal, frame):
-#    screen=curses.initscr()
-#    curses.endwin()
-    print ('THX for using eping.py ')
+    print ('THX for using epinganalysis.py version ' + version)
     sys.exit(0)
 
 
@@ -26,7 +24,6 @@ def check_python_version(mrv):
         return True
     else:
         return False
-
 
 def open_csv(filename):
     log_data = {}
@@ -39,6 +36,25 @@ def open_csv(filename):
     except:
         raise TypeError('ERROR: Unable to open logfile: ' + filename)
 
+def match_re(word,name_re):
+    m = eval(name_re).match(word)
+    if m:
+        return m.group(0)
+
+def sort_fqdn_ip(fping_result_data):
+    fping_result_ip=[]
+    fping_result_fqdn=[]
+    for o in fping_result_data:
+        if match_re(o,'ip_re'):
+            data=(o)
+            fping_result_ip.append(data)
+        elif match_re(o,'fqdn_re'):
+            data=(o)
+            fping_result_fqdn.append(data)
+    sorted_fping_result_ip = sorted(fping_result_ip, key=lambda x: int(ipaddress.ip_address(x)))
+    sorted_fping_result_fqdn = sorted(fping_result_fqdn, key=lambda x: x[0])
+    return (sorted_fping_result_ip + sorted_fping_result_fqdn)
+
 
 # MAIN MAIN MAIN
 if __name__=='__main__':
@@ -46,6 +62,14 @@ if __name__=='__main__':
     CEND = '\033[0m'
     CGREEN = '\033[92m'
     CORANGE = '\033[33m'
+    signal.signal(signal.SIGINT, sigint_handler)
+
+    # regex IP/FQDN/CIDR .... 
+    ip_re = re.compile(r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
+    fqdn_re = re.compile(r'(?=^.{4,253}$)(^((?!-)[a-zA-Z0-9-äöüÄÖÜ]{1,63}(?<!-)([\.]?))+[a-zA-ZäöüÄÖÜ]{0,63}$)')
+    cidr_ipv4_re = re.compile (r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(3[0-2]|[1-2][0-9]|[0-9]))$')
+    timestamp_re = re.compile (r'^\[[0-9]{10}.[0-9]{5}\]')
+
 
     min_required_version = (3,8)
     if not check_python_version(min_required_version):
@@ -76,14 +100,14 @@ if __name__=='__main__':
     hostlist =[]
     hosts_with_changes =[]
 
-    for row in log_data_list:
-        timestamp = (row['TIMESTAMP'])
-        hostname = (row['HOSTNAME'])
-        previous_state = (row['PREVIOUS_STATE'])
-        current_state = (row['CURRENT_STATE'])
-        rtt = (row['RTT'])
-        no_of_changes =(row['NO_OF_CHANGES'])
-        change_timestamp =(row['CHANGE_TIMESTAMP'])
+    for row_hosts_with_changes in log_data_list:
+        timestamp = (row_hosts_with_changes['TIMESTAMP'])
+        hostname = (row_hosts_with_changes['HOSTNAME'])
+        previous_state = (row_hosts_with_changes['PREVIOUS_STATE'])
+        current_state = (row_hosts_with_changes['CURRENT_STATE'])
+        rtt = (row_hosts_with_changes['RTT'])
+        no_of_changes =(row_hosts_with_changes['NO_OF_CHANGES'])
+        change_timestamp =(row_hosts_with_changes['CHANGE_TIMESTAMP'])
 
         if hostname not in hostlist:
             hostlist.append(hostname)
@@ -98,18 +122,22 @@ if __name__=='__main__':
     hosts_allways_down=[]
     hosts_allways_no_dns=[]
 
-    for row in hosts_without_changes:
-        for row2 in log_data_list:
-            if (row2['HOSTNAME']) == row:
-                if (row2['CURRENT_STATE']) == 'UP':
-                    hosts_allways_up.append((row))
+    for row_hosts_with_changes in hosts_without_changes:
+        for row_log_data_list in log_data_list:
+            if (row_log_data_list['HOSTNAME']) == row_hosts_with_changes:
+                if (row_log_data_list['CURRENT_STATE']) == 'UP':
+                    hosts_allways_up.append((row_hosts_with_changes))
                     break
-                elif (row2['CURRENT_STATE']) == 'DOWN':
-                    hosts_allways_down.append((row))
+                elif (row_log_data_list['CURRENT_STATE']) == 'DOWN':
+                    hosts_allways_down.append((row_hosts_with_changes))
                     break
-                elif (row2['CURRENT_STATE']) == 'NO-DNS':
-                    hosts_allways_no_dns.append((row))
+                elif (row_log_data_list['CURRENT_STATE']) == 'NO-DNS':
+                    hosts_allways_no_dns.append((row_hosts_with_changes))
                     break
+    hostlist=sort_fqdn_ip(hostlist)
+    hosts_allways_up=sort_fqdn_ip(hosts_allways_up)
+    hosts_allways_down=sort_fqdn_ip(hosts_allways_down)
+    hosts_allways_no_dns=sort_fqdn_ip(hosts_allways_no_dns)
 
     print ('')
     print ('--------------------------------------------------------------------------------------')
@@ -117,30 +145,48 @@ if __name__=='__main__':
     print ('--------------------------------------------------------------------------------------')
     print ('')
 
-    for row in hosts_with_changes:
+    hosts_with_changes=sort_fqdn_ip(hosts_with_changes)
+
+    for row_hosts_with_changes in hosts_with_changes:
         i=0
+        x=0
         print ('')
-        print ('-------- HOST: ' + row + '  --------')
-        for row2 in log_data_list:
-            if (row2['HOSTNAME']) == row:
-                if (row2['CURRENT_STATE'])  ==  (row2['PREVIOUS_STATE']) and i!=1 :
-                     timestamp_1 = (row2['TIMESTAMP'])
-                     i=1
-                elif (row2['CURRENT_STATE'])  !=  (row2['PREVIOUS_STATE']):
-                    time1 = datetime.datetime.strptime((row2['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
+        print ('-------- HOST: ' + row_hosts_with_changes + '  --------')
+        for row_log_data_list in log_data_list:
+            hostname_out = (row_hosts_with_changes).ljust(30)
+            # FIRST STATE OF HOST 
+            if (row_log_data_list['HOSTNAME']) == row_hosts_with_changes:
+                if x==0:
+                    temp_state=(row_log_data_list['CURRENT_STATE'])
+                    if (row_log_data_list['CURRENT_STATE']) == 'UP':
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND)
+                        timestamp_1 = (row_log_data_list['TIMESTAMP'])
+                        x=1
+                    elif (row_log_data_list['CURRENT_STATE']) == 'DOWN':
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND)
+                        timestamp_1 = (row_log_data_list['TIMESTAMP'])
+                        x=1
+                    elif (row_log_data_list['CURRENT_STATE']) == 'NO-DNS':
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND) 
+                        timestamp_1 = (row_log_data_list['TIMESTAMP'])
+                        x=1
+
+                if temp_state != (row_log_data_list['CURRENT_STATE']):
+                    time1 = datetime.datetime.strptime((row_log_data_list['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
                     time2 = datetime.datetime.strptime(timestamp_1, "%d/%m/%Y %H:%M:%S")
                     time_delta = time1  - time2
-                    hostname_out = (row).ljust(30)
 
+                    temp_state=(row_log_data_list['CURRENT_STATE'])
+                    timestamp_1 = (row_log_data_list['TIMESTAMP'])
 
-                    if (row2['CURRENT_STATE']) == 'UP':
-                        print ((row2['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row2['CURRENT_STATE']) + CEND + '    | ∆ ' + str(time_delta) )
+                    if (row_log_data_list['CURRENT_STATE']) == 'UP':
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND + '    | ∆t ' + str(time_delta) )
                         i=0
-                    elif (row2['CURRENT_STATE']) == 'DOWN':
-                        print ((row2['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row2['CURRENT_STATE']) + CEND + '   | ∆ '  + str(time_delta) )
+                    elif (row_log_data_list['CURRENT_STATE']) == 'DOWN':
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + '   | ∆t '  + str(time_delta) )
                         i=0
-                    elif (row2['CURRENT_STATE']) == 'NO-DNS':
-                        print ((row2['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row2['CURRENT_STATE']) + CEND + ' | ∆ ' + str(time_delta) )
+                    elif (row_log_data_list['CURRENT_STATE']) == 'NO-DNS':
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + ' | ∆t ' + str(time_delta) )
                         i=0
 
     print ("\n\n")
@@ -160,10 +206,9 @@ if __name__=='__main__':
     print (*hosts_allways_no_dns, sep=" | ")
     print ("----------------------------------------------------------")
     print ("")
-#    print ("--STABLE HOSTS - NO CHANGES  ---------------------------")
-#    print (hosts_without_changes)
     print (CORANGE +"--- FLAPPING HOSTS ---------------------------------------"+ CEND)
     print (*hosts_with_changes, sep =" | ")
     print ("----------------------------------------------------------")
     print ("")
     print ("THX for using epinganalysis.py version " + version )
+
