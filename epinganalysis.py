@@ -8,7 +8,7 @@ import datetime
 import ipaddress
 import signal
 import time 
-version = '0.06'
+version = '0.07'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -233,26 +233,25 @@ if __name__=='__main__':
                         i=0
 
     print ("\n\n")
-    print ("--- ALL HOSTS---------------------------------------------")
+    print ("--- ALL HOSTS --------------------------------------------| " + str(len(hostlist)).rjust(5) + ' |' )
     print (*hostlist,sep=' | ')
-    print ("----------------------------------------------------------")
+    print ("-------------------------------------------------------------------")
     print ("")
-    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP   --------------------------" + CEND)
+    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP ----------------------------" + CEND + '| ' + str(len(hosts_allways_up)).rjust(5) + ' |'  )
     print (*hosts_allways_up, sep=" | ")
-    print ("----------------------------------------------------------")
+    print ("-------------------------------------------------------------------")
     print ("")
-    print (CRED +"--- STABLE HOSTS - ALLWAYS DOWN --------------------------"+ CEND)
-    print (*hosts_allways_down, sep=" | ")
-    print ("----------------------------------------------------------")
-    print ("")
-    print (CRED +"--- STABLE HOSTS - NO-DNS --------------------------------"+ CEND)
-    print (*hosts_allways_no_dns, sep=" | ")
-    print ("----------------------------------------------------------")
-    print ("")
-    print (CORANGE +"--- FLAPPING HOSTS ---------------------------------------"+ CEND)
+    print (CORANGE +"--- FLAPPING HOSTS ---------------------------------------" + CEND + '| ' + str(len(hosts_with_changes)).rjust(5) + ' |')
     print (*hosts_with_changes, sep =" | ")
-    print ("----------------------------------------------------------")
+    print ("-------------------------------------------------------------------")
     print ("")
+    print (CRED + "--- STABLE HOSTS - ALLWAYS DOWN --------------------------" + CEND + '| ' + str(len(hosts_allways_down)).rjust(5) + ' |' )
+    print (*hosts_allways_down, sep=" | ")
+    print ("-------------------------------------------------------------------")
+    print ("")
+    print (CRED +"--- STABLE HOSTS - NO-DNS --------------------------------" + CEND + '| ' + str(len(hosts_allways_no_dns)).rjust(5) + ' |')
+    print (*hosts_allways_no_dns, sep=" | ")
+    print ("-------------------------------------------------------------------")
+    print ("")
+
     print ("THX for using epinganalysis.py version " + version )
-
-
