@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+
+# - - - - - - - - - - - - - - - - - - - - - - - -
+# epinganalysis.py by ewald@jeitler.cc 2024
+# - - - - - - - - - - - - - - - - - - - - - - - -
+# When I wrote this code, only god and
+# I knew how it worked.
+# Now, only god knows it!
+# - - - - - - - - - - - - - - - - - - - - - - - -
+
+
 import re
 import os 
 import csv
@@ -8,7 +18,7 @@ import datetime
 import ipaddress
 import signal
 import time 
-version = '0.07'
+version = '0.08'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -184,7 +194,9 @@ if __name__=='__main__':
 
     print ('')
     print ('--------------------------------------------------------------------------------------')
-    print ('--------------- epinganalysis.py version ' + version + ' by Ewald Jeitler -----------------------')
+    print ('------------------ epinganalysis.py version ' + version + ' by Ewald Jeitler --------------------')
+    print ('--------------------------------------------------------------------------------------')
+    print ('--------------- !!  BETA VERSION - TIME CALCULATION IS NOT EXACT !! ------------------')
     print ('--------------------------------------------------------------------------------------')
     print ('')
 
@@ -202,15 +214,15 @@ if __name__=='__main__':
                 if x==0:
                     temp_state=(row_log_data_list['CURRENT_STATE'])
                     if (row_log_data_list['CURRENT_STATE']) == 'UP':
-                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND)
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND + '    |            | *FS')
                         timestamp_1 = (row_log_data_list['TIMESTAMP'])
                         x=1
                     elif (row_log_data_list['CURRENT_STATE']) == 'DOWN':
-                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND)
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + '|               | *FS')
                         timestamp_1 = (row_log_data_list['TIMESTAMP'])
                         x=1
                     elif (row_log_data_list['CURRENT_STATE']) == 'NO-DNS':
-                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND) 
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + '|              | *FS') 
                         timestamp_1 = (row_log_data_list['TIMESTAMP'])
                         x=1
 
@@ -223,33 +235,55 @@ if __name__=='__main__':
                     timestamp_1 = (row_log_data_list['TIMESTAMP'])
 
                     if (row_log_data_list['CURRENT_STATE']) == 'UP':
-                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND + '    | ∆t ' + str(time_delta) )
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND + '    | ∆t ' + str(time_delta) + ' |' )
                         i=0
                     elif (row_log_data_list['CURRENT_STATE']) == 'DOWN':
-                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + '   | ∆t '  + str(time_delta) )
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + '   | ∆t '  + str(time_delta) + ' |')
                         i=0
                     elif (row_log_data_list['CURRENT_STATE']) == 'NO-DNS':
-                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + ' | ∆t ' + str(time_delta) )
+                        print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + ' | ∆t ' + str(time_delta) + ' |')
                         i=0
+                    temp_no_of_changes = ((row_log_data_list['NO_OF_CHANGES']))   
+        time1 = datetime.datetime.strptime((row_log_data_list['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
+        time_delta_last = time1  - time2
+
+## DO IS NO A PROBLEM 
+## DO IS NO A PROBLEM 
+## DO IS NO A PROBLEM 
+## DO IS NO A PROBLEM 
+## DO IS NO A PROBLEM 
+
+        if (row_log_data_list['CURRENT_STATE']) == 'UP':
+            print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to   '   + CGREEN + (row_log_data_list['CURRENT_STATE']) + CEND + '    | ∆t ' + str(time_delta_last) +' | *LS' )
+        elif (row_log_data_list['CURRENT_STATE']) == 'DOWN':
+            print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + '   | ∆t '  + str(time_delta_last) + ' | *LS')
+        elif (row_log_data_list['CURRENT_STATE']) == 'NO-DNS':
+            print ((row_log_data_list['TIMESTAMP']) + ' | ' + hostname_out + ' | change state to  '   + CRED + (row_log_data_list['CURRENT_STATE']) + CEND + ' | ∆t ' + str(time_delta_last) + ' | *LS' )
+      
+        print ('changes:' + temp_no_of_changes)
+
+    print ("-------------------------------------------------------------------")
+    print ('|  INFO:  *FS = first seen | *LS last seen')
+    print ("-------------------------------------------------------------------")
 
     print ("\n\n")
-    print ("--- ALL HOSTS --------------------------------------------| " + str(len(hostlist)).rjust(5) + ' |' )
+    print ("--- ALL HOSTS --------------------------------------------| # " + str(len(hostlist)).rjust(5) + ' |' )
     print (*hostlist,sep=' | ')
     print ("-------------------------------------------------------------------")
     print ("")
-    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP ----------------------------" + CEND + '| ' + str(len(hosts_allways_up)).rjust(5) + ' |'  )
+    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP ----------------------------" + CEND + '| # ' + str(len(hosts_allways_up)).rjust(5) + ' |'  )
     print (*hosts_allways_up, sep=" | ")
     print ("-------------------------------------------------------------------")
     print ("")
-    print (CORANGE +"--- FLAPPING HOSTS ---------------------------------------" + CEND + '| ' + str(len(hosts_with_changes)).rjust(5) + ' |')
+    print (CORANGE +"--- FLAPPING HOSTS ---------------------------------------" + CEND + '| # ' + str(len(hosts_with_changes)).rjust(5) + ' |')
     print (*hosts_with_changes, sep =" | ")
     print ("-------------------------------------------------------------------")
     print ("")
-    print (CRED + "--- STABLE HOSTS - ALLWAYS DOWN --------------------------" + CEND + '| ' + str(len(hosts_allways_down)).rjust(5) + ' |' )
+    print (CRED + "--- STABLE HOSTS - ALLWAYS DOWN --------------------------" + CEND + '| # ' + str(len(hosts_allways_down)).rjust(5) + ' |' )
     print (*hosts_allways_down, sep=" | ")
     print ("-------------------------------------------------------------------")
     print ("")
-    print (CRED +"--- STABLE HOSTS - NO-DNS --------------------------------" + CEND + '| ' + str(len(hosts_allways_no_dns)).rjust(5) + ' |')
+    print (CRED +"--- STABLE HOSTS - NO-DNS --------------------------------" + CEND + '| # ' + str(len(hosts_allways_no_dns)).rjust(5) + ' |')
     print (*hosts_allways_no_dns, sep=" | ")
     print ("-------------------------------------------------------------------")
     print ("")
