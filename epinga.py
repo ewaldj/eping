@@ -302,7 +302,7 @@ if __name__=='__main__':
                 for host, stats in rtt_stats.items():
                     if row2['HOSTNAME'] in {host}:
                         print ("-----------------------------------------------------------------------------------------------")
-                        print(f"Min RTT: {stats['min']:.2f}, | Max RTT: {stats['max']:.2f}, | Avg RTT: {stats['avg']:.2f}" + ' | State_Changes: ' + no_of_changes_output  +' ')
+                        print(f"Min RTT: {stats['min']:.2f}, | Max RTT: {stats['max']:.2f}, | Avg RTT: {stats['avg']:.2f}" + ' | StateChanges : ' + no_of_changes_output  +' ')
                         print ("-----------------------------------------------------------------------------------------------")
 
                 time1 = time2 
