@@ -78,9 +78,6 @@ def open_csv(csv_filename):
 
 def file_menu(extension):
     file_list=get_filename(extension)
-
-    print (file_list)
-
     print ("--- select csv logfile -----------------------------------")
     print ("|  NO | FILENAME ")
     print ("----------------------------------------------------------")
