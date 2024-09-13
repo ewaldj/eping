@@ -18,14 +18,14 @@ import ipaddress
 import signal
 from collections import defaultdict
 
-version = '0.10'
+version = '0.11'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
     sys.exit(0)
 
 def sigint_handler(signal, frame):
-    print ('THX for using epinganalysis.py version ' + version)
+    print ('THX for using epinga.py version ' + version)
     sys.exit(0)
 
 
@@ -148,9 +148,10 @@ if __name__=='__main__':
     else:
         filename=args.filename
     
-    print (filename)
     # check valid epinglogfile 
     check_status=(check_valid_epinglogfile(filename))
+    if not check_status: 
+        error_handler('ERROR: the file ' + filename + ' is not a eping.py logfile')
 
     # open csv file 
     log_data_list=open_csv(filename)
@@ -326,3 +327,5 @@ if __name__=='__main__':
     print ("")
 
     print ("THX for using epinga.py version " + version )
+    print ("")
+    
