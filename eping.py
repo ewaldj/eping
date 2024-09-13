@@ -28,7 +28,7 @@ import subprocess
 import threading
 import datetime
 
-version = '0.91'
+version = '0.92'
 
 def error_handler(message):
     screen=curses.initscr()
@@ -284,7 +284,6 @@ if __name__=='__main__':
     filename_timextension = (now.strftime("%Y-%m-%d_%H:%M:%S"))
     logfile_file_name = 'eping-log_' + filename_timextension +'.csv'
     
-    
     parser = argparse.ArgumentParser()
     
     # adding optional argument
@@ -484,16 +483,21 @@ if __name__=='__main__':
             summary_hosts_list_check = list(set(summary_hosts_list_check))
             summary_hosts_list = summary_hosts_list_check
 
+
         if int(args.up_hosts_check) > 0 and run_counter < int(args.up_hosts_check)+1:
             text = ('   LEARNING PHASE: ' + str(run_counter) + ' of ' +  str(args.up_hosts_check) + '         ').ljust(cols-2)
+            learning_phase = False
             screen_output(rows-1,1, text,1,1)
-        
+        else:
+            learning_phase = True
+
+
         fping_cmd_output_raw_total = list()
         time1 = now = datetime.datetime.now()
 
         # start fping threads and sort the output 
         threads = []
-        if len(summary_hosts_list) < 20:
+        if len(summary_hosts_list) < 10:
             num_threads = 1 
         else:
             num_threads =   int(args.num_of_threads)
@@ -558,11 +562,11 @@ if __name__=='__main__':
                 hosts_count_down +=1 
 
             # create logfile if not disabled 
-            if args.disable_logging:
+            if args.disable_logging and  learning_phase:
                 logdata =([z2] + [z0]  + [z4.replace(" ", "")] + [z1.replace(" ", "")] + [z3]  + [z5] + [z6] + [z7])
                 with open(logfile_file_name, 'a', encoding='UTF8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(logdata)
+                        writer = csv.writer(f)
+                        writer.writerow(logdata)
 
         fping_result_data_sorted_old = fping_result_data_sorted_old_new
 
