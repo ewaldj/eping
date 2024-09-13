@@ -18,7 +18,7 @@ import ipaddress
 import signal
 from collections import defaultdict
 
-version = '0.11'
+version = '0.12'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -78,6 +78,9 @@ def open_csv(csv_filename):
 
 def file_menu(extension):
     file_list=get_filename(extension)
+    file_list=sorted(file_list, key=lambda x: x)
+
+
     print ("--- select csv logfile -----------------------------------")
     print ("|  NO | FILENAME ")
     print ("----------------------------------------------------------")
