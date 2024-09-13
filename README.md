@@ -67,19 +67,19 @@ options:
 ![grafik](https://github.com/user-attachments/assets/c64e6af1-1db3-4cac-80bd-5d4cfd37dfba)
 
 
-# epinganalysis.py 
-## epinganalysis.py 
+# epinga.py 
+## epinga.py 
 
 ```
-./epinganalysis.py -h                                                          2 ↵
-usage: epinganalysis.py [-h] [-f FILENAME]
+epinga.py -h
+usage: epinga.py [-h] [-f FILENAME]
 
 options:
   -h, --help            show this help message and exit
   -f FILENAME, --logfile FILENAME
                         logfilename
 ```
+![grafik](https://github.com/user-attachments/assets/1e869a9a-bce9-42cf-a23a-d48281195aad)
 
-![grafik](https://github.com/user-attachments/assets/ebb35fcc-a593-4802-a15b-6b4b37c5bd92)
 
 
