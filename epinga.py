@@ -17,8 +17,9 @@ import datetime
 import ipaddress
 import signal
 from collections import defaultdict
+from datetime import timedelta
 
-version = '0.12'
+version = '0.14'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -254,7 +255,8 @@ if __name__=='__main__':
     header = " epinga.py version " + version + " by Ewald Jeitler " 
     print (header.center(96,"-"))
     print ('-'.ljust(96,'-'))
- 
+    
+    up_down_data =[]
 
     for row in first_seen_list_data:
         print ('')
@@ -264,12 +266,17 @@ if __name__=='__main__':
         hostname_out = (row['HOSTNAME']).ljust(30)
         current_state_output = (row['CURRENT_STATE'].center(8," "))
         timestamp_output = row['TIMESTAMP']
+
         if  'UP' in current_state_output:
             print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CGREEN + current_state_output + CEND +'   |')
         if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
             print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   |')
        
         time1 = datetime.datetime.strptime((row['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
+        time_delta = time1 - time1 
+        data_updown = (row['HOSTNAME'],row['CURRENT_STATE'],time_delta)
+        up_down_data.append (data_updown)
+
 
         for row3 in changes_data:
             if row3['HOSTNAME'] == row['HOSTNAME']:
@@ -281,10 +288,16 @@ if __name__=='__main__':
 
                 if  'UP' in current_state_output:
                     print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CGREEN + current_state_output + CEND + '   | ∆t '  + str(time_delta) )
+
                 if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
                     print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   | ∆t '  + str(time_delta) )
+
+                data_updown = (row3['HOSTNAME'],row3['CURRENT_STATE'],time_delta)
+                up_down_data.append (data_updown)
+
                 time1 = time2 
 
+        
         for row2 in last_seen_list_data:
             if row2['HOSTNAME'] == row['HOSTNAME']:
                 time2 = datetime.datetime.strptime((row2['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
@@ -299,13 +312,46 @@ if __name__=='__main__':
                 if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
                     print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   | ∆t '  + str(time_delta)  )
 
+                data_updown = (row2['HOSTNAME'],row2['CURRENT_STATE'],time_delta)
+                up_down_data.append (data_updown)
+
+                last_state =''
                 for host, stats in rtt_stats.items():
                     if row2['HOSTNAME'] in {host}:
-                        print ("-----------------------------------------------------------------------------------------------")
-                        print(f"Min RTT: {stats['min']:.2f}, | Max RTT: {stats['max']:.2f}, | Avg RTT: {stats['avg']:.2f}" + ' | StateChanges : ' + no_of_changes_output  +' ')
-                        print ("-----------------------------------------------------------------------------------------------")
+                        x=0
+                        up_time = time2  - time2
+                        down_time = time2  - time2
 
-                time1 = time2 
+                        # uptime / downtime calculation 
+                        for row4 in up_down_data:
+                            if row4[0] == row2['HOSTNAME']:
+                                #NO CHANGES LAST LINE IF STABLE  
+                                if last_state == 'DOWN' and (row4[1] == 'DOWN' and x == 1):
+                                    x= 1; last_state = row4[1]
+                                    down_time = down_time+row4[2]  
+
+                                if last_state == 'UP' and (row4[1] == 'UP' and x == 1):
+                                    x= 1; last_state = row4[1]
+                                    up_time = up_time+row4[2] 
+                                #CHANGES 
+                                if last_state == 'DOWN' and (row4[1] != last_state and x == 1):
+                                    x= 1; last_state = row4[1]
+                                    down_time = down_time+row4[2]  
+                                if last_state == 'UP' and (row4[1] != last_state and x == 1):
+                                    x= 1; last_state = row4[1]
+                                    up_time = up_time+row4[2] 
+                                #FIRST LINE 
+                                if row4[1] == 'UP' and x == 0:
+                                    x= 1; last_state = row4[1]
+                                if row4[1] == 'DOWN' and x == 0:
+                                    x= 1; last_state = row4[1]
+                                if row4[1] == 'NO-DNS' and x == 0:
+                                    x= 1; last_state = row4[1]
+
+                        print ("-----------------------------------------------------------------------------------------------")
+                        print(f"RTT Min: {stats['min']:.2f} | Max: {stats['max']:.2f} | Avg: {stats['avg']:.2f}  | Uptime: {up_time} Downtime: {down_time} | StateChanges: {no_of_changes_output}" )
+                        print ("-----------------------------------------------------------------------------------------------")
+                        time1 = time2
 
     print ("\n\n")
     print ("--- ALL HOSTS ------------------------------------------------------------------------| " + str(len(hostlist)).rjust(5) + ' |' )
@@ -331,4 +377,3 @@ if __name__=='__main__':
 
     print ("THX for using epinga.py version " + version )
     print ("")
-    
