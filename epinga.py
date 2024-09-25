@@ -19,7 +19,7 @@ import signal
 from collections import defaultdict
 from datetime import timedelta
 
-version = '0.14'
+version = '0.15'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -330,9 +330,14 @@ if __name__=='__main__':
                                     x= 1; last_state = row4[1]
                                     down_time = down_time+row4[2]  
 
+                                if last_state == 'NO-DNS' and (row4[1] == 'NO-DNS' and x == 1):
+                                    x= 1; last_state = row4[1]
+                                    down_time = down_time+row4[2]  
+
                                 if last_state == 'UP' and (row4[1] == 'UP' and x == 1):
                                     x= 1; last_state = row4[1]
                                     up_time = up_time+row4[2] 
+
                                 #CHANGES 
                                 if last_state == 'DOWN' and (row4[1] != last_state and x == 1):
                                     x= 1; last_state = row4[1]
@@ -340,6 +345,11 @@ if __name__=='__main__':
                                 if last_state == 'UP' and (row4[1] != last_state and x == 1):
                                     x= 1; last_state = row4[1]
                                     up_time = up_time+row4[2] 
+                                if last_state == 'NO-DNS' and (row4[1] != last_state and x == 1):
+                                    x= 1; last_state = row4[1]
+                                    up_time = down_time+row4[2] 
+
+
                                 #FIRST LINE 
                                 if row4[1] == 'UP' and x == 0:
                                     x= 1; last_state = row4[1]
