@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# eping.py by ewald@jeitler.cc 2024 
+# eping.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 # When I wrote this code, only god and 
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-# grep sample 
-# - - - - - - - - - - - - - - - - - - - - - - - -
-# cat logfilename.log | grep www.orf.at 
-# cat logfilename.log | grep -E -v "UP,UP" | grep -E -v "DOWN,DOWN"  | grep -E -v "NO-DNS,NO-DNS"
-# - - - - - - - - - - - - - - - - - - - - - - - -
+version = '1.00'
 
 import os
 import re
@@ -27,8 +23,6 @@ import ipaddress
 import subprocess
 import threading
 import datetime
-
-version = '0.92'
 
 def error_handler(message):
     screen=curses.initscr()
@@ -242,8 +236,13 @@ def screen_output(line,coll,text,color,attr_val):
         pass
 
 def screen_print_date_time(color_pair):
-    now = datetime.datetime.now()
+    now = str(datetime.datetime.now())
+
+    # timezone adjust !!
+    now_tmp = datetime.datetime.strptime(now, "%Y-%m-%d %H:%M:%S.%f")
+    now = now_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
     dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
+
     screen_output(0 , 1, dt_string,color_pair,1)
     screen.refresh()
 
@@ -281,32 +280,29 @@ if __name__=='__main__':
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
     
     now = datetime.datetime.now()
-    filename_timextension = (now.strftime("%Y-%m-%d_%H:%M:%S"))
-    logfile_file_name = 'eping-log_' + filename_timextension +'.csv'
-    
     parser = argparse.ArgumentParser()
     
     # adding optional argument
     parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
-    parser.add_argument('-n', '--network', default='', dest='network_cidr', help='network instead of the hostfile e.g. 172.17.17.0/24  minimum lenght is /18'  )
-    parser.add_argument('-n1', '--network1', default='', dest='network_cidr1', help='network instead of the hostfile e.g. 10.0.0.0/30  minimum lenght is /18'  )
-    parser.add_argument('-n2', '--network2', default='', dest='network_cidr2', help='network instead of the hostfile e.g. 192.168.100/25  minimum lenght is /18'  )
-    parser.add_argument('-n3', '--network3', default='', dest='network_cidr3', help='network instead of the hostfile e.g. 10.10.0.0/22  minimum lenght is /18'  )
-    parser.add_argument('-n4', '--network4', default='', dest='network_cidr4', help='network instead of the hostfile e.g. 10.180.0.0/21  minimum lenght is /18'  )
-    parser.add_argument('-r', '--network_range', default='', nargs = '*' ,dest='network_range', help='ip range  e.g. 10.180.0.0 10.180.3.255')
-    parser.add_argument('-r1', '--network_range1', default='', nargs = '*' ,dest='network_range1', help='ip range  e.g. 172.17.1.1 172.17.1.20')
-    parser.add_argument('-r2', '--network_range2', default='', nargs = '*' ,dest='network_range2', help='ip range  e.g. 192.168.1.1 192.168.1.60')
-    parser.add_argument('-r3', '--network_range3', default='', nargs = '*' ,dest='network_range3', help='ip range  e.g. 1.1.1.0 1.1.1.255')
-    parser.add_argument('-r4', '--network_range4', default='', nargs = '*' ,dest='network_range4', help='ip range  e.g. 8.8.8.8 8.8.8.8')
+    parser.add_argument('-n', '--network', default='', dest='network_cidr', help='network e.g. 172.17.17.0/24  minimum lenght is /19'  )
+    parser.add_argument('-n1', '--network1', default='', dest='network_cidr1', help='network e.g. 10.0.0.0/30  minimum lenght is /19'  )
+    parser.add_argument('-n2', '--network2', default='', dest='network_cidr2', help='network e.g. 192.168.100/25  minimum lenght is /19'  )
+    parser.add_argument('-n3', '--network3', default='', dest='network_cidr3', help='network e.g. 10.10.0.0/22  minimum lenght is /19'  )
+    parser.add_argument('-n4', '--network4', default='', dest='network_cidr4', help='network e.g. 10.180.0.0/21  minimum lenght is /19'  )
+    parser.add_argument('-r', '--network_range', default='', nargs = '*' ,dest='network_range', help='ip range e.g. 10.180.0.0 10.180.3.255')
+    parser.add_argument('-r1', '--network_range1', default='', nargs = '*' ,dest='network_range1', help='ip range e.g. 172.17.1.1 172.17.1.20')
+    parser.add_argument('-r2', '--network_range2', default='', nargs = '*' ,dest='network_range2', help='ip range e.g. 192.168.1.1 192.168.1.60')
+    parser.add_argument('-r3', '--network_range3', default='', nargs = '*' ,dest='network_range3', help='ip range e.g. 1.1.1.0 1.1.1.255')
+    parser.add_argument('-r4', '--network_range4', default='', nargs = '*' ,dest='network_range4', help='ip range e.g. 8.8.8.8 8.8.8.8')
     parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5)" )
     parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms)") 
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
-    parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-*\'' ")
+    parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads maximum 120" )
-    
+    parser.add_argument('-tc', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
     
     # read arguments from command line
     args = parser.parse_args()
@@ -367,7 +363,7 @@ if __name__=='__main__':
     # get ipv4 ips from cidr  
     if args.network_cidr:
         try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr),15,32))
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr),19,32))
         except TypeError as error_msg:
             error_handler(error_msg)
 
@@ -375,30 +371,35 @@ if __name__=='__main__':
     # get ipv4 ips from cidr  
     if args.network_cidr1:
         try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr1),15,32))
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr1),19,32))
         except TypeError as error_msg:
             error_handler(error_msg)
 
     # get ipv4 ips from cidr  
     if args.network_cidr2:
         try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr2),15,32))
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr2),19,32))
         except TypeError as error_msg:
             error_handler(error_msg)
 
     # get ipv4 ips from cidr  
     if args.network_cidr3:
         try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr3),15,32))
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr3),19,32))
         except TypeError as error_msg:
             error_handler(error_msg)
 
     # get ipv4 ips from cidr  
     if args.network_cidr4:
         try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr4),15,32))
+            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr4),19,32))
         except TypeError as error_msg:
             error_handler(error_msg)
+
+    # time_zone_range -24 to +24 check 
+    if int(args.time_zone_adjust ) < -24 or int(args.time_zone_adjust ) > 24: 
+        error_handler('ERROR: Time zone adjust setting must be in the range from -24 to +24')
+
 
     # num_of_threads maximum check 
     if int(args.num_of_threads) > 120: 
@@ -406,7 +407,7 @@ if __name__=='__main__':
 
     # create sample file if not exists and no special file is given 
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
-        data = ["127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222 \n", "208.67.220.220 \n","www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n", "ö3.at www.orf.at www.jeitler.cc\n" ]
+        data = ["127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222 \n", "208.67.220.220 \n","www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n", "ö3.at www.orf.at www.jeitler.guru\n" ]
         try:
             create_file_if_not_exists(default_hostfile,data)
         except TypeError as error_msg:
@@ -448,6 +449,15 @@ if __name__=='__main__':
     signal.signal(signal.SIGINT, sigint_handler)
 
     last_rows, last_cols = screen.getmaxyx()
+
+    # create logfile_file_name 
+    now_logfile = str(datetime.datetime.now())
+    # timezone adjust !!
+    now_logfile_tmp = datetime.datetime.strptime(now_logfile, "%Y-%m-%d %H:%M:%S.%f")
+    now_logfile = now_logfile_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+    filename_timextension = (now_logfile.strftime("%Y-%m-%d_%H:%M:%S"))
+    logfile_file_name = 'eping-log_' + filename_timextension +'.csv'
+
 
     # create logfile 
     if args.logfile:
@@ -553,6 +563,16 @@ if __name__=='__main__':
             z3 = y[3]
             z7 = y[7]
             num_of_hosts += 1
+
+            # timezone adjust !!
+            z2_tmp = datetime.datetime.strptime(z2, "%d/%m/%Y %H:%M:%S")
+            z2 = z2_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+            try:
+                z6_tmp = datetime.datetime.strptime(z6, "%d/%m/%Y %H:%M:%S")
+                z6 = z6_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+            except: pass
+
+
             data = ([z0] + [z1] + [z2] + [z3] + [z4] + [z5] + [z6] + [z7])
             fping_result_data_sorted_old_new.append(data)
             # count up / down hosts 
@@ -585,7 +605,7 @@ if __name__=='__main__':
 
         # output 
         rows, cols = screen.getmaxyx()
-        screen_print_center_top('eping.py version ' + version + '  by Ewald Jeitler',1)
+        screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler',1)
         screen_print_date_time(1)
         screen_print_horizonta_line('-',1,1)                                                     
         screen_print_horizonta_line('-',1,3)
@@ -614,7 +634,7 @@ if __name__=='__main__':
             changes = (o[5])
             change_timestamp = (o[6])
             try: 
-                timehhmm = (change_timestamp).split(' ')
+                timehhmm = (str(change_timestamp)).split(' ')
                 change_timestamp = timehhmm[1]
             except: pass
 
@@ -664,6 +684,12 @@ if __name__=='__main__':
                 screen_output(rows-1,50, 'HOSTS-UP: ' + str(hosts_up),2,1)
                 hosts_down = '{m: <5}'.format(m=hosts_count_down)
                 screen_output(rows-1,66, 'HOSTS-DOWN: ' + str(hosts_down),3,1 )
+                if args.disable_logging:
+                    screen_output(rows-1,87, 'LOGGING-ON: ' + logfile_file_name,1,1 )
+                else:
+                    screen_output(rows-1,87, 'LOGGING-OFF',1,1 )
+
+            
             else: 
                 tts_text = '      TERMINAL TOO SMALL '
                 tts_msg_len = int(len(tts_text)) 
