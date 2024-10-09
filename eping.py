@@ -302,7 +302,7 @@ if __name__=='__main__':
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads maximum 120" )
-    parser.add_argument('-tc', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
+    parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
     
     # read arguments from command line
     args = parser.parse_args()
