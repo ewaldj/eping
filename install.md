@@ -16,6 +16,12 @@ wget https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/epinga.py
 curl -O https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/epinga.py
 ```
 
+## Make eping.py and epinga.py executable
+```
+chmod +x eping.py
+chmod +x epinga.py
+```
+
 ## Install Python minimum version 3.8
 
 https://www.python.org/
