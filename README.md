@@ -65,9 +65,7 @@ options:
 
 
 ```
-
-![grafik](https://github.com/user-attachments/assets/c64e6af1-1db3-4cac-80bd-5d4cfd37dfba)
-
+![grafik](https://github.com/user-attachments/assets/b963fcb6-4685-4c07-b520-194a5ffd159e)
 
 # epinga.py 
 ## epinga.py 
@@ -81,7 +79,7 @@ options:
   -f FILENAME, --logfile FILENAME
                         logfilename
 ```
-![grafik](https://github.com/user-attachments/assets/1e869a9a-bce9-42cf-a23a-d48281195aad)
+![grafik](https://github.com/user-attachments/assets/ae5c366c-896d-4947-9a9a-fd51ce195196)
 
 
 
