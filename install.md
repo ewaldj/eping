@@ -1,5 +1,5 @@
 
-# Install eping.py 
+# Install eping.py and epinga.py 
 
 
 ## Download eping.py via wget or cURL 
