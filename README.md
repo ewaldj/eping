@@ -60,7 +60,7 @@ options:
                         display and check only host the are up x runs
   -p NUM_OF_THREADS, --threads NUM_OF_THREADS
                         default is 3 parallel threads maximum 120
-  -tc TIME_ZONE_ADJUST, --timezone TIME_ZONE_ADJUST
+  -tz TIME_ZONE_ADJUST, --timezone TIME_ZONE_ADJUST
                         default is 0 range from -24 to 24
 
 
