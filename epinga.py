@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# epinga.py by ewald@jeitler.cc 2024 
+# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 # When I wrote this code, only god and 
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
+
+version = '1.00'
 
 import re
 import os 
@@ -18,8 +20,6 @@ import ipaddress
 import signal
 from collections import defaultdict
 from datetime import timedelta
-
-version = '0.15'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -252,7 +252,7 @@ if __name__=='__main__':
     
     print ('')
     print ('-'.ljust(96,'-'))
-    header = " epinga.py version " + version + " by Ewald Jeitler " 
+    header = " epinga.py version " + version + " by Ewald Jeitler - www.jeitler.guru " 
     print (header.center(96,"-"))
     print ('-'.ljust(96,'-'))
     
@@ -272,7 +272,7 @@ if __name__=='__main__':
         if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
             print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   |')
        
-        time1 = datetime.datetime.strptime((row['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
+        time1 = datetime.datetime.strptime((row['TIMESTAMP']), "%Y-%m-%d %H:%M:%S")
         time_delta = time1 - time1 
         data_updown = (row['HOSTNAME'],row['CURRENT_STATE'],time_delta)
         up_down_data.append (data_updown)
@@ -280,7 +280,7 @@ if __name__=='__main__':
 
         for row3 in changes_data:
             if row3['HOSTNAME'] == row['HOSTNAME']:
-                time2 = datetime.datetime.strptime((row3['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
+                time2 = datetime.datetime.strptime((row3['TIMESTAMP']), "%Y-%m-%d %H:%M:%S")
                 time_delta = time2  - time1
                 hostname_out = (row3['HOSTNAME']).ljust(30)
                 current_state_output = (row3['CURRENT_STATE'].center(8," "))
@@ -300,7 +300,7 @@ if __name__=='__main__':
         
         for row2 in last_seen_list_data:
             if row2['HOSTNAME'] == row['HOSTNAME']:
-                time2 = datetime.datetime.strptime((row2['TIMESTAMP']), "%d/%m/%Y %H:%M:%S")
+                time2 = datetime.datetime.strptime((row2['TIMESTAMP']), "%Y-%m-%d %H:%M:%S")
                 time_delta = time2  - time1
                 timestamp_output = row2['TIMESTAMP']
                 hostname_out = (row2['HOSTNAME']).ljust(30)
@@ -382,8 +382,9 @@ if __name__=='__main__':
     print ("")
     print (CRED +"--- STABLE HOSTS - NO-DNS ------------------------------------------------------------" + CEND + '| ' + str(len(hosts_allways_no_dns)).rjust(5) + ' |')
     print (*hosts_allways_no_dns, sep=" | ")
+    print ("----FILENAME ----------------------------------------------------------------------------------")
+    print (filename)
     print ("-----------------------------------------------------------------------------------------------")
-    print ("")
 
-    print ("THX for using epinga.py version " + version )
+    print ("                       THX for using epinga.py version " + version )
     print ("")
