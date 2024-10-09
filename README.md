@@ -79,7 +79,7 @@ options:
   -f FILENAME, --logfile FILENAME
                         logfilename
 ```
-![grafik](https://github.com/user-attachments/assets/ae5c366c-896d-4947-9a9a-fd51ce195196)
+![grafik](https://github.com/user-attachments/assets/36c2ccb5-612a-4cda-8890-a636fb6c822c)
 
 
 
