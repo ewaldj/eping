@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
+# epinga2.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 # When I wrote this code, only god and 
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-
-version = '1.00'
 
 import re
 import os 
@@ -18,17 +16,16 @@ import argparse
 import datetime
 import ipaddress
 import signal
-from collections import defaultdict
-from datetime import timedelta
+import collections 
+version = '1.10'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
     sys.exit(0)
 
 def sigint_handler(signal, frame):
-    print ('THX for using epinga.py version ' + version)
+    print ('THX for using epinga.py version ' + version + '  - www.jeitler.guru - \n')
     sys.exit(0)
-
 
 def check_python_version(mrv):
     current_version = sys.version_info
@@ -42,46 +39,33 @@ def match_re(word,name_re):
     if m:
         return m.group(0)
 
-def sort_fqdn_ip(fping_result_data):
-    fping_result_ip=[]
-    fping_result_fqdn=[]
-    for o in fping_result_data:
+def sort_fqdn_ip(data_to_sort):
+    ip_data=[]
+    fqdn_data=[]
+    for o in data_to_sort:
         if match_re(o,'ip_re'):
             data=(o)
-            fping_result_ip.append(data)
+            ip_data.append(data)
         elif match_re(o,'fqdn_re'):
             data=(o)
-            fping_result_fqdn.append(data)
-    sorted_fping_result_ip = sorted(fping_result_ip, key=lambda x: int(ipaddress.ip_address(x)))
-    sorted_fping_result_fqdn = sorted(fping_result_fqdn, key=lambda x: x[0])
-    return (sorted_fping_result_ip + sorted_fping_result_fqdn)
+            fqdn_data.append(data)
+    sorted_ip_data = sorted(ip_data, key=lambda x: int(ipaddress.ip_address(x)))
+    sorted_fqdn_data = sorted(fqdn_data, key=lambda x: x[0])
+    return (sorted_ip_data + sorted_fqdn_data)
 
-def get_filename(extention):
+def get_filename(file_extension):
     result_filelist=[]
     all_files_in_dir = [f.name for f in os.scandir() if f.is_file()]
     for f in all_files_in_dir:
-        if f.endswith(extention):
+        if f.endswith(file_extension):
             result_filelist.append(f)
     return(result_filelist)
 
-def check_file(filename):
-    print (os.path.isfile(filename))
-
-def open_csv(csv_filename):
-    log_data = {}
-    try:
-        with __builtins__.open(csv_filename, 'r', encoding='UTF8' ) as csvfile:
-            reader = csv.DictReader(csvfile)
-            log_data = list(reader)
-        return (log_data)
-    except:
-        raise TypeError('ERROR: Unable to open logfile: ' + csv_filename)
-
-def file_menu(extension):
-    file_list=get_filename(extension)
+def file_menu(file_extension):
+    file_list=get_filename(file_extension)
+    # sort filelist 
     file_list=sorted(file_list, key=lambda x: x)
-
-
+    # print menue 
     print ("--- select csv logfile -----------------------------------")
     print ("|  NO | FILENAME ")
     print ("----------------------------------------------------------")
@@ -90,21 +74,34 @@ def file_menu(extension):
         print ('| ' + str(x).rjust(3) + ' |  ' + list_x)
         x=x+1 
     print ("----------------------------------------------------------")
-    fileno=input("enter no of file or \"e\" for exit: ")
-
+    # get file_number via terminal 
+    file_number=input("enter no of file or \"e\" for exit: ")
     while True:
-        if fileno == "e" or fileno =="E":
+        # exit the menue 
+        if file_number == "e" or file_number =="E":
             sys.exit(0)
-        if fileno.isdigit():
-            if int(fileno)<x and int(fileno)>=1:
+        # check valid input 
+        if file_number.isdigit():
+            if int(file_number)<x and int(file_number)>=1:
                 break
             else:
                 print ("Invalid input. Try again. Range is from 1 to " + str(x-1) +" or e for exit")
-                fileno=input("select logfile by number: ") 
+                file_number=input("select logfile by number: ") 
         else:
             print ("Invalid input. Try again. Range is from 1 to " + str(x-1) +" or e for exit")
-            fileno=input("select logfile by number: ")
-    return (file_list[int(fileno)-1])
+            file_number=input("select logfile by number: ")
+    # return selected filename 
+    return (file_list[int(file_number)-1])
+
+def open_csv(csv_filename):
+    log_data = {}
+    try:
+        with open(csv_filename, 'r', encoding='UTF8' ) as csvfile:
+            reader = csv.DictReader(csvfile)
+            log_data = list(reader)
+        return (log_data)
+    except:
+        raise TypeError('ERROR: Unable to open logfile: ' + csv_filename)
 
 def check_valid_epinglogfile(filename):
     try:
@@ -120,7 +117,24 @@ def check_valid_epinglogfile(filename):
     except TypeError as error_msg:
         error_handler(error_msg)
 
+def rtt_caclulation(rtt_data_raw):
+    rtt_data = collections.defaultdict(list)
 
+    for host, rtt in rtt_data_raw:
+        rtt_data[host].append(float(rtt))
+
+    rtt_data_per_host = {}
+    for host, rtts in rtt_data.items():
+        min_rtt = min(rtts)
+        max_rtt = max(rtts)
+        avg_rtt = sum(rtts) / len(rtts)
+        # limit to dow decimals places
+        min_rtt = round(float(min_rtt),2)
+        max_rtt = round(float(max_rtt),2)        
+        avg_rtt = round(float(avg_rtt),2)
+
+        rtt_data_per_host[host] = {'min': min_rtt, 'max': max_rtt, 'avg': avg_rtt}
+    return(rtt_data_per_host)
 
 # MAIN MAIN MAIN
 if __name__=='__main__':
@@ -140,7 +154,6 @@ if __name__=='__main__':
     if not check_python_version(min_required_version):
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
 
-
     parser = argparse.ArgumentParser()
     # adding optional argument
     parser.add_argument('-f', '--logfile', default='', dest='filename', help="logfilename" )
@@ -159,27 +172,41 @@ if __name__=='__main__':
 
     # open csv file 
     log_data_list=open_csv(filename)
-
+ 
     # ------------------------ ANALYSE START --------------------------
-    hostlist =[]
-    hosts_with_changes =[]
+    # ------------------------ ANALYSE START --------------------------
 
-    # hostlist / hosts_with_changes / hosts_without_changes 
+    hosts_all =[]
+    hosts_with_changes  =[]
+    rtt_data_raw =[]
+    host_values_per_host = collections.defaultdict(list)
+
+
+    #split log_data_list to per host |  host_values_per_host['1.0.0.1'][0] -> first row  | host_values_per_host['www.jeitler.guru'][-1]['TIMESTAMP'] | last row TIMESPAMP ONLY 
+
     for row in log_data_list:
-        if (row['HOSTNAME']) not in hostlist:
-            hostlist.append(row['HOSTNAME'])
-                            
+        host_values_per_host[row['HOSTNAME']].append(row)
+
+        # generate host_all 
+        if (row['HOSTNAME']) not in hosts_all:
+            hosts_all.append(row['HOSTNAME'])
+        # generate hostlist with changes 
         if (row['PREVIOUS_STATE'] != row['CURRENT_STATE'] and (row['HOSTNAME'] not in hosts_with_changes)): 
             hosts_with_changes.append(row['HOSTNAME'])
+        # generate list for the rtt calculation 
+        if  row['RTT'] != '----':
+            data = row['HOSTNAME'],row['RTT']
+            rtt_data_raw.append(data)
 
-    hosts_without_changes = set(hostlist) - set(hosts_with_changes)
+    # hosts without changes - stable 
+    hosts_no_changes = set(hosts_all) - set(hosts_with_changes)
 
+    # generate lists for stable hosts - alway down / up / no-dns 
     hosts_allways_up=[]
     hosts_allways_down=[]
     hosts_allways_no_dns=[]
 
-    # 
-    for row in hosts_without_changes:
+    for row in hosts_no_changes:
         for row_log_data_list in log_data_list:
             if (row_log_data_list['HOSTNAME']) == row:
                 if (row_log_data_list['CURRENT_STATE']) == 'UP':
@@ -192,200 +219,131 @@ if __name__=='__main__':
                     hosts_allways_no_dns.append((row))
                     break
 
-
-    hostlist=sort_fqdn_ip(hostlist)
-    hosts_allways_up=sort_fqdn_ip(hosts_allways_up)
-    hosts_allways_down=sort_fqdn_ip(hosts_allways_down)
-    hosts_allways_no_dns=sort_fqdn_ip(hosts_allways_no_dns)
-    
-    host_up_or_flapping = set(hostlist) - set(hosts_allways_down) - set(hosts_allways_no_dns)
+    # generate list for up of flapping hosts 
+    host_up_or_flapping = set(hosts_all) - set(hosts_allways_down) - set(hosts_allways_no_dns)
     host_up_or_flapping =sort_fqdn_ip(host_up_or_flapping)
 
-    # frist and last seen data start 
-    first_seen_list_data =[] 
-    last_seen_list_data=[]
-    last_seen_list=[]
-    allready_seen_hosts = []
-    changes_data =[]
-    rtt_data_2 = []
+    # rtt calculation 
+    rtt_data_per_host=rtt_caclulation(rtt_data_raw)
 
-
-    for row in log_data_list: 
-        data = row
-        # generate first seen data 
-        if row['HOSTNAME'] in host_up_or_flapping and not row['HOSTNAME'] in allready_seen_hosts:
-            first_seen_list_data.append(data)
-            allready_seen_hosts.append((row['HOSTNAME']))
-
-        # generate last seen data 
-        if row['HOSTNAME'] in host_up_or_flapping and row['HOSTNAME'] in last_seen_list: 
-            last_seen_list.remove((row['HOSTNAME']))  
-            # delete delete old entry's in last_seen_list 
-            last_seen_list_data = [entry for entry in last_seen_list_data if entry['HOSTNAME'] != row['HOSTNAME']]
-        if row['HOSTNAME'] in host_up_or_flapping and row['HOSTNAME'] not in last_seen_list: 
-            last_seen_list.append((row['HOSTNAME']))  
-            last_seen_list_data.append(row)
-
-        # generate state changes list 
-        if row['CURRENT_STATE'] != row['PREVIOUS_STATE']:
-            changes_data.append(row)
-
-        ## generate rtt list 
-        if row['HOSTNAME'] in host_up_or_flapping and row['RTT'] != '----':
-            data = row['HOSTNAME'],row['RTT']
-            rtt_data_2.append(data)
-
-
-    ## RTT CACULATION 
-    rtt_data = defaultdict(list)
-
-    for host, rtt in rtt_data_2:
-        rtt_data[host].append(float(rtt))
-
-    rtt_stats = {}
-    for host, rtts in rtt_data.items():
-        min_rtt = min(rtts)
-        max_rtt = max(rtts)
-        avg_rtt = sum(rtts) / len(rtts)
-        rtt_stats[host] = {'min': min_rtt, 'max': max_rtt, 'avg': avg_rtt}
-
-    
+   # output start with header 
     print ('')
     print ('-'.ljust(96,'-'))
     header = " epinga.py version " + version + " by Ewald Jeitler - www.jeitler.guru " 
     print (header.center(96,"-"))
     print ('-'.ljust(96,'-'))
+
+
+    # ------------------------------------------------------------------------------------------------------
+    # loop per host start 
+    # ------------------------------------------------------------------------------------------------------
+    for x_host in hosts_all:
+        y2 = 0 
+
+        # get rtt data for x_host 
+        rtt_data_x_host = rtt_data_per_host.get(x_host, None)
+
+        # print hostname top of each host  
+        x_host_print = ' ' + x_host + ' '
+        print (x_host_print.center(96,"-"))
     
-    up_down_data =[]
+        host_output_values=[]
+        y = 0
+        y_current_state =' '
+        time_host_down = datetime.timedelta(0)
+        time_host_up = datetime.timedelta(0)
 
-    for row in first_seen_list_data:
-        print ('')
-        out= ('- '+ row['HOSTNAME'] +' -') 
-        print (out.center(96,"-"))
+        for y_host in host_values_per_host[x_host]:
+            y_length = (len(host_values_per_host[x_host]))
+            # first seen values for host
+            if y == 0:
+                # generate results an store it in host_output_values 
+                y_timestamp_last_seen_value = y_host ['TIMESTAMP']
+                y_current_state_last_seen_value = y_host['CURRENT_STATE']
+                host_data_for_output = (y_host['TIMESTAMP'],y_host['HOSTNAME'],y_host['CURRENT_STATE'],'---','-')
+                host_output_values.append (host_data_for_output)
+                host_data_previous_values  = (y_host['TIMESTAMP'],y_host['HOSTNAME'],y_host['CURRENT_STATE'],'---','-')
 
-        hostname_out = (row['HOSTNAME']).ljust(30)
-        current_state_output = (row['CURRENT_STATE'].center(8," "))
-        timestamp_output = row['TIMESTAMP']
+            # values between the first and the last row 
+            elif y2 <= y_length-2:   
+                y_timestamp = y_host ['TIMESTAMP']
+                y_current_state = y_host['CURRENT_STATE']
 
-        if  'UP' in current_state_output:
-            print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CGREEN + current_state_output + CEND +'   |')
-        if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
-            print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   |')
-       
-        time1 = datetime.datetime.strptime((row['TIMESTAMP']), "%Y-%m-%d %H:%M:%S")
-        time_delta = time1 - time1 
-        data_updown = (row['HOSTNAME'],row['CURRENT_STATE'],time_delta)
-        up_down_data.append (data_updown)
+                if y_current_state_last_seen_value != y_current_state:
+                    # calculation of sum up down 
+                    time_1 = datetime.datetime.strptime((host_data_previous_values[0]), "%Y-%m-%d %H:%M:%S")
+                    time_2 = datetime.datetime.strptime(y_host['TIMESTAMP'], "%Y-%m-%d %H:%M:%S")
+                    time_delta = time_2 - time_1 
+                    if y_current_state_last_seen_value == "UP": 
+                        time_host_up = time_host_up + time_delta
+                    if y_current_state_last_seen_value == "DOWN" or y_current_state_last_seen_value == "NO-DNS": 
+                        time_host_down = time_host_down + time_delta
+                    # generate results an store it in host_output_values 
+                    host_data_for_output = (y_host['TIMESTAMP'],y_host['HOSTNAME'],y_host['CURRENT_STATE'],str(time_delta))
+                    host_output_values.append (host_data_for_output)
+                    host_data_previous_values  = (y_host['TIMESTAMP'],y_host['HOSTNAME'],y_host['CURRENT_STATE'])
 
-
-        for row3 in changes_data:
-            if row3['HOSTNAME'] == row['HOSTNAME']:
-                time2 = datetime.datetime.strptime((row3['TIMESTAMP']), "%Y-%m-%d %H:%M:%S")
-                time_delta = time2  - time1
-                hostname_out = (row3['HOSTNAME']).ljust(30)
-                current_state_output = (row3['CURRENT_STATE'].center(8," "))
-                timestamp_output = row3['TIMESTAMP']
-
-                if  'UP' in current_state_output:
-                    print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CGREEN + current_state_output + CEND + '   | ∆t '  + str(time_delta) )
-
-                if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
-                    print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   | ∆t '  + str(time_delta) )
-
-                data_updown = (row3['HOSTNAME'],row3['CURRENT_STATE'],time_delta)
-                up_down_data.append (data_updown)
-
-                time1 = time2 
-
-        
-        for row2 in last_seen_list_data:
-            if row2['HOSTNAME'] == row['HOSTNAME']:
-                time2 = datetime.datetime.strptime((row2['TIMESTAMP']), "%Y-%m-%d %H:%M:%S")
-                time_delta = time2  - time1
-                timestamp_output = row2['TIMESTAMP']
-                hostname_out = (row2['HOSTNAME']).ljust(30)
-                current_state_output = (row2['CURRENT_STATE'].center(8," "))
-                no_of_changes_output = (row2['NO_OF_CHANGES'])
-
-                if  'UP' in current_state_output:
-                    print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CGREEN + current_state_output + CEND + '   | ∆t '  + str(time_delta)  )
-                if 'DOWN' in current_state_output or 'NO-DNS' in current_state_output:
-                    print (timestamp_output + ' | ' + hostname_out + ' | change state to  '   + CRED + current_state_output + CEND + '   | ∆t '  + str(time_delta)  )
-
-                data_updown = (row2['HOSTNAME'],row2['CURRENT_STATE'],time_delta)
-                up_down_data.append (data_updown)
-
-                last_state =''
-                for host, stats in rtt_stats.items():
-                    if row2['HOSTNAME'] in {host}:
-                        x=0
-                        up_time = time2  - time2
-                        down_time = time2  - time2
-
-                        # uptime / downtime calculation 
-                        for row4 in up_down_data:
-                            if row4[0] == row2['HOSTNAME']:
-                                #NO CHANGES LAST LINE IF STABLE  
-                                if last_state == 'DOWN' and (row4[1] == 'DOWN' and x == 1):
-                                    x= 1; last_state = row4[1]
-                                    down_time = down_time+row4[2]  
-
-                                if last_state == 'NO-DNS' and (row4[1] == 'NO-DNS' and x == 1):
-                                    x= 1; last_state = row4[1]
-                                    down_time = down_time+row4[2]  
-
-                                if last_state == 'UP' and (row4[1] == 'UP' and x == 1):
-                                    x= 1; last_state = row4[1]
-                                    up_time = up_time+row4[2] 
-
-                                #CHANGES 
-                                if last_state == 'DOWN' and (row4[1] != last_state and x == 1):
-                                    x= 1; last_state = row4[1]
-                                    down_time = down_time+row4[2]  
-                                if last_state == 'UP' and (row4[1] != last_state and x == 1):
-                                    x= 1; last_state = row4[1]
-                                    up_time = up_time+row4[2] 
-                                if last_state == 'NO-DNS' and (row4[1] != last_state and x == 1):
-                                    x= 1; last_state = row4[1]
-                                    up_time = down_time+row4[2] 
+                y_timestamp_last_seen_value = y_host ['TIMESTAMP']
+                y_current_state_last_seen_value = y_host['CURRENT_STATE']
 
 
-                                #FIRST LINE 
-                                if row4[1] == 'UP' and x == 0:
-                                    x= 1; last_state = row4[1]
-                                if row4[1] == 'DOWN' and x == 0:
-                                    x= 1; last_state = row4[1]
-                                if row4[1] == 'NO-DNS' and x == 0:
-                                    x= 1; last_state = row4[1]
+            # last values for host 
+            elif y2 == y_length-1:
+                y_timestamp = y_host ['TIMESTAMP']
+                y_current_state = y_host['CURRENT_STATE']
 
-                        print ("-----------------------------------------------------------------------------------------------")
-                        print(f"RTT Min: {stats['min']:.2f} | Max: {stats['max']:.2f} | Avg: {stats['avg']:.2f}  | Uptime: {up_time} Downtime: {down_time} | StateChanges: {no_of_changes_output}" )
-                        print ("-----------------------------------------------------------------------------------------------")
-                        time1 = time2
+                # calculation of sum up down 
+                time_1 = datetime.datetime.strptime((host_data_previous_values[0]), "%Y-%m-%d %H:%M:%S")
+                time_2 = datetime.datetime.strptime(y_host['TIMESTAMP'], "%Y-%m-%d %H:%M:%S")
+                time_delta = time_2 - time_1 
+                if y_current_state_last_seen_value == "UP": 
+                    time_host_up = time_host_up + time_delta
+                if y_current_state_last_seen_value == "DOWN" or y_current_state_last_seen_value == "NO-DNS": 
+                    time_host_down = time_host_down + time_delta
 
-    print ("\n\n")
-    print ("--- ALL HOSTS ------------------------------------------------------------------------| " + str(len(hostlist)).rjust(5) + ' |' )
-    print (*hostlist,sep=' | ')
-    print ("-----------------------------------------------------------------------------------------------")
-    print ("")
-    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP --------------------------------------------------------" + CEND + '| ' + str(len(hosts_allways_up)).rjust(5) + ' |'  )
+                # generate results an store it in host_output_values 
+                host_data_for_output = (y_host['TIMESTAMP'],y_host['HOSTNAME'],y_host['CURRENT_STATE'],str(time_delta))
+                host_output_values.append (host_data_for_output)
+
+                # set state_changes_of_host 
+                state_changes_of_host =y_host['NO_OF_CHANGES']
+                break
+            y = y+1      
+            y2 = y2+1 
+
+        # print results per host up down timedelta
+        for z_host in host_output_values:
+            if  'UP' in z_host[2]:
+                print (z_host[0] + ' | ' + z_host[1].ljust(30) + ' | change state to  '   + CGREEN + z_host[2].center(8," ") + CEND + '   | ∆t '  + str(z_host[3])  )
+            if 'DOWN' in z_host[2] or 'NO-DNS' in z_host[2]:
+                print (z_host[0] + ' | ' + z_host[1].ljust(30) + ' | change state to  '   + CRED + z_host[2].center(8," ") + CEND + '   | ∆t '  + str(z_host[3])  )
+
+        # print results rtt and up down sum  
+        print ("------------------------------------------------------------------------------------------------")
+        try:
+            print ('RTT Min: ' +  str(rtt_data_x_host['min']) + ' | Max: ' + str(rtt_data_x_host['max']) + ' |  Avg:' + str(rtt_data_x_host['avg']) + ' | Uptime: ' + str(time_host_up) + ' | Downtime: ' + str(time_host_down) + ' | StateChanges: ' + state_changes_of_host) 
+        except: pass 
+        print ("------------------------------------------------------------------------------------------------")
+
+        print (" ")
+
+    # statistic section output 
+    print ("--- ALL HOSTS -------------------------------------------------------------------------| " + str(len(hosts_all)).rjust(5) + ' |' )
+    print (*hosts_all,sep=' | ')
+    print ("------------------------------------------------------------------------------------------------\n")
+    print (CGREEN + "--- STABLE HOSTS - ALLWAYS UP ---------------------------------------------------------" + CEND + '| ' + str(len(hosts_allways_up)).rjust(5) + ' |'  )
     print (*hosts_allways_up, sep=" | ")
-    print ("-----------------------------------------------------------------------------------------------")
-    print ("")
+    print ("------------------------------------------------------------------------------------------------\n")
     print (CORANGE +"--- FLAPPING HOSTS --------------------------------------------------------------------" + CEND + '| ' + str(len(hosts_with_changes)).rjust(5) + ' |')
     print (*hosts_with_changes, sep =" | ")
-    print ("-----------------------------------------------------------------------------------------------")
-    print ("")
+    print ("------------------------------------------------------------------------------------------------\n")
     print (CRED + "--- STABLE HOSTS - ALLWAYS DOWN -------------------------------------------------------" + CEND + '| ' + str(len(hosts_allways_down)).rjust(5) + ' |' )
     print (*hosts_allways_down, sep=" | ")
-    print ("-----------------------------------------------------------------------------------------------")
-    print ("")
-    print (CRED +"--- STABLE HOSTS - NO-DNS ------------------------------------------------------------" + CEND + '| ' + str(len(hosts_allways_no_dns)).rjust(5) + ' |')
+    print ("------------------------------------------------------------------------------------------------\n")
+    print (CRED +"--- STABLE HOSTS - NO-DNS -------------------------------------------------------------" + CEND + '| ' + str(len(hosts_allways_no_dns)).rjust(5) + ' |')
     print (*hosts_allways_no_dns, sep=" | ")
-    print ("")
-    print ("---- FILENAME ---------------------------------------------------------------------------------")
+    print ("------------------------------------------------------------------------------------------------\n")
+    print ("---- FILENAME ----------------------------------------------------------------------------------")
     print (filename)
-    print ("-----------------------------------------------------------------------------------------------")
-
-    print ("                       THX for using epinga.py version " + version )
-    print ("")
+    print ("------------------------------------------------------------------------------------------------\n")
+    print ("THX for using epinga.py version " + version + '  - www.jeitler.guru - \n' )
