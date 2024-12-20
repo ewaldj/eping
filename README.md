@@ -70,6 +70,15 @@ options:
 # epinga.py 
 ## epinga.py 
 
+With ‘epinga.py’ you can subsequently analyse the log files created by eping.py. 
+
+∆t here always refers to the previous state 
+The RTT (min/max/avg) and the total uptime/downtime are also broken down per host 
+
+At the end of the analysis you also get lists of which hosts have flapped and which are stable 
+
+With large files, make sure that your computer has enough memory 
+
 ```
 epinga.py -h
 usage: epinga.py [-h] [-f FILENAME]
