@@ -68,7 +68,7 @@ options:
 ![grafik](https://github.com/user-attachments/assets/b963fcb6-4685-4c07-b520-194a5ffd159e)
 
 # epinga.py 
-## epinga.py 
+## epinga.py - analysis tool for eping.py logfiles 
 
 With ‘epinga.py’ you can subsequently analyse the log files created by eping.py. 
 
