@@ -506,6 +506,7 @@ if __name__=='__main__':
         time1 = now = datetime.datetime.now()
 
         # start fping threads and sort the output - if the number of threads > hosts for pinging, adjust the value  
+        threads = []
         if len(summary_hosts_list) < int(args.num_of_threads):
             num_threads = len(summary_hosts_list)
 
