@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.01'
+version = '1.02'
 
 import os
 import re
@@ -397,13 +397,18 @@ if __name__=='__main__':
             error_handler(error_msg)
 
     # time_zone_range -24 to +24 check 
-    if int(args.time_zone_adjust ) < -24 or int(args.time_zone_adjust ) > 24: 
-        error_handler('ERROR: Time zone adjust setting must be in the range from -24 to +24')
-
+    try:
+        if int(args.time_zone_adjust ) < -24 or int(args.time_zone_adjust ) > 24: 
+            error_handler('ERROR: -tz Time zone adjust setting must be in the range from -24 to +24')
+    except:
+            error_handler('ERROR: -tz Time zone adjust setting must be in the range from -24 to +24')
 
     # num_of_threads maximum check 
-    if int(args.num_of_threads) > 120: 
-        error_handler('ERROR: Maximum threads are 120 ')
+    try: 
+        if int(args.num_of_threads) > 120:
+            error_handler('ERROR: -p values from 1 to 120 allowed ')
+    except:
+        error_handler('ERROR: -p values from 1 to 120 allowed ')
 
     # create sample file if not exists and no special file is given 
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
