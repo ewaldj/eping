@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.00'
+version = '1.01'
 
 import os
 import re
@@ -505,12 +505,12 @@ if __name__=='__main__':
         fping_cmd_output_raw_total = list()
         time1 = now = datetime.datetime.now()
 
-        # start fping threads and sort the output 
-        threads = []
-        if len(summary_hosts_list) < 10:
-            num_threads = 1 
+        # start fping threads and sort the output - if the number of threads > hosts for pinging, adjust the value  
+        if len(summary_hosts_list) < int(args.num_of_threads):
+            num_threads = len(summary_hosts_list)
+
         else:
-            num_threads =   int(args.num_of_threads)
+            num_threads = int(args.num_of_threads)
 
         summary_hosts_list_split =[]
         # create threads and asign a function for each thread
