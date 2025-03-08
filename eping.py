@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.02'
+version = '1.03'
 
 import os
 import re
@@ -578,7 +578,6 @@ if __name__=='__main__':
                 z6 = z6_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
             except: pass
 
-
             data = ([z0] + [z1] + [z2] + [z3] + [z4] + [z5] + [z6] + [z7])
             fping_result_data_sorted_old_new.append(data)
             # count up / down hosts 
@@ -633,6 +632,10 @@ if __name__=='__main__':
         bottom_offset = 2
         data_in_lists=False
 
+        # ERROR MSG IF NO VALID HOSTS IN LIST 
+        if len(fping_result_data_sorted_old) == 0:
+            screen_output(rows-1,1, 'NO HOSTS TO PING!',3,2)
+
         for o in fping_result_data_sorted_old:
             hostname = (o[0])
             state = (o[1])
@@ -646,6 +649,7 @@ if __name__=='__main__':
 
             output_linenr = int(linenr)+int(top_offset)
             no_of_hosts = len(fping_result_data_sorted_old)
+
             # CALCULATE THE OUTPUT POSITION PER HOST
             x = 1
             z = top_offset+bottom_offset
@@ -695,7 +699,6 @@ if __name__=='__main__':
                 else:
                     screen_output(rows-1,87, 'LOGGING-OFF',1,1 )
 
-            
             else: 
                 tts_text = '      TERMINAL TOO SMALL '
                 tts_msg_len = int(len(tts_text)) 
