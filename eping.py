@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.03'
+version = '1.05'
 
 import os
 import re
@@ -31,13 +31,13 @@ def error_handler(message):
     sys.exit(0)
 
 def match_re(word,name_re):
-    m = eval(name_re).match(word)
+    m = name_re.match(word)
     if m:
         return m.group(0)
         
 def get_ipv4_from_range(first_ip, last_ip, max_ip):
     # Return IPs in IPv4 range (check valid ip's and that first_ip is <= last_ip) 
-        if match_re(first_ip,'ip_re') and match_re(last_ip,'ip_re'): 
+        if match_re(first_ip, ip_re) and match_re(last_ip, ip_re): 
             start_ip_int = int(ipaddress.ip_address(first_ip).packed.hex(), 16)
             end_ip_int = int(ipaddress.ip_address(last_ip).packed.hex(), 16)+1
             if not (end_ip_int-start_ip_int > max_ip):
@@ -53,7 +53,7 @@ def get_ipv4_from_range(first_ip, last_ip, max_ip):
 
 def get_ipv4_from_cidr(cidr, min_mask, max_mask):
     ips=[]
-    if match_re(cidr,'cidr_ipv4_re'):
+    if match_re(cidr, cidr_ipv4_re):
         network, net_bits = cidr.split('/')
         if int(net_bits) >= min_mask and int(net_bits) <= max_mask:
             for ip in ipaddress.IPv4Network(cidr, False):
@@ -72,7 +72,7 @@ def get_ipv4_from_file(filename):
                 for word in line.split():
                     word = word.replace(" ", "")
                     word =word.strip('\n')
-                    if match_re(word,'ip_re'):
+                    if match_re(word, ip_re):
                        ips.append(word)
         f.close()
         return (ips)
@@ -87,9 +87,9 @@ def get_fqdn_and_hostnames_from_file(filename):
                 for word in line.split():
                     word = word.replace(" ", "")
                     word =word.strip('\n')
-                    if match_re(word,'ip_re'):
+                    if match_re(word, ip_re):
                         pass
-                    elif match_re(word,'fqdn_re'):
+                    elif match_re(word, fqdn_re):
                         fqdns.append(word)
         f.close()
         return (fqdns)
@@ -126,7 +126,7 @@ def fping_cmd(summary_hosts_list,lock):
     cmd = ['fping', '-4', '-e', '-B', backoff, '-t', timeout]
     cmd.extend(summary_hosts_list)
     try:
-        ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     except FileNotFoundError:
         error_handler (' ERROR:The command \'fping\' was not found, install it e.g. via \'sudo apt install fping\' or \'brew install fping\'' )
 
@@ -194,10 +194,10 @@ def sort_fping_result_data(fping_result_data):
     fping_result_ip=[]
     fping_result_fqdn=[]
     for o in fping_result_data:
-        if match_re(o[0],'ip_re'):
+        if match_re(o[0], ip_re):
             data=([o[0]] + [o[1]] + [o[2]] + [o[3]] + [o[4]] + [o[5]] + [o[6]] + [o[7]])
             fping_result_ip.append(data)
-        elif match_re(o[0],'fqdn_re'):
+        elif match_re(o[0], fqdn_re):
             data=([o[0]] + [o[1]] + [o[2]] + [o[3]] + [o[4]] + [o[5]] + [o[6]] + [o[7]])
             fping_result_fqdn.append(data)
     sorted_fping_result_ip = sorted(fping_result_ip, key=lambda x: int(ipaddress.ip_address(x[0])))
@@ -274,7 +274,7 @@ def sigint_handler(signal, frame):
 if __name__=='__main__':
 
     default_hostfile = 'eping-hosts.txt'
-    min_required_version = (3,8)
+    min_required_version = (3,6)
     
     if not check_python_version(min_required_version):
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
