@@ -44,12 +44,12 @@ def get_ipv4_from_range(first_ip, last_ip, max_ip):
                 if start_ip_int < end_ip_int: 
                     return [ipaddress.ip_address(ip).exploded for ip in range(start_ip_int, end_ip_int)]
                 else:
-                    raise TypeError('ERROR: The start ip must be less than or equal to the end ip. ')
+                    raise TypeError('ERROR: The start IP must be less than or equal to the end IP. ')
             else:
                 raise TypeError('ERROR: Maximum IP Limit reached < ' + str(max_ip) )
 
         else:
-            raise TypeError('ERROR: One of the values is not an ipv4 address  | ' + first_ip + ' | ' + last_ip + ' |' )
+            raise TypeError('ERROR: One of the values is not a valid IPv4 address: ' + first_ip + ', ' + last_ip' )
 
 def get_ipv4_from_cidr(cidr, min_mask, max_mask):
     ips=[]
@@ -62,7 +62,7 @@ def get_ipv4_from_cidr(cidr, min_mask, max_mask):
         else:
            raise TypeError('ERROR: Mask value not in range - minimum mask value: /' + str(min_mask) ) 
     else: 
-        raise TypeError('ERROR: Not a vaild CIDR Value e.g. 192.168.66.66/28')
+        raise TypeError('ERROR: Not a valid CIDR value (e.g., 192.168.66.66/28)')
 
 def get_ipv4_from_file(filename):
     ips=[]
@@ -102,7 +102,7 @@ def create_file_if_not_exists(filename,data):
             f.close()
     except:
         try:
-            print ('\n\nINFO: ' + default_hostfile + ' doese not exists - create sample file\n\n')
+            print ('\n\nINFO: File ' + default_hostfile + ' does not exist — creating sample file.\n\n')
             time.sleep(3)
             with open(filename, "w") as f:
                 f.writelines(data)
@@ -303,7 +303,8 @@ if __name__=='__main__':
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads maximum 120" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
-    
+    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )     
+
     # read arguments from command line
     args = parser.parse_args()
     backoff = args.backoff
@@ -599,8 +600,8 @@ if __name__=='__main__':
         time2 = datetime.datetime.now()
         time3 = time2 - time1
 
-        if time3.total_seconds() < 0.5:
-            sleep_time = (0.5 - time3.total_seconds())
+        if time3.total_seconds() < float(args.waittime) :
+            sleep_time = (float(args.waittime) - time3.total_seconds())
             time.sleep(sleep_time)
 
         # calculate the runtime 
