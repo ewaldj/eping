@@ -49,7 +49,7 @@ def get_ipv4_from_range(first_ip, last_ip, max_ip):
                 raise TypeError('ERROR: Maximum IP Limit reached < ' + str(max_ip) )
 
         else:
-            raise TypeError('ERROR: One of the values is not a valid IPv4 address: ' + first_ip + ', ' + last_ip' )
+            raise TypeError('ERROR: One of the values is not a valid IPv4 address: ' + first_ip + ', ' + last_ip)
 
 def get_ipv4_from_cidr(cidr, min_mask, max_mask):
     ips=[]
