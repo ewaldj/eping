@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
+# epinga2.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 # When I wrote this code, only god and 
 # I knew how it worked. 
@@ -17,8 +17,7 @@ import datetime
 import ipaddress
 import signal
 import collections 
-
-version = '1.11'
+version = '1.10'
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -36,7 +35,7 @@ def check_python_version(mrv):
         return False
 
 def match_re(word,name_re):
-    m = name_re.match(word)
+    m = eval(name_re).match(word)
     if m:
         return m.group(0)
 
@@ -44,10 +43,10 @@ def sort_fqdn_ip(data_to_sort):
     ip_data=[]
     fqdn_data=[]
     for o in data_to_sort:
-        if match_re(o, ip_re):
+        if match_re(o,'ip_re'):
             data=(o)
             ip_data.append(data)
-        elif match_re(o, fqdn_re):
+        elif match_re(o,'fqdn_re'):
             data=(o)
             fqdn_data.append(data)
     sorted_ip_data = sorted(ip_data, key=lambda x: int(ipaddress.ip_address(x)))
@@ -151,7 +150,7 @@ if __name__=='__main__':
     cidr_ipv4_re = re.compile (r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(3[0-2]|[1-2][0-9]|[0-9]))$')
     timestamp_re = re.compile (r'^\[[0-9]{10}.[0-9]{5}\]')
 
-    min_required_version = (3,6)
+    min_required_version = (3,8)
     if not check_python_version(min_required_version):
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
 
@@ -315,9 +314,9 @@ if __name__=='__main__':
         # print results per host up down timedelta
         for z_host in host_output_values:
             if  'UP' in z_host[2]:
-                print (z_host[0] + ' | ' + z_host[1].ljust(30) + ' | change state to  '   + CGREEN + z_host[2].center(8," ") + CEND + '   | ^- '  + str(z_host[3])  )
+                print (z_host[0] + ' | ' + z_host[1].ljust(30) + ' | change state to  '   + CGREEN + z_host[2].center(8," ") + CEND + '   | ∆t '  + str(z_host[3])  )
             if 'DOWN' in z_host[2] or 'NO-DNS' in z_host[2]:
-                print (z_host[0] + ' | ' + z_host[1].ljust(30) + ' | change state to  '   + CRED + z_host[2].center(8," ") + CEND + '   | ^- '  + str(z_host[3])  )
+                print (z_host[0] + ' | ' + z_host[1].ljust(30) + ' | change state to  '   + CRED + z_host[2].center(8," ") + CEND + '   | ∆t '  + str(z_host[3])  )
 
         # print results rtt and up down sum  
         print ("------------------------------------------------------------------------------------------------")
