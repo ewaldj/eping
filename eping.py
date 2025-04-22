@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.05'
+version = '1.06'
 
 import os
 import re
