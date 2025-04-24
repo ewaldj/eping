@@ -8,8 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.07'
-
+version = '1.09'
 import os
 import re
 import sys
@@ -25,8 +24,6 @@ import threading
 import datetime
 
 def error_handler(message):
-    screen=curses.initscr()
-    screen=curses.endwin()
     print ('\n ' + str(message) + '\n')
     sys.exit(0)
 
@@ -47,7 +44,6 @@ def get_ipv4_from_range(first_ip, last_ip, max_ip):
                     raise TypeError('ERROR: The start IP must be less than or equal to the end IP. ')
             else:
                 raise TypeError('ERROR: Maximum IP Limit reached < ' + str(max_ip) )
-
         else:
             raise TypeError('ERROR: One of the values is not a valid IPv4 address: ' + first_ip + ', ' + last_ip)
 
@@ -103,12 +99,12 @@ def create_file_if_not_exists(filename,data):
     except:
         try:
             print ('\n\nINFO: File ' + default_hostfile + ' does not exist — creating sample file.\n\n')
-            time.sleep(3)
+            time.sleep(2)
             with open(filename, "w") as f:
                 f.writelines(data)
             f.close()
         except:
-            raise TypeError('ERROR: Unable to create default hosts file')
+            raise TypeError('ERROR: Unable to create file: ' + default_hostfile )
 
 def split_seq(seq, num_pieces):
     start = 0
@@ -319,97 +315,62 @@ if __name__=='__main__':
     hosts_list_ipv4 =[]
     hosts_list_fqdn= []
     
+    # delete files eping-*.......
     if args.delete_files:
-        delete_files('eping-l*')
+        delete_files('eping-*')
 
-# --- network range r to r4 
-
-    # get ipv4 ips from network range 
-    if args.network_range:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range[0]),(args.network_range[1]),32768))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from network range (r1)
-    if args.network_range1:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range1[0]),(args.network_range1[1]),32768))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from network range (r2)
-    if args.network_range2:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range2[0]),(args.network_range2[1]),32768))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from network range (r3)
-    if args.network_range3:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range3[0]),(args.network_range3[1]),32768))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from network range (r4)
-    if args.network_range4:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_range((args.network_range4[0]),(args.network_range4[1]),32768))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-# --- cidr  n to n4 
-
-    # get ipv4 ips from cidr  
-    if args.network_cidr:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr),19,32))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-
-    # get ipv4 ips from cidr  
-    if args.network_cidr1:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr1),19,32))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from cidr  
-    if args.network_cidr2:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr2),19,32))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from cidr  
-    if args.network_cidr3:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr3),19,32))
-        except TypeError as error_msg:
-            error_handler(error_msg)
-
-    # get ipv4 ips from cidr  
-    if args.network_cidr4:
-        try:
-            hosts_list_ipv4.extend(get_ipv4_from_cidr((args.network_cidr4),19,32))
-        except TypeError as error_msg:
-            error_handler(error_msg)
+    # --- network range -r and r1 to r4  
+    range_args = [
+        args.network_range,
+        args.network_range1,
+        args.network_range2,
+        args.network_range3,
+        args.network_range4
+    ]
+    for network_range in range_args:
+        if network_range:
+            try:
+                hosts_list_ipv4.extend(get_ipv4_from_range(network_range[0], network_range[1], 32768))
+            except Exception as e:
+                error_handler(f"Range error: {e}")
+    
+    # --- cidr  -n  and n1 to n4 
+    cidr_args = [
+        args.network_cidr,
+        args.network_cidr1,
+        args.network_cidr2,
+        args.network_cidr3,
+        args.network_cidr4
+    ]
+    for cidr in cidr_args:
+        if cidr:
+            try:
+                hosts_list_ipv4.extend(get_ipv4_from_cidr(cidr, 19, 32))
+            except Exception as e:
+                error_handler(f"CIDR error: {e}")
 
     # time_zone_range -24 to +24 check 
     try:
-        if int(args.time_zone_adjust ) < -24 or int(args.time_zone_adjust ) > 24: 
-            error_handler('ERROR: -tz Time zone adjust setting must be in the range from -24 to +24')
-    except:
-            error_handler('ERROR: -tz Time zone adjust setting must be in the range from -24 to +24')
+        tz = int(args.time_zone_adjust)
+        if tz < -24 or tz > 24:
+            error_handler("ERROR: -tz: must be between -24 and 24")
+    except ValueError:
+            error_handler("ERROR: -tz: must be between -24 and 24")
 
-    # num_of_threads maximum check 
-    try: 
-        if int(args.num_of_threads) > 120:
-            error_handler('ERROR: -p values from 1 to 120 allowed ')
-    except:
-        error_handler('ERROR: -p values from 1 to 120 allowed ')
+    # threads 1 to 120 check 
+    try:
+        threads = int(args.num_of_threads)
+        if threads < 1 or threads > 120:
+            error_handler("ERROR: -p: must be between 1 and 120" )
+    except ValueError:
+            error_handler("ERROR: -p: must be between 1 and 120" )
+    # waittime 
+    try:
+        wait_time = float(args.waittime)
+        if wait_time < 0 or wait_time > 3600:
+            error_handler("ERROR: -w must be between 0 and 3600 e.g 0.2 ")
+    except ValueError:
+        error_handler("ERROR: -w must be between 0 and 3600 e.g 0.2 ")
 
     # create sample file if not exists and no special file is given 
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
@@ -458,12 +419,12 @@ if __name__=='__main__':
 
     # create logfile_file_name 
     now_logfile = str(datetime.datetime.now())
+
     # timezone adjust !!
     now_logfile_tmp = datetime.datetime.strptime(now_logfile, "%Y-%m-%d %H:%M:%S.%f")
     now_logfile = now_logfile_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
     filename_timextension = (now_logfile.strftime("%Y-%m-%d_%H:%M:%S"))
     logfile_file_name = 'eping-log_' + filename_timextension +'.csv'
-
 
     # create logfile 
     if args.logfile:
@@ -487,8 +448,7 @@ if __name__=='__main__':
             screen.clear()
         last_rows, last_cols = screen.getmaxyx()
 
-
-        # UP check if hosts for x runs are up - cleanup summary_hosts_list 
+        # up check - check to see if hosts are active in one of x runs and clean up summary_hosts_list 
         if int(args.up_hosts_check) > 0 and run_counter <= int(args.up_hosts_check)+1:
             for i in fping_result_data_sorted_old:
                 if 'UP' in i[1]:
@@ -499,7 +459,6 @@ if __name__=='__main__':
             summary_hosts_list_check = list(set(summary_hosts_list_check))
             summary_hosts_list = summary_hosts_list_check
 
-
         if int(args.up_hosts_check) > 0 and run_counter < int(args.up_hosts_check)+1:
             text = ('   LEARNING PHASE: ' + str(run_counter) + ' of ' +  str(args.up_hosts_check) + '         ').ljust(cols-2)
             learning_phase = False
@@ -507,21 +466,19 @@ if __name__=='__main__':
         else:
             learning_phase = True
 
-
         fping_cmd_output_raw_total = list()
         time1 = now = datetime.datetime.now()
 
         # start fping threads and sort the output - if the number of threads > hosts for pinging, adjust the value  
         threads = []
+
         if len(summary_hosts_list) < int(args.num_of_threads):
             num_threads = len(summary_hosts_list)
-
         else:
             num_threads = int(args.num_of_threads)
 
-        summary_hosts_list_split =[]
         # create threads and asign a function for each thread
-
+        summary_hosts_list_split =[]
         for seq in split_seq(summary_hosts_list, num_threads):
             summary_hosts_list_split.append(seq)
 
@@ -564,7 +521,6 @@ if __name__=='__main__':
                 z5 = x[5]
                 z6 = x[6]
                 z4 = y[1]
-
             z0 = y[0]
             z2 = y[2]
             z3 = y[3]
@@ -596,13 +552,13 @@ if __name__=='__main__':
 
         fping_result_data_sorted_old = fping_result_data_sorted_old_new
 
-        # delay if runtime < 0.5 SEC add delay 
-        time2 = datetime.datetime.now()
-        time3 = time2 - time1
-
-        if time3.total_seconds() < float(args.waittime) :
-            sleep_time = (float(args.waittime) - time3.total_seconds())
-            time.sleep(sleep_time)
+        # delay if runtime < -w time in seconds - add delay  
+        if run_counter >= 2: 
+            time2 = datetime.datetime.now()
+            time3 = time2 - time1
+            if time3.total_seconds() < float(args.waittime) :
+                sleep_time = (float(args.waittime) - time3.total_seconds())
+                time.sleep(sleep_time)
 
         # calculate the runtime 
         time2 = datetime.datetime.now()
@@ -707,3 +663,4 @@ if __name__=='__main__':
                 screen_output(rows-1, tts_col_start, tts_text ,3,2)
             linenr  +=1
         run_counter += 1
+# THX – Wanna patch my brain? Drop your tweaks here: https://github.com/ewaldj/eping — you know how 😉
