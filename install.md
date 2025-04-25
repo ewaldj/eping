@@ -22,7 +22,7 @@ chmod +x eping.py
 chmod +x epinga.py
 ```
 
-## Install Python minimum version 3.8
+## Install Python minimum version 3.6
 
 https://www.python.org/
 
