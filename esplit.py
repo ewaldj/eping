@@ -92,6 +92,7 @@ def file_menu(file_extension):
     while True:
         # exit the menue 
         if file_number == "e" or file_number =="E":
+            print ("\nTHX for using esplit.py version " + version + '  - www.jeitler.guru - \n' )
             sys.exit(0)
         # check valid input 
         if file_number.isdigit():
@@ -134,3 +135,4 @@ if __name__ == '__main__':
         output=args.output
 
     split_csv_by_size(filename, output, args.size)
+    print ("THX for using esplit.py version " + version + '  - www.jeitler.guru - \n' )
