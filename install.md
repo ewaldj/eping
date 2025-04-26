@@ -2,6 +2,11 @@
 # Install eping.py and epinga.py 
 
 
+## Install eping.py epinga.py esplit.py via script 
+```
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/install-eping.sh)"
+```
+
 ## Download eping.py via wget or cURL 
 
 ```
