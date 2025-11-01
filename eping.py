@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.09'
+version = '1.10'
 import os
 import re
 import sys
@@ -418,9 +418,7 @@ if __name__=='__main__':
     last_rows, last_cols = screen.getmaxyx()
 
     # create logfile_file_name 
-    now_logfile = str(datetime.datetime.now())
-
-    # timezone adjust !!
+    now_logfile = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
     now_logfile_tmp = datetime.datetime.strptime(now_logfile, "%Y-%m-%d %H:%M:%S.%f")
     now_logfile = now_logfile_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
     filename_timextension = (now_logfile.strftime("%Y-%m-%d_%H:%M:%S"))
