@@ -8,7 +8,7 @@
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.10'
+version = '1.12'
 import os
 import re
 import sys
@@ -22,6 +22,26 @@ import ipaddress
 import subprocess
 import threading
 import datetime
+#checkversion online 
+try:
+    import urllib.request
+    import socket
+except:
+    urllib = None
+    socket = None
+
+def check_version_online (url: str, tool_name: str, timeout: float = 2.0):
+    if not urllib or not socket:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            content = response.read().decode('utf-8')
+            for line in content.splitlines():
+                if line.startswith(tool_name + " "):
+                    return line.split()[1]
+        return None
+    except (urllib.error.URLError, socket.timeout) as e:
+        return None
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -268,6 +288,11 @@ def sigint_handler(signal, frame):
 
 # MAIN MAIN MAIN 
 if __name__=='__main__':
+
+    url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
+    toolname = "eping.py"
+
+    remote_version = check_version_online(url, toolname)
 
     default_hostfile = 'eping-hosts.txt'
     min_required_version = (3,6)
@@ -565,7 +590,14 @@ if __name__=='__main__':
 
         # output 
         rows, cols = screen.getmaxyx()
-        screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler',1)
+        # check version online - info 
+        if remote_version: 
+            if remote_version <= version:
+                screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler',1)
+            else:
+                screen_print_center_top('Update available – please visit https://www.jeitler.guru',3)
+        else:
+            screen_print_center_top('eping.py E version ' + version + ' by Ewald Jeitler',1)
         screen_print_date_time(1)
         screen_print_horizonta_line('-',1,1)                                                     
         screen_print_horizonta_line('-',1,3)
