@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# epinga2.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
+# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 # When I wrote this code, only god and 
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
+version = '1.12'
 
 import re
 import os 
@@ -17,7 +18,27 @@ import datetime
 import ipaddress
 import signal
 import collections 
-version = '1.10'
+
+#checkversion online 
+try:
+    import urllib.request
+    import socket
+except:
+    urllib = None
+    socket = None
+
+def check_version_online (url: str, tool_name: str, timeout: float = 2.0):
+    if not urllib or not socket:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            content = response.read().decode('utf-8')
+            for line in content.splitlines():
+                if line.startswith(tool_name + " "):
+                    return line.split()[1]
+        return None
+    except (urllib.error.URLError, socket.timeout) as e:
+        return None
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -346,4 +367,16 @@ if __name__=='__main__':
     print ("---- FILENAME ----------------------------------------------------------------------------------")
     print (filename)
     print ("------------------------------------------------------------------------------------------------\n")
-    print ("THX for using epinga.py version " + version + '  - www.jeitler.guru - \n' )
+
+    # check version online - info 
+    url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
+    toolname = "epinga.py"
+    remote_version = check_version_online(url, toolname)
+    if remote_version: 
+        if remote_version <= version:
+            print ("THX for using epinga.py version " + version + '  - www.jeitler.guru - \n' )
+        else:
+            print (CRED +'!! Update available – please visit https://www.jeitler.guru !! \n' )
+    else:
+        print ("THX for using epinga.py version " + version + '  - www.jeitler.guru - \n' )
+# THX – Wanna patch my brain? Drop your tweaks here: https://github.com/ewaldj/eping — you know how 😉

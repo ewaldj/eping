@@ -7,13 +7,34 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
+version = '0.00'
 
 import os
 import sys
 import csv
 import argparse
 import logging
-version = '0.01'
+
+#checkversion online 
+try:
+    import urllib.request
+    import socket
+except:
+    urllib = None
+    socket = None
+
+def check_version_online (url: str, tool_name: str, timeout: float = 2.0):
+    if not urllib or not socket:
+        return None
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            content = response.read().decode('utf-8')
+            for line in content.splitlines():
+                if line.startswith(tool_name + " "):
+                    return line.split()[1]
+        return None
+    except (urllib.error.URLError, socket.timeout) as e:
+        return None
 
 try:
     from tqdm import tqdm
@@ -108,6 +129,8 @@ def file_menu(file_extension):
     return (file_list[int(file_number)-1])
 
 if __name__ == '__main__':
+    CRED = '\033[91m'
+
     parser = argparse.ArgumentParser(description='Split a large CSV file into smaller parts by max size in MB.')
     parser.add_argument('--input', '-i', required=False, help='Path to the input CSV file')
     parser.add_argument('--output', '-o', required=False, help='Output folder for split files')
@@ -135,4 +158,15 @@ if __name__ == '__main__':
         output=args.output
 
     split_csv_by_size(filename, output, args.size)
-    print ("THX for using esplit.py version " + version + '  - www.jeitler.guru - \n' )
+    # check version online - info 
+    url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
+    toolname = "esplit.py"
+    remote_version = check_version_online(url, toolname)
+    if remote_version: 
+        if remote_version <= version:
+            print ("\nTHX for using esplit.py version " + version + '  - www.jeitler.guru - \n' )
+        else:
+            print (CRED +'\n!! Update available – please visit https://www.jeitler.guru !! \n' )
+    else:
+        print ("\nTHX for using esplit.py version " + version + '  - www.jeitler.guru - \n' )
+# THX – Wanna patch my brain? Drop your tweaks here: https://github.com/ewaldj/eping — you know how 😉
