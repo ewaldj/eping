@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.13'
+version = '1.14'
 
 import os
 import re
@@ -17,6 +17,7 @@ import glob
 import time 
 import curses
 import signal
+import shutil
 import argparse
 import ipaddress
 import subprocess
@@ -42,6 +43,9 @@ def check_version_online (url: str, tool_name: str, timeout: float = 2.0):
         return None
     except (urllib.error.URLError, socket.timeout) as e:
         return None
+
+def is_program_installed(program_name: str) -> bool:
+    return shutil.which(program_name) is not None
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -144,7 +148,7 @@ def fping_cmd(summary_hosts_list,lock):
     try:
         ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     except FileNotFoundError:
-        error_handler (' ERROR:The command \'fping\' was not found, install it e.g. via \'sudo apt install fping\' or \'brew install fping\'' )
+        error_handler ("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
     while ping.stdout.readable() or ping.stderr.readable:
         sline = ping.stdout.readline()
@@ -288,6 +292,9 @@ def sigint_handler(signal, frame):
 
 # MAIN MAIN MAIN 
 if __name__=='__main__':
+
+    if not is_program_installed("fping"):
+        error_handler ("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
     url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
     toolname = "eping.py"
