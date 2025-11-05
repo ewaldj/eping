@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.14'
+version = '1.15'
 
 import os
 import re
@@ -256,14 +256,9 @@ def screen_output(line,coll,text,color,attr_val):
         pass
 
 def screen_print_date_time(color_pair):
-    now = str(datetime.datetime.now())
-
-    # timezone adjust !!
-    now_tmp = datetime.datetime.strptime(now, "%Y-%m-%d %H:%M:%S.%f")
-    now = now_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+    now = datetime.datetime.now() + datetime.timedelta(hours=int(args.time_zone_adjust))
     dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
-
-    screen_output(0 , 1, dt_string,color_pair,1)
+    screen_output(0, 1, dt_string, color_pair, 1)
     screen.refresh()
 
 def screen_print_center_top(message,color_pair):
