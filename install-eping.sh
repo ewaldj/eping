@@ -13,9 +13,9 @@ mkdir -p eping
 
 # download eping 
 cd eping 
-curl -O https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eping.py
-curl -O https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/epinga.py
-curl -O https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/esplit.py
+curl -O https://raw.githubusercontent.com/ewaldj/eping/main/eping.py
+curl -O https://raw.githubusercontent.com/ewaldj/eping/main/epinga.py
+curl -O https://raw.githubusercontent.com/ewaldj/eping/main/esplit.py
 chmod +x eping.py
 chmod +x epinga.py
 chmod +x esplit.py 
