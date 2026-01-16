@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.16'
+version = '1.17'
 
 import os
 import re
@@ -43,18 +43,23 @@ def set_half_of_hard_limit():
     except Exception as e:
         raise TypeError('ERROR: Unable to set RLIMIT_NOFILE. The requested file descriptor limit exceeds the permitted range.')
 
-def check_version_online (url: str, tool_name: str, timeout: float = 2.0):
+   
+def check_version_online(url: str, tool_name: str, timeout: float = 2.0):
     if not urllib or not socket:
         return None
+    import ssl
+    ctx = ssl._create_unverified_context()
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        with urllib.request.urlopen(url, timeout=timeout, context=ctx) as response:
             content = response.read().decode('utf-8')
             for line in content.splitlines():
                 if line.startswith(tool_name + " "):
+                    print("1")
                     return line.split()[1]
         return None
-    except (urllib.error.URLError, socket.timeout) as e:
+    except (urllib.error.URLError, socket.timeout):
         return None
+
 
 def is_program_installed(program_name: str) -> bool:
     return shutil.which(program_name) is not None
