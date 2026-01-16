@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.15'
+version = '1.16'
 
 import os
 import re
@@ -23,6 +23,7 @@ import ipaddress
 import subprocess
 import threading
 import datetime
+import resource
 #checkversion online 
 try:
     import urllib.request
@@ -30,6 +31,17 @@ try:
 except:
     urllib = None
     socket = None
+
+import resource
+
+def set_half_of_hard_limit():
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        half = max(1, hard // 2)
+        # set soft limit to the half of the systm
+        resource.setrlimit(resource.RLIMIT_NOFILE, (half, hard))
+    except Exception as e:
+        raise TypeError('ERROR: Unable to set RLIMIT_NOFILE. The requested file descriptor limit exceeds the permitted range.')
 
 def check_version_online (url: str, tool_name: str, timeout: float = 2.0):
     if not urllib or not socket:
@@ -298,7 +310,9 @@ if __name__=='__main__':
 
     default_hostfile = 'eping-hosts.txt'
     min_required_version = (3,6)
-    
+    # SET HALF OF ULIMIT OF THE SYSTEM 
+    set_half_of_hard_limit()
+
     if not check_python_version(min_required_version):
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
     
@@ -599,7 +613,7 @@ if __name__=='__main__':
             else:
                 screen_print_center_top('Update available – please visit https://www.jeitler.guru',3)
         else:
-            screen_print_center_top('eping.py E version ' + version + ' by Ewald Jeitler',1)
+            screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler',1)
         screen_print_date_time(1)
         screen_print_horizonta_line('-',1,1)                                                     
         screen_print_horizonta_line('-',1,3)
