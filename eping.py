@@ -54,7 +54,6 @@ def check_version_online(url: str, tool_name: str, timeout: float = 2.0):
             content = response.read().decode('utf-8')
             for line in content.splitlines():
                 if line.startswith(tool_name + " "):
-                    print("1")
                     return line.split()[1]
         return None
     except (urllib.error.URLError, socket.timeout):
