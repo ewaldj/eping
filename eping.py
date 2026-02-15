@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.17'
+version = '1.18'
 
 import os
 import re
@@ -33,6 +33,17 @@ except:
     socket = None
 
 import resource
+
+import curses
+
+def curses_supports_curs_set():
+    def _inner(stdscr):
+        try:
+            curses.curs_set(0)
+            return True
+        except curses.error:
+            return False
+    return curses.wrapper(_inner)
 
 def set_half_of_hard_limit():
     try:
@@ -309,8 +320,14 @@ if __name__=='__main__':
 
     url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
     toolname = "eping.py"
-
     remote_version = check_version_online(url, toolname)
+
+    if curses_supports_curs_set():
+        curses.curs_set(0)
+    else:
+        # fallback: do nothing or log
+        error_handler('ERROR: curs_set() is not supported by this terminal. Some terminal types (e.g. vt100) do not allow changing cursor visibility' )
+
 
     default_hostfile = 'eping-hosts.txt'
     min_required_version = (3,6)
