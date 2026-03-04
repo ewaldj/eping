@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.18'
+version = '1.19'
 
 import os
 import re
@@ -318,10 +318,6 @@ if __name__=='__main__':
     if not is_program_installed("fping"):
         error_handler ("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
-    url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
-    toolname = "eping.py"
-    remote_version = check_version_online(url, toolname)
-
     if curses_supports_curs_set():
         curses.curs_set(0)
     else:
@@ -361,13 +357,22 @@ if __name__=='__main__':
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads maximum 120" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
-    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )     
+    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )   
+    parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
 
     # read arguments from command line
     args = parser.parse_args()
     backoff = args.backoff
     timeout = args.timeout 
-    
+
+    # check online current version
+    if not args.disable_versioncheck: 
+           url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
+           toolname = "eping.py"
+           remote_version = check_version_online(url, toolname)
+    else: 
+        remote_version = version
+
     # regex IP/FQDN/CIDR .... 
     ip_re = re.compile(r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
     fqdn_re = re.compile(r'(?=^.{4,253}$)(^((?!-)[a-zA-Z0-9-äöüÄÖÜ]{1,63}(?<!-)([\.]?))+[a-zA-ZäöüÄÖÜ]{0,63}$)')
