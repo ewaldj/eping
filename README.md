@@ -2,7 +2,7 @@
 
 ## Install eping.py epinga.py esplit.py 
 ```
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/install-eping.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"
 ```
 
 ## eping.py is is a powerful tool that uses fping and python to test the network connectivity of thousands of hosts efficiently and in parallel.
