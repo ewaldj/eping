@@ -193,6 +193,7 @@ done
 
 print_title "Done"
 echo "All tools were installed successfully."
+echo "Have a zero‑downtime day!"
 
 case ":$PATH:" in
     *":$BINDIR:"*)
@@ -204,6 +205,5 @@ case ":$PATH:" in
         echo "Add this line to your shell profile:"
         echo "export PATH=\"$BINDIR:\$PATH\""
         ;;
-echo "Have a zero‑downtime day!"
 
 esac
