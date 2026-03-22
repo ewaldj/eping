@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.26'
+version = '1.27'
 
 import os
 import re
@@ -287,7 +287,6 @@ def screen_print_date_time(color_pair):
     now = datetime.datetime.now() + datetime.timedelta(hours=int(args.time_zone_adjust))
     dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
     screen_output(0, 1, dt_string, color_pair, 1)
-    screen.refresh()
 
 def screen_print_center_top(message,color_pair):
     num_rows, num_cols = screen.getmaxyx()
@@ -297,7 +296,6 @@ def screen_print_center_top(message,color_pair):
     spacesstring = spacesstring.rjust(int(spaces), ' ')
     messagetext = spacesstring + message + spacesstring 
     screen_output(0, 0, messagetext,color_pair,1)
-    screen.refresh()
 
 def screen_print_horizonta_line (message,color_pair,line):
     num_rows, num_cols = screen.getmaxyx()
@@ -305,7 +303,6 @@ def screen_print_horizonta_line (message,color_pair,line):
     linestring = spacesstring.rjust(int(num_cols), message)
     if line < num_rows-1: 
         screen_output(line, 0, linestring,color_pair,1 )
-        screen.refresh()
 
 def sigint_handler(signal, frame):
     screen=curses.initscr()
