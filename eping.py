@@ -7,13 +7,14 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.19'
+version = '1.25'
 
 import os
 import re
 import sys
 import csv
 import glob
+import math
 import time 
 import curses
 import signal
@@ -173,7 +174,7 @@ def fping_cmd(summary_hosts_list,lock):
     cmd = ['fping', '-4', '-e', '-B', backoff, '-t', timeout]
     cmd.extend(summary_hosts_list)
     try:
-        ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, universal_newlines=True)
     except FileNotFoundError:
         error_handler ("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
@@ -355,7 +356,7 @@ if __name__=='__main__':
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
-    parser.add_argument('-p', '--threads', default='3', dest='num_of_threads', help="default is 3 parallel threads maximum 120" )
+    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="parallel threads (default: auto-scaled by host count, max 120)" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
     parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )   
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
@@ -424,13 +425,17 @@ if __name__=='__main__':
     except ValueError:
             error_handler("ERROR: -tz: must be between -24 and 24")
 
-    # threads 1 to 120 check 
-    try:
-        threads = int(args.num_of_threads)
-        if threads < 1 or threads > 120:
-            error_handler("ERROR: -p: must be between 1 and 120" )
-    except ValueError:
-            error_handler("ERROR: -p: must be between 1 and 120" )
+    # threads 1 to 120 check / auto-scaling
+    if args.num_of_threads == 'auto':
+        _threads_auto = True
+    else:
+        _threads_auto = False
+        try:
+            threads = int(args.num_of_threads)
+            if threads < 1 or threads > 120:
+                error_handler("ERROR: -p: must be between 1 and 120" )
+        except ValueError:
+                error_handler("ERROR: -p: must be between 1 and 120" )
     # waittime 
     try:
         wait_time = float(args.waittime)
@@ -466,6 +471,12 @@ if __name__=='__main__':
     #if no host with the given option exists - exit  
     if not summary_hosts_list: 
         error_handler('ERROR: There is nothing to do for me ')
+
+    # auto-scale thread count based on number of hosts
+    if _threads_auto:
+        num_hosts = len(summary_hosts_list)
+        auto_threads = max(3, min(120, int(math.ceil(math.log2(max(num_hosts, 2)) * 1.5))))
+        args.num_of_threads = str(auto_threads)
     
     run_counter = 1
     
@@ -504,235 +515,363 @@ if __name__=='__main__':
         except:
             error_handler('ERROR: failed to create logfile: ' + logfile_file_name )
 
-    summary_hosts_list_check = [] 
-    fping_result_data_sorted_old = []
-    while True:
-        # clear screen if terminal size has changed 
+    # --- state dict: hostname -> [hostname, state, timestamp, rtt, prev_state, changes, change_ts, tbd]
+    host_state = {}
+
+    original_hosts_list = list(summary_hosts_list)
+    active_hosts_list   = list(summary_hosts_list)
+
+    # -up learning phase
+    up_check_runs       = int(args.up_hosts_check)
+    learning_done       = (up_check_runs == 0)
+    up_seen             = set()
+
+    def add_hosts_dialog():
+        """Show an input dialog, parse IP/hostname/CIDR and return list of new hosts."""
         rows, cols = screen.getmaxyx()
-        if last_rows != rows or last_cols != cols: 
+        dialog_w    = min(70, cols - 4)
+        dialog_h    = 7
+        dialog_y    = rows // 2 - dialog_h // 2
+        dialog_x    = cols // 2 - dialog_w // 2
+
+        # draw dialog box
+        curses.curs_set(1)
+        screen.nodelay(False)
+        for dy in range(dialog_h):
+            screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
+        screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
+        screen_output(dialog_y + 1, dialog_x, '│' + ' ADD HOSTS '.center(dialog_w - 2) + '│', 1, 1)
+        screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+        screen_output(dialog_y + 3, dialog_x, '│' + ' Enter IP, hostname or CIDR:'.ljust(dialog_w - 2) + '│', 1, 0)
+        screen_output(dialog_y + 4, dialog_x, '│' + ' > '.ljust(dialog_w - 2) + '│', 1, 0)
+        screen_output(dialog_y + 5, dialog_x, '│' + ' [ENTER]=confirm'.ljust(dialog_w - 2) + '│', 1, 0)
+        screen_output(dialog_y + 6, dialog_x, '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
+        screen.refresh()
+
+        # input loop
+        input_x   = dialog_x + 4
+        input_y   = dialog_y + 4
+        input_str = ''
+        max_input = dialog_w - 6
+        screen.move(input_y, input_x)
+
+        while True:
+            screen.move(input_y, input_x)
+            screen_output(input_y, input_x, (input_str + ' ' * max_input)[:max_input], 1, 1)
+            screen.move(input_y, input_x + len(input_str))
+            screen.refresh()
+            ch = screen.getch()
+            if ch in (10, 13):                     # ENTER = confirm
+                break
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                input_str = input_str[:-1]
+            elif 32 <= ch <= 126 and len(input_str) < max_input:
+                input_str += chr(ch)
+
+        curses.curs_set(0)
+        screen.nodelay(True)
+        screen.clear()
+
+        value = input_str.strip()
+        if not value:
+            return []
+
+        new_hosts = []
+        # CIDR?
+        if match_re(value, cidr_ipv4_re):
+            try:
+                new_hosts = get_ipv4_from_cidr(value, 19, 32)
+            except: pass
+        # IP range  e.g. "10.0.0.1-10.0.0.20"
+        elif '-' in value and value.count('-') == 1:
+            parts = value.split('-')
+            try:
+                new_hosts = get_ipv4_from_range(parts[0].strip(), parts[1].strip(), 32768)
+            except: pass
+        # single IP
+        elif match_re(value, ip_re):
+            new_hosts = [value]
+        # hostname/fqdn
+        elif match_re(value, fqdn_re):
+            new_hosts = [value]
+
+        return new_hosts
+
+    # non-blocking keyboard input - main thread only, no separate thread
+    screen.nodelay(True)
+
+    run_counter = 1
+    while True:
+
+        # --- keyboard: drain all buffered keys ---
+        cmd = None
+        while True:
+            k = screen.getch()
+            if k == -1:
+                break
+            if k in (ord('u'), ord('U')):
+                cmd = 'UP_ONLY'
+            elif k in (ord('a'), ord('A')):
+                cmd = 'ADD'
+            elif k in (ord('e'), ord('E')):
+                cmd = 'EXIT'
+        if cmd == 'UP_ONLY':
+            if active_hosts_list == original_hosts_list or set(active_hosts_list) == set(original_hosts_list):
+                up_now = [h for h in original_hosts_list if h in host_state and 'UP' in host_state[h][1]]
+                if up_now:
+                    active_hosts_list = up_now
+                    screen.clear()
+            else:
+                active_hosts_list = list(original_hosts_list)
+                screen.clear()
+        elif cmd == 'ADD':
+            new_hosts = add_hosts_dialog()
+            for h in new_hosts:
+                if h not in active_hosts_list:
+                    active_hosts_list.append(h)
+                if h not in original_hosts_list:
+                    original_hosts_list.append(h)
+        elif cmd == 'EXIT':
+            curses.endwin()
+            print('THX for using eping.py ')
+            sys.exit(0)
+
+        # --- clear screen on resize ---
+        rows, cols = screen.getmaxyx()
+        if last_rows != rows or last_cols != cols:
             screen.clear()
         last_rows, last_cols = screen.getmaxyx()
 
-        # up check - check to see if hosts are active in one of x runs and clean up summary_hosts_list 
-        if int(args.up_hosts_check) > 0 and run_counter <= int(args.up_hosts_check)+1:
-            for i in fping_result_data_sorted_old:
-                if 'UP' in i[1]:
-                   summary_hosts_list_check.append(i[0])
-
-        if int(args.up_hosts_check) > 0 and run_counter == int(args.up_hosts_check)+1:
-            screen.clear()
-            summary_hosts_list_check = list(set(summary_hosts_list_check))
-            summary_hosts_list = summary_hosts_list_check
-
-        if int(args.up_hosts_check) > 0 and run_counter < int(args.up_hosts_check)+1:
-            text = ('   LEARNING PHASE: ' + str(run_counter) + ' of ' +  str(args.up_hosts_check) + '         ').ljust(cols-2)
-            learning_phase = False
-            screen_output(rows-1,1, text,1,1)
+        # --- learning phase: switch to UP-only after up_check_runs ---
+        if not learning_done:
+            if run_counter <= up_check_runs:
+                learning_phase = False
+            else:
+                learning_done = True
+                active_hosts_list = sorted(up_seen, key=lambda h: (
+                    int(ipaddress.ip_address(h)) if match_re(h, ip_re) else float('inf')
+                ))
+                screen.clear()
+                learning_phase = True
         else:
             learning_phase = True
 
+        # --- run fping ---
         fping_cmd_output_raw_total = list()
-        time1 = now = datetime.datetime.now()
+        time1 = datetime.datetime.now()
 
-        # start fping threads and sort the output - if the number of threads > hosts for pinging, adjust the value  
         threads = []
-
-        if len(summary_hosts_list) < int(args.num_of_threads):
-            num_threads = len(summary_hosts_list)
-        else:
-            num_threads = int(args.num_of_threads)
-
-        # create threads and asign a function for each thread
-        summary_hosts_list_split =[]
-        for seq in split_seq(summary_hosts_list, num_threads):
-            summary_hosts_list_split.append(seq)
-
-        # create a lock
+        num_threads = min(len(active_hosts_list), int(args.num_of_threads))
+        summary_hosts_list_split = list(split_seq(active_hosts_list, num_threads))
         lock = threading.Lock()
         for i in range(num_threads):
-            thread = threading.Thread(target=fping_cmd,args=(summary_hosts_list_split[i],lock))
-            threads.append(thread)
-
-        # start all threads
-        for thread in threads:
-            thread.start()
-
-        for thread in threads:
-            thread.join()
+            t = threading.Thread(target=fping_cmd, args=(summary_hosts_list_split[i], lock))
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
         fping_result_data_sorted = sort_fping_result_data(fping_cmd_output_raw_total)
 
-        # copy actual list to compare list   
-        if run_counter == 1: 
-            fping_result_data_sorted_old = fping_result_data_sorted
-
-        # copy actual list to compare list after hostcheck run   
-        if int(args.up_hosts_check) > 0 and run_counter == int(args.up_hosts_check)+1:
-            fping_result_data_sorted_old = fping_result_data_sorted
-
-        # compare both lists an generate a new "fping_result_data_sorted_old"
-        fping_result_data_sorted_old_new = []
-        num_of_hosts = 0
-        hosts_count_up = 0
+        # --- update state dict ---
+        now_str = get_date_time()
+        hosts_count_up   = 0
         hosts_count_down = 0
-        for x,y in zip(fping_result_data_sorted_old,fping_result_data_sorted):
-            if x[1] != y[1]: 
-                z1 = y[1]
-                z5 = x[5]+1 
-                z6 = get_date_time()
-                z4 = x[1]
-            else: 
-                z1 = y[1]
-                z5 = x[5]
-                z6 = x[6]
-                z4 = y[1]
-            z0 = y[0]
-            z2 = y[2]
-            z3 = y[3]
-            z7 = y[7]
-            num_of_hosts += 1
+        for entry in fping_result_data_sorted:
+            hostname  = entry[0]
+            new_state = entry[1]
+            timestamp = entry[2]
+            rtt       = entry[3]
+            tbd       = entry[7]
 
-            # timezone adjust !!
-            z2_tmp = datetime.datetime.strptime(z2, "%d/%m/%Y %H:%M:%S")
-            z2 = z2_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+            if hostname in host_state:
+                old        = host_state[hostname]
+                old_state  = old[1]
+                changes    = old[5]
+                change_ts  = old[6]
+                if old_state != new_state:
+                    changes  += 1
+                    change_ts = now_str
+            else:
+                old_state = new_state
+                changes   = 0
+                change_ts = ''
+
+            # timezone adjust
             try:
-                z6_tmp = datetime.datetime.strptime(z6, "%d/%m/%Y %H:%M:%S")
-                z6 = z6_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+                ts_tmp = datetime.datetime.strptime(timestamp, "%d/%m/%Y %H:%M:%S")
+                timestamp = ts_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+            except: pass
+            try:
+                ct_tmp = datetime.datetime.strptime(change_ts, "%d/%m/%Y %H:%M:%S")
+                change_ts = ct_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
             except: pass
 
-            data = ([z0] + [z1] + [z2] + [z3] + [z4] + [z5] + [z6] + [z7])
-            fping_result_data_sorted_old_new.append(data)
-            # count up / down hosts 
-            if 'UP' in z1:
-                hosts_count_up +=1
-            else:
-                hosts_count_down +=1 
+            host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd]
 
-            # create logfile if not disabled 
-            if args.disable_logging and  learning_phase:
-                logdata =([z2] + [z0]  + [z4.replace(" ", "")] + [z1.replace(" ", "")] + [z3]  + [z5] + [z6] + [z7])
+            # learning phase tracking
+            if not learning_done and 'UP' in new_state:
+                up_seen.add(hostname)
+
+            # logging
+            if args.disable_logging and learning_phase:
+                logdata = ([timestamp] + [hostname] + [old_state.replace(" ", "")] + [new_state.replace(" ", "")] + [rtt] + [changes] + [change_ts] + [tbd])
                 with open(logfile_file_name, 'a', encoding='UTF8') as f:
-                        writer = csv.writer(f)
-                        writer.writerow(logdata)
+                    writer = csv.writer(f)
+                    writer.writerow(logdata)
 
-        fping_result_data_sorted_old = fping_result_data_sorted_old_new
+        # --- build display list (only active hosts, sorted) ---
+        display_list = [host_state[h] for h in active_hosts_list if h in host_state]
+        display_list = sort_fping_result_data(display_list)
 
-        # delay if runtime < -w time in seconds - add delay  
-        if run_counter >= 2: 
+        for entry in display_list:
+            if 'UP' in entry[1]:
+                hosts_count_up += 1
+            else:
+                hosts_count_down += 1
+
+        # --- wait + key polling ---
+        if run_counter >= 2:
             time2 = datetime.datetime.now()
             time3 = time2 - time1
-            if time3.total_seconds() < float(args.waittime) :
-                sleep_time = (float(args.waittime) - time3.total_seconds())
-                time.sleep(sleep_time)
+            remaining = float(args.waittime) - time3.total_seconds()
+            deadline  = time.time() + remaining
+            while time.time() < deadline:
+                time.sleep(0.1)
+                k = screen.getch()
+                if k in (ord('u'), ord('U')):
+                    up_now = [h for h in original_hosts_list if h in host_state and 'UP' in host_state[h][1]]
+                    if up_now:
+                        active_hosts_list = up_now
+                        screen.clear()
+                elif k in (ord('a'), ord('A')):
+                    active_hosts_list = list(original_hosts_list)
+                    screen.clear()
 
-        # calculate the runtime 
-        time2 = datetime.datetime.now()
-        time3 = time2 - time1
-        run_time = format(float(time3.total_seconds()), ".2f")
+        time2    = datetime.datetime.now()
+        run_time = format(float((time2 - time1).total_seconds()), ".2f")
 
-        # output 
+        # --- screen output ---
         rows, cols = screen.getmaxyx()
-        # check version online - info 
-        if remote_version: 
+        if remote_version:
             if remote_version <= version:
-                screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler',1)
+                screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
             else:
-                screen_print_center_top('Update available – please visit https://www.jeitler.guru',3)
+                screen_print_center_top('Update available – please visit https://www.jeitler.guru', 3)
         else:
-            screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler',1)
-        screen_print_date_time(1)
-        screen_print_horizonta_line('-',1,1)                                                     
-        screen_print_horizonta_line('-',1,3)
-        screen_print_horizonta_line('-',1,rows-2)
+            screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
 
-        # print header based on terminal size 
+        screen_print_date_time(1)
+        screen_print_horizonta_line('-', 1, 1)
+        screen_print_horizonta_line('-', 1, 3)
+        screen_print_horizonta_line('-', 1, rows - 2)
+
         colsoffset_header = 0
         maxcols = 0
-        while cols-64 >= colsoffset_header: 
-            screen_output(2,colsoffset_header, '|      HOSTNAME/IP         |  U/D |   RTT   | CH-TIME  | CH NO ||',1,1 )
-            colsoffset_header = colsoffset_header + 64
+        while cols - 64 >= colsoffset_header:
+            screen_output(2, colsoffset_header, '|      HOSTNAME/IP         |  U/D |   RTT   | CH-TIME  | CH NO ||', 1, 1)
+            colsoffset_header += 64
             maxcols += 1
 
-        linenr = 0
+        linenr          = 0
         output_coloffset = 0
+        top_offset      = 4
+        bottom_offset   = 2
+        num_of_hosts    = len(display_list)
 
-        # SET TOP AND BOTTOM OFFSET 
-        top_offset = 4
-        bottom_offset = 2
-        data_in_lists=False
+        if num_of_hosts == 0:
+            screen_output(rows - 1, 1, 'NO HOSTS TO PING!', 3, 2)
 
-        # ERROR MSG IF NO VALID HOSTS IN LIST 
-        if len(fping_result_data_sorted_old) == 0:
-            screen_output(rows-1,1, 'NO HOSTS TO PING!',3,2)
-
-        for o in fping_result_data_sorted_old:
-            hostname = (o[0])
-            state = (o[1])
-            rtt = (o[3])
-            changes = (o[5])
-            change_timestamp = (o[6])
-            try: 
-                timehhmm = (str(change_timestamp)).split(' ')
+        for o in display_list:
+            hostname         = o[0]
+            state            = o[1]
+            rtt              = o[3]
+            changes          = o[5]
+            change_timestamp = o[6]
+            try:
+                timehhmm         = (str(change_timestamp)).split(' ')
                 change_timestamp = timehhmm[1]
             except: pass
 
-            output_linenr = int(linenr)+int(top_offset)
-            no_of_hosts = len(fping_result_data_sorted_old)
-
-            # CALCULATE THE OUTPUT POSITION PER HOST
+            output_linenr    = int(linenr) + int(top_offset)
             x = 1
-            z = top_offset+bottom_offset
-            i = num_of_hosts/rows+z 
+            z = top_offset + bottom_offset
+            i = num_of_hosts / rows + z
             while i > 0:
-                if int(linenr)+(z*x)+1 > rows*x:
-                    output_coloffset = x*64
-                    output_linenr = output_linenr-rows+int(z)
+                if int(linenr) + (z * x) + 1 > rows * x:
+                    output_coloffset = x * 64
+                    output_linenr    = output_linenr - rows + int(z)
                 i -= 1
-                x += 1 
-            maxrows = rows-z
-            maxhosts = maxrows*maxcols 
+                x += 1
+            maxrows  = rows - z
+            maxhosts = maxrows * maxcols
+
             output_hostname = ('%.25s' % hostname)
-            output_rtt = '{message: >8}'.format(message=rtt)  
-            output_changes = '{message: >5}'.format(message=str(changes)) 
+            output_rtt      = '{message: >8}'.format(message=rtt)
+            output_changes  = '{message: >5}'.format(message=str(changes))
 
-            # OUTPUT 
-            if int(linenr)<maxhosts:
-                screen_output(output_linenr, output_coloffset+0,  '|                                 |         |' ,1,1)
-                screen_output(output_linenr, output_coloffset+27, '|' ,1,1)
-                screen_output(output_linenr, output_coloffset+55, '|' ,1,1)
-                screen_output(output_linenr, output_coloffset+63, '||' ,1,1)
+            if int(linenr) < maxhosts:
+                screen_output(output_linenr, output_coloffset + 0,  '|                                 |         |', 1, 1)
+                screen_output(output_linenr, output_coloffset + 27, '|', 1, 1)
+                screen_output(output_linenr, output_coloffset + 55, '|', 1, 1)
+                screen_output(output_linenr, output_coloffset + 63, '||', 1, 1)
                 if 'UP' in state:
-                    color_state = 2
-                    color_host = 1
-                    bold_host = 0
-                else: 
-                    color_state = 3
-                    color_host = 3 
-                    bold_host = 1
-                screen_output(output_linenr, output_coloffset+2,  output_hostname ,color_host,bold_host)
-                screen_output(output_linenr, output_coloffset+28, state,color_state,1)
-                screen_output(output_linenr, output_coloffset+35, str(output_rtt),0,0 )
-                if int(output_changes) > 0:
-                    screen_output(output_linenr, output_coloffset+57, str(output_changes) ,1,1)
-                if change_timestamp:
-                    screen_output(output_linenr, output_coloffset+46, str(change_timestamp) ,1,0)
-                screen_output(rows-1,1, 'HOSTS: ' +str(no_of_hosts) ,1,1)
-                screen_output(rows-1,14, 'RUNTIME: ' + str(run_time) +'sec' ,1,1)
-                screen_output(rows-1,35, 'RUNS: ' + str(run_counter) ,1,1)
-                hosts_up = '{m: <5}'.format(m=hosts_count_up)
-                screen_output(rows-1,50, 'HOSTS-UP: ' + str(hosts_up),2,1)
-                hosts_down = '{m: <5}'.format(m=hosts_count_down)
-                screen_output(rows-1,66, 'HOSTS-DOWN: ' + str(hosts_down),3,1 )
-                if args.disable_logging:
-                    screen_output(rows-1,87, 'LOGGING-ON: ' + logfile_file_name,1,1 )
+                    color_state = 2; color_host = 1; bold_host = 0
                 else:
-                    screen_output(rows-1,87, 'LOGGING-OFF',1,1 )
+                    color_state = 3; color_host = 3; bold_host = 1
+                screen_output(output_linenr, output_coloffset + 2,  output_hostname, color_host, bold_host)
+                screen_output(output_linenr, output_coloffset + 28, state, color_state, 1)
+                screen_output(output_linenr, output_coloffset + 35, str(output_rtt), 0, 0)
+                if int(output_changes) > 0:
+                    screen_output(output_linenr, output_coloffset + 57, str(output_changes), 1, 1)
+                if change_timestamp:
+                    screen_output(output_linenr, output_coloffset + 46, str(change_timestamp), 1, 0)
+            else:
+                pass  # TERMINAL TOO SMALL shown in status bar below
 
-            else: 
-                tts_text = '      TERMINAL TOO SMALL '
-                tts_msg_len = int(len(tts_text)) 
-                tts_col_start = cols - tts_msg_len
-                screen_output(rows-1, tts_col_start, tts_text ,3,2)
-            linenr  +=1
+            linenr += 1
+
+        # --- status bar and key bar always drawn after host loop ---
+        hosts_up   = '{m: <5}'.format(m=hosts_count_up)
+        hosts_down = '{m: <5}'.format(m=hosts_count_down)
+        screen_output(rows - 1, 1,  'HOSTS: '   + str(num_of_hosts), 1, 1)
+        screen_output(rows - 1, 14, 'RUNTIME: ' + str(run_time) + 'sec', 1, 1)
+        screen_output(rows - 1, 35, 'RUNS: '    + str(run_counter), 1, 1)
+        screen_output(rows - 1, 50, 'HOSTS-UP: '   + str(hosts_up),   2, 1)
+        screen_output(rows - 1, 66, 'HOSTS-DOWN: ' + str(hosts_down), 3, 1)
+        if args.disable_logging:
+            screen_output(rows - 1, 87, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
+        else:
+            screen_output(rows - 1, 87, 'LOGGING-OFF', 1, 1)
+        # TERMINAL TOO SMALL - bottom right, drawn last so always visible
+        if num_of_hosts > 0 and maxhosts < num_of_hosts:
+            tts_text = ' | TERMINAL TOO SMALL '
+            screen_output(rows - 1, cols - len(tts_text), tts_text, 3, 2)
+
+        if len(active_hosts_list) < len(original_hosts_list):
+            screen_output(rows - 2, 2,  ' [U]=UP-ONLY ', 2, 1)
+        else:
+            screen_output(rows - 2, 2,  ' [U]=UP-ONLY ', 1, 0)
+        screen_output(rows - 2, 15, ' [A]=ADD HOST  ', 1, 0)
+        screen_output(rows - 2, 29, ' [E]=EXIT ', 1, 0)
+
+        # learning phase: centered green box overlay
+        if not learning_phase:
+            lp_line1 = '        PLEASE WAIT        '
+            lp_line2 = ' Scanning hosts for UP status '
+            lp_line3 = '   LEARNING PHASE ' + str(run_counter) + ' of ' + str(up_check_runs) + '   '
+            box_w    = max(len(lp_line1), len(lp_line2), len(lp_line3)) + 4
+            lp_col   = max(0, (cols - box_w) // 2)
+            lp_row   = rows // 2 - 2
+            def bp(r, text, bold=0):
+                screen_output(lp_row + r, lp_col, text.center(box_w), 2, bold)
+            bp(0, '+' + '-' * (box_w - 2) + '+', 1)
+            bp(1, '|' + lp_line1.center(box_w - 2) + '|', 1)
+            bp(2, '|' + lp_line2.center(box_w - 2) + '|', 0)
+            bp(3, '|' + lp_line3.center(box_w - 2) + '|', 1)
+            bp(4, '+' + '-' * (box_w - 2) + '+', 1)
+
+        screen.refresh()
         run_counter += 1
 # THX – Wanna patch my brain? Drop your tweaks here: https://github.com/ewaldj/eping — you know how 😉
