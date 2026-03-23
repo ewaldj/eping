@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.29'
+version = '1.30'
 
 import os
 import re
@@ -753,7 +753,7 @@ if __name__=='__main__':
             else:
                 hosts_count_down += 1
 
-        # --- wait + key polling ---
+        # --- wait + key polling (keys are processed at the top of the main loop) ---
         if run_counter >= 2:
             time2 = datetime.datetime.now()
             time3 = time2 - time1
@@ -762,14 +762,9 @@ if __name__=='__main__':
             while time.time() < deadline:
                 time.sleep(0.1)
                 k = screen.getch()
-                if k in (ord('u'), ord('U')):
-                    up_now = [h for h in original_hosts_list if h in host_state and 'UP' in host_state[h][1]]
-                    if up_now:
-                        active_hosts_list = up_now
-                        screen.clear()
-                elif k in (ord('a'), ord('A')):
-                    active_hosts_list = list(original_hosts_list)
-                    screen.clear()
+                if k != -1:
+                    curses.ungetch(k)
+                    break
 
         time2    = datetime.datetime.now()
         run_time = format(float((time2 - time1).total_seconds()), ".2f")
