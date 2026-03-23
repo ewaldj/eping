@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.27'
+version = '1.29'
 
 import os
 import re
@@ -169,9 +169,13 @@ def fping_cmd(summary_hosts_list,lock):
     global fping_cmd_output_raw_total
     global backoff
     global timeout
+    global retries
+    global interval
     fping_cmd_output_raw =[]
     data=[]
-    cmd = ['fping', '-4', '-e', '-B', backoff, '-t', timeout]
+    cmd = ['fping', '-4', '-e', '-B', backoff, '-t', timeout, '-r', retries]
+    if interval:
+        cmd.extend(['-i', interval])
     cmd.extend(summary_hosts_list)
     try:
         ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, universal_newlines=True)
@@ -349,11 +353,13 @@ if __name__=='__main__':
     parser.add_argument('-r4', '--network_range4', default='', nargs = '*' ,dest='network_range4', help='ip range e.g. 8.8.8.8 8.8.8.8')
     parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5)" )
     parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms)") 
+    parser.add_argument('-re', '--retries', default='3', dest='retries', help="number of retries per host (default: 3)")
+    parser.add_argument('-i', '--interval', default='', dest='interval', help="interval between sending pings in ms (default: fping default 10ms, LAN: 2, WAN: 5)")
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
-    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="parallel threads (default: auto-scaled by host count, max 120)" )
+    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="parallel threads (default: auto-scaled max 50, manual max 120)" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
     parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )   
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
@@ -362,6 +368,8 @@ if __name__=='__main__':
     args = parser.parse_args()
     backoff = args.backoff
     timeout = args.timeout 
+    retries = args.retries
+    interval = args.interval
 
     # check online current version
     if not args.disable_versioncheck: 
@@ -422,7 +430,7 @@ if __name__=='__main__':
     except ValueError:
             error_handler("ERROR: -tz: must be between -24 and 24")
 
-    # threads 1 to 120 check / auto-scaling
+    # threads 1 to 120 check / auto-scaling (auto max 50)
     if args.num_of_threads == 'auto':
         _threads_auto = True
     else:
@@ -440,6 +448,23 @@ if __name__=='__main__':
             error_handler("ERROR: -w must be between 0 and 3600 e.g 0.2 ")
     except ValueError:
         error_handler("ERROR: -w must be between 0 and 3600 e.g 0.2 ")
+
+    # retries 0 to 5 check
+    try:
+        r = int(args.retries)
+        if r < 0 or r > 5:
+            error_handler("ERROR: -re: must be between 0 and 5")
+    except ValueError:
+        error_handler("ERROR: -re: must be between 0 and 5")
+
+    # interval check (ms) - if set, must be 1-100
+    if args.interval:
+        try:
+            iv = int(args.interval)
+            if iv < 1 or iv > 100:
+                error_handler("ERROR: -i: must be between 1 and 100 (ms)")
+        except ValueError:
+            error_handler("ERROR: -i: must be between 1 and 100 (ms)")
 
     # create sample file if not exists and no special file is given 
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
@@ -469,10 +494,10 @@ if __name__=='__main__':
     if not summary_hosts_list: 
         error_handler('ERROR: There is nothing to do for me ')
 
-    # auto-scale thread count based on number of hosts
+    # auto-scale thread count based on number of hosts (linear: 1 thread per 100 hosts)
     if _threads_auto:
         num_hosts = len(summary_hosts_list)
-        auto_threads = max(3, min(120, int(math.ceil(math.log2(max(num_hosts, 2)) * 1.5))))
+        auto_threads = max(3, min(50, int(math.ceil(num_hosts / 100.0))))
         args.num_of_threads = str(auto_threads)
     
     run_counter = 1
