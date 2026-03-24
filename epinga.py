@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.27'
+version = '1.28'
 
 import re
 import os
@@ -551,7 +551,7 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .hdr {{ background: var(--bg2); border-bottom: 1px solid var(--border);
         padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
 .hdr-left {{ display: flex; flex-direction: column; }}
-.hdr h1 {{ font-size: 18px; color: #e6edf3; letter-spacing: .5px; }}
+.hdr h1 {{ font-size: 18px; color: var(--text); letter-spacing: .5px; }}
 .hdr .meta {{ color: var(--dim); font-size: 11px; margin-top: 4px; }}
 
 /* ── stat cards ── */
@@ -595,7 +595,7 @@ tbody tr.expanded {{ background: var(--bg2); }}
 tbody tr.detail-row {{ cursor: default; background: var(--bg3); }}
 tbody tr.detail-row:hover {{ background: var(--bg3); }}
 td {{ padding: 7px 12px; white-space: nowrap; }}
-td.host {{ font-weight: 600; color: #e6edf3; }}
+td.host {{ font-weight: 600; color: var(--text); }}
 
 /* state badge */
 .badge {{
