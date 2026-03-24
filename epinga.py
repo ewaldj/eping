@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.26'
+version = '1.27'
 
 import re
 import os
@@ -530,6 +530,18 @@ def generate_html(data, out_path):
   --cyan:    #58a6ff;
   --font:    'Fira Code','Cascadia Code','Consolas',monospace;
 }}
+:root.light {{
+  --bg:      #f6f8fa;
+  --bg2:     #ffffff;
+  --bg3:     #eaeef2;
+  --border:  #d0d7de;
+  --text:    #1f2328;
+  --dim:     #656d76;
+  --green:   #1a7f37;
+  --red:     #d1242f;
+  --orange:  #9a6700;
+  --cyan:    #0969da;
+}}
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{ background: var(--bg); color: var(--text); font-family: var(--font);
        font-size: 13px; line-height: 1.5; }}
@@ -537,7 +549,8 @@ a {{ color: var(--cyan); text-decoration: none; }}
 
 /* ── header ── */
 .hdr {{ background: var(--bg2); border-bottom: 1px solid var(--border);
-        padding: 16px 24px; }}
+        padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
+.hdr-left {{ display: flex; flex-direction: column; }}
 .hdr h1 {{ font-size: 18px; color: #e6edf3; letter-spacing: .5px; }}
 .hdr .meta {{ color: var(--dim); font-size: 11px; margin-top: 4px; }}
 
@@ -589,13 +602,13 @@ td.host {{ font-weight: 600; color: #e6edf3; }}
   display: inline-block; width: 72px; padding: 2px 0; border-radius: 12px;
   font-size: 11px; font-weight: 700; letter-spacing: .4px;
   text-align: center; }}
-.badge.UP      {{ background: #1a3a1a; color: var(--green);  border: 1px solid var(--green); }}
-.badge.DOWN    {{ background: #3a1a1a; color: var(--red);    border: 1px solid var(--red); }}
-.badge.NO-DNS  {{ background: #3a1a1a; color: var(--red);    border: 1px solid var(--red); }}
-.badge.FLAPPING{{ background: #2d2510; color: var(--orange); border: 1px solid var(--orange); }}
+.badge.UP      {{ background: rgba(63,185,80,.12);  color: var(--green);  border: 1px solid var(--green); }}
+.badge.DOWN    {{ background: rgba(248,81,73,.12);  color: var(--red);    border: 1px solid var(--red); }}
+.badge.NO-DNS  {{ background: rgba(248,81,73,.12);  color: var(--red);    border: 1px solid var(--red); }}
+.badge.FLAPPING{{ background: rgba(210,153,34,.12); color: var(--orange); border: 1px solid var(--orange); }}
 
 /* uptime bar */
-.bar-wrap {{ width: 120px; height: 8px; background: #3a1a1a;
+.bar-wrap {{ width: 120px; height: 8px; background: rgba(248,81,73,.2);
              border-radius: 4px; overflow: hidden; display: inline-block;
              vertical-align: middle; margin-right: 6px; }}
 .bar-fill {{ display: block; height: 100%; border-radius: 4px; }}
@@ -634,11 +647,19 @@ tr.hidden {{ display: none; }}
 .tag {{
   padding: 2px 10px; border-radius: 4px; font-size: 12px;
   border: 1px solid; cursor: default; }}
-.tag.up    {{ background:#1a3a1a; color:var(--green);  border-color:var(--green); }}
-.tag.flap  {{ background:#2d2510; color:var(--orange); border-color:var(--orange); }}
-.tag.down  {{ background:#3a1a1a; color:var(--red);    border-color:var(--red); }}
-.tag.nodns {{ background:#3a1a1a; color:var(--red);    border-color:var(--red); }}
+.tag.up    {{ background:rgba(63,185,80,.1);  color:var(--green);  border-color:var(--green); }}
+.tag.flap  {{ background:rgba(210,153,34,.1); color:var(--orange); border-color:var(--orange); }}
+.tag.down  {{ background:rgba(248,81,73,.1);  color:var(--red);    border-color:var(--red); }}
+.tag.nodns {{ background:rgba(248,81,73,.1);  color:var(--red);    border-color:var(--red); }}
 .tag.flap .chg {{ font-size:10px; opacity:.7; }}
+
+/* ── theme toggle ── */
+.theme-btn {{
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-family: var(--font); font-size: 12px;
+  padding: 5px 12px; cursor: pointer; transition: background .15s;
+  white-space: nowrap; flex-shrink: 0; }}
+.theme-btn:hover {{ background: var(--border); }}
 
 /* ── footer ── */
 footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
@@ -648,13 +669,16 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 <body>
 
 <div class="hdr">
-  <h1>epinga2 &nbsp;·&nbsp; Analysis Report</h1>
-  <div class="meta">
-    File: <strong>{data['filename']}</strong> &nbsp;|&nbsp;
-    Generated: {data['generated']} &nbsp;|&nbsp;
-    {data['rows_read']:,} rows &nbsp;|&nbsp;
-    {n_total} hosts
+  <div class="hdr-left">
+    <h1>epinga2 &nbsp;·&nbsp; Analysis Report</h1>
+    <div class="meta">
+      File: <strong>{data['filename']}</strong> &nbsp;|&nbsp;
+      Generated: {data['generated']} &nbsp;|&nbsp;
+      {data['rows_read']:,} rows &nbsp;|&nbsp;
+      {n_total} hosts
+    </div>
   </div>
+  <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">☀ Light</button>
 </div>
 
 <div class="cards">
@@ -713,6 +737,22 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 
 <script>
 const RAW = {json_data};
+
+// ── theme ──────────────────────────────────────────────────────────────────
+(function() {{
+  const saved = localStorage.getItem('epinga-theme');
+  if (saved === 'light') document.documentElement.classList.add('light');
+}})();
+function toggleTheme() {{
+  const isLight = document.documentElement.classList.toggle('light');
+  localStorage.setItem('epinga-theme', isLight ? 'light' : 'dark');
+  document.getElementById('themeBtn').textContent = isLight ? '🌙 Dark' : '☀ Light';
+}}
+// set button label on load
+document.addEventListener('DOMContentLoaded', function() {{
+  const isLight = document.documentElement.classList.contains('light');
+  document.getElementById('themeBtn').textContent = isLight ? '🌙 Dark' : '☀ Light';
+}});
 
 let currentSort = null;
 let sortAsc = true;
