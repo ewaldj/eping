@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.30'
+version = '1.31'
 
 import os
 import re
@@ -635,6 +635,8 @@ if __name__=='__main__':
                 cmd = 'UP_ONLY'
             elif k in (ord('a'), ord('A')):
                 cmd = 'ADD'
+            elif k in (ord('r'), ord('R')):
+                cmd = 'SCREENREFRESH'
             elif k in (ord('e'), ord('E')):
                 cmd = 'EXIT'
         if cmd == 'UP_ONLY':
@@ -653,6 +655,8 @@ if __name__=='__main__':
                     active_hosts_list.append(h)
                 if h not in original_hosts_list:
                     original_hosts_list.append(h)
+        elif cmd == 'SCREENREFRESH':
+            screen.refresh()
         elif cmd == 'EXIT':
             curses.endwin()
             print('THX for using eping.py ')
@@ -871,7 +875,8 @@ if __name__=='__main__':
         else:
             screen_output(rows - 2, 2,  ' [U]=UP-ONLY ', 1, 0)
         screen_output(rows - 2, 15, ' [A]=ADD HOST  ', 1, 0)
-        screen_output(rows - 2, 29, ' [E]=EXIT ', 1, 0)
+        screen_output(rows - 2, 48, ' [E]=EXIT ', 1, 0)
+        screen_output(rows - 2, 29, ' [R]=SCREEN REFRESH', 1, 0)
 
         # learning phase: centered green box overlay
         if not learning_phase:
