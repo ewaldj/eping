@@ -656,7 +656,7 @@ if __name__=='__main__':
                 if h not in original_hosts_list:
                     original_hosts_list.append(h)
         elif cmd == 'SCREENREFRESH':
-            screen.refresh()
+            screen.clear()
         elif cmd == 'EXIT':
             curses.endwin()
             print('THX for using eping.py ')
