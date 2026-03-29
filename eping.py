@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.31'
+version = '1.32'
 
 import os
 import re
@@ -15,8 +15,7 @@ import sys
 import csv
 import glob
 import math
-import time 
-import curses
+import time
 import signal
 import shutil
 import argparse
@@ -25,17 +24,21 @@ import subprocess
 import threading
 import datetime
 import resource
-#checkversion online 
+
+# terminal fix for serial console (e.g. vt220 has no color support)
+if os.environ.get('TERM') in ('vt220', 'vt100', 'vt102', None):
+    os.environ['TERM'] = 'xterm-256color'
+
+import curses
+
+#checkversion online
 try:
     import urllib.request
     import socket
-except:
+except Exception:
     urllib = None
     socket = None
 
-import resource
-
-import curses
 
 def curses_supports_curs_set():
     def _inner(stdscr):
@@ -281,7 +284,10 @@ def screen_output(line,coll,text,color,attr_val):
     if attr_val == 2:
         attr ^= curses.A_BOLD + curses.A_BLINK
 
-    attr ^= curses.color_pair(color)
+    try:
+        attr ^= curses.color_pair(color)
+    except curses.error:
+        pass  # no color support – use default attribute
     try:
         screen.addstr(line,coll,text,attr)
     except:
@@ -323,8 +329,7 @@ if __name__=='__main__':
     if curses_supports_curs_set():
         curses.curs_set(0)
     else:
-        # fallback: do nothing or log
-        error_handler('ERROR: curs_set() is not supported by this terminal. Some terminal types (e.g. vt100) do not allow changing cursor visibility' )
+        pass  # fallback: vt220/serial terminals may not support curs_set – continue anyway
 
 
     default_hostfile = 'eping-hosts.txt'
@@ -504,14 +509,20 @@ if __name__=='__main__':
     
     # stdscr = curses.initscr()
     screen = curses.initscr()
-    # disable Curser 
-    curses.curs_set(0)
-    # enable Color 
-    curses.start_color()
-    # defing color pairs 
-    curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLACK)
-    curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
-    curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
+    # disable Cursor
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass  # terminal does not support curs_set
+    # enable Color
+    try:
+        curses.start_color()
+        if curses.has_colors() and curses.COLORS > 1:
+            curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLACK)
+            curses.init_pair(2, curses.COLOR_GREEN, curses.COLOR_BLACK)
+            curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
+    except curses.error:
+        pass  # terminal has no color support – running without colors
     
     signal.signal(signal.SIGINT, sigint_handler)
 
@@ -656,7 +667,7 @@ if __name__=='__main__':
                 if h not in original_hosts_list:
                     original_hosts_list.append(h)
         elif cmd == 'SCREENREFRESH':
-            screen.clear()
+            screen.refresh()
         elif cmd == 'EXIT':
             curses.endwin()
             print('THX for using eping.py ')
