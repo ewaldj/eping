@@ -1,6 +1,6 @@
 # eping.py 
 
-## Install eping.py epinga.py esplit.py 
+## Installation / Update -  eping.py epinga.py esplit.py 
 ```
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"
 ```
