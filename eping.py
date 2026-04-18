@@ -7,7 +7,19 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-version = '1.31'
+VERSION = '1.33'
+version = VERSION  # legacy alias (kept for existing references)
+
+# --- scaling limits ---
+MAX_TOTAL_HOSTS    = 512000   # hard cap on combined host list
+MAX_IPS_PER_RANGE  = 524288   # -r/-r1..4 range size cap
+CIDR_MIN_MASK      = 13       # /13 ~= 524288 addresses
+CIDR_MAX_MASK      = 32
+THREADS_AUTO_MAX   = 32
+THREADS_MANUAL_MAX = 256
+THREADS_PER_HOSTS  = 2000     # auto-scale: 1 thread per N hosts
+FD_TARGET          = 65536    # desired soft RLIMIT_NOFILE
+FPING_STDIN_THRESH = 5000     # feed targets via stdin above this count (avoids ARG_MAX)
 
 import os
 import re
@@ -46,14 +58,16 @@ def curses_supports_curs_set():
             return False
     return curses.wrapper(_inner)
 
-def set_half_of_hard_limit():
+def raise_fd_limit(target=FD_TARGET):
+    # Raise soft RLIMIT_NOFILE up to min(target, hard). Hard stays untouched.
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        half = max(1, hard // 2)
-        # set soft limit to the half of the systm
-        resource.setrlimit(resource.RLIMIT_NOFILE, (half, hard))
-    except Exception as e:
-        raise TypeError('ERROR: Unable to set RLIMIT_NOFILE. The requested file descriptor limit exceeds the permitted range.')
+        new_soft = min(target, hard) if hard != resource.RLIM_INFINITY else target
+        if new_soft > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+    except Exception:
+        # non-fatal: keep running with current soft limit
+        pass
 
    
 def check_version_online(url: str, tool_name: str, timeout: float = 2.0):
@@ -85,32 +99,30 @@ def match_re(word,name_re):
         return m.group(0)
         
 def get_ipv4_from_range(first_ip, last_ip, max_ip):
-    # Return IPs in IPv4 range (check valid ip's and that first_ip is <= last_ip) 
-        if match_re(first_ip, ip_re) and match_re(last_ip, ip_re): 
-            start_ip_int = int(ipaddress.ip_address(first_ip).packed.hex(), 16)
-            end_ip_int = int(ipaddress.ip_address(last_ip).packed.hex(), 16)+1
-            if not (end_ip_int-start_ip_int > max_ip):
-                if start_ip_int < end_ip_int: 
-                    return [ipaddress.ip_address(ip).exploded for ip in range(start_ip_int, end_ip_int)]
-                else:
-                    raise TypeError('ERROR: The start IP must be less than or equal to the end IP. ')
-            else:
-                raise TypeError('ERROR: Maximum IP Limit reached < ' + str(max_ip) )
-        else:
-            raise TypeError('ERROR: One of the values is not a valid IPv4 address: ' + first_ip + ', ' + last_ip)
+    # Expand an IPv4 range [first_ip, last_ip] inclusive. Returns list of strings.
+    if not (match_re(first_ip, ip_re) and match_re(last_ip, ip_re)):
+        raise TypeError('ERROR: One of the values is not a valid IPv4 address: ' + first_ip + ', ' + last_ip)
+    start = int(ipaddress.IPv4Address(first_ip))
+    end   = int(ipaddress.IPv4Address(last_ip))
+    if start > end:
+        raise TypeError('ERROR: The start IP must be less than or equal to the end IP. ')
+    count = end - start + 1
+    if count > max_ip:
+        raise TypeError('ERROR: Maximum IP Limit reached < ' + str(max_ip))
+    # str(IPv4Address(int)) is fast and avoids per-element regex
+    return [str(ipaddress.IPv4Address(i)) for i in range(start, end + 1)]
 
 def get_ipv4_from_cidr(cidr, min_mask, max_mask):
-    ips=[]
-    if match_re(cidr, cidr_ipv4_re):
-        network, net_bits = cidr.split('/')
-        if int(net_bits) >= min_mask and int(net_bits) <= max_mask:
-            for ip in ipaddress.IPv4Network(cidr, False):
-                ips.append(str(ip)) 
-            return (ips)
-        else:
-           raise TypeError('ERROR: Mask value not in range - minimum mask value: /' + str(min_mask) ) 
-    else: 
+    # Expand CIDR to list of all addresses (incl. network/broadcast, matches original behavior).
+    if not match_re(cidr, cidr_ipv4_re):
         raise TypeError('ERROR: Not a valid CIDR value (e.g., 192.168.66.66/28)')
+    net_bits = int(cidr.split('/')[1])
+    if net_bits < min_mask or net_bits > max_mask:
+        raise TypeError('ERROR: Mask value not in range - allowed: /' + str(min_mask) + '../' + str(max_mask))
+    net   = ipaddress.IPv4Network(cidr, strict=False)
+    start = int(net.network_address)
+    size  = net.num_addresses
+    return [str(ipaddress.IPv4Address(start + i)) for i in range(size)]
 
 def get_ipv4_from_file(filename):
     ips=[]
@@ -159,81 +171,95 @@ def create_file_if_not_exists(filename,data):
             raise TypeError('ERROR: Unable to create file: ' + default_hostfile )
 
 def split_seq(seq, num_pieces):
+    # Split seq into num_pieces contiguous chunks. O(n) total.
+    n = len(seq)
+    if num_pieces <= 0:
+        num_pieces = 1
+    base, rem = divmod(n, num_pieces)
     start = 0
     for i in range(num_pieces):
-        stop = start + len(seq[i::num_pieces])
+        stop = start + base + (1 if i < rem else 0)
         yield seq[start:stop]
         start = stop
 
-def fping_cmd(summary_hosts_list,lock):
+def fping_cmd(summary_hosts_list, lock):
+    # Run fping on a subset of hosts and append parsed results to the global list.
     global fping_cmd_output_raw_total
     global backoff
     global timeout
     global retries
     global interval
-    fping_cmd_output_raw =[]
-    data=[]
+
+    if not summary_hosts_list:
+        return
+
     cmd = ['fping', '-4', '-e', '-B', backoff, '-t', timeout, '-r', retries]
     if interval:
         cmd.extend(['-i', interval])
-    cmd.extend(summary_hosts_list)
+
+    use_stdin = len(summary_hosts_list) > FPING_STDIN_THRESH
+    if not use_stdin:
+        cmd.extend(summary_hosts_list)
+
     try:
-        ping = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, universal_newlines=True)
+        ping = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,          # merge: simpler + avoids deadlock
+            stdin=(subprocess.PIPE if use_stdin else subprocess.DEVNULL),
+            universal_newlines=True,
+            bufsize=1,
+        )
     except FileNotFoundError:
-        error_handler ("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
+        error_handler("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
-    while ping.stdout.readable() or ping.stderr.readable:
-        sline = ping.stdout.readline()
-        eline = ping.stderr.readline()
-        if not sline and not eline:
-            break
-        s1 = (str(sline))
-        e1 = (str(eline))
-        timestamp=get_date_time()
-        if (s1): fping_cmd_output_raw.append(timestamp + ' ' + s1)
-        if (e1): fping_cmd_output_raw.append(timestamp + ' ' + e1)
+    # Feed targets via stdin for large batches (avoids ARG_MAX). Close stdin so fping starts pinging.
+    if use_stdin:
+        try:
+            ping.stdin.write('\n'.join(summary_hosts_list) + '\n')
+            ping.stdin.close()
+        except BrokenPipeError:
+            pass
 
-    num_of_hosts = 0
-    fping_result_data =[]
+    fping_cmd_output_raw = []
+    for line in ping.stdout:
+        if not line:
+            continue
+        fping_cmd_output_raw.append(get_date_time() + ' ' + line)
+    ping.wait()
+
+    fping_result_data = []
     for o in fping_cmd_output_raw:
-        o = re.sub('\\s{2,}', ' ', o)
-        out = o.split(" ")
-        data =[]
-        no_of_changes = 0 
-        add_data = False 
-        try: 
-            if ('unreachable' in out[4]):
-                timestamp= out[0] + ' ' + out[1]
-                hostname=out[2]
-                rtt = '----'
-                state = ' DOWN'
-                add_data = True 
-            elif(out[4] == 'alive'):
-                timestamp= out[0] + ' ' + out[1]
-                hostname=out[2]
-                rtt = (out[5].replace('(', ''))
-                rtt = format(float(rtt), ".2f")
-                state = '  UP'
-                add_data = True 
-            elif((out[3] == 'nodename' and out[4] == 'nor') or (out[3] == 'Name' and out[4] == 'or')):
-                timestamp= out[0] + ' ' + out[1]
-                hostname = (out[2].replace(':', ''))
-                rtt = '----'
-                state = 'NO-DNS'
-                add_data = True
-######### detect multiple reply - not stable !! 
-#            elif(out[4]) == 'duplicate':
-#                for index, sublist in enumerate(fping_result_data):
-#                    if sublist[0] == out[2]:
-#                       fping_result_data[index][7] = fping_result_data[index][7] + 1
-#                       fping_result_data[index][1] = ' UP-MR'
-########## detect multiple reply - not stable !! 
-        except:pass
+        o = re.sub(r'\s{2,}', ' ', o)
+        out = o.split(' ')
+        add_data = False
+        no_of_changes = 0
+        try:
+            if 'unreachable' in out[4]:
+                timestamp = out[0] + ' ' + out[1]
+                hostname  = out[2]
+                rtt       = '----'
+                state     = ' DOWN'
+                add_data  = True
+            elif out[4] == 'alive':
+                timestamp = out[0] + ' ' + out[1]
+                hostname  = out[2]
+                rtt       = out[5].replace('(', '')
+                rtt       = format(float(rtt), ".2f")
+                state     = '  UP'
+                add_data  = True
+            elif (out[3] == 'nodename' and out[4] == 'nor') or (out[3] == 'Name' and out[4] == 'or'):
+                timestamp = out[0] + ' ' + out[1]
+                hostname  = out[2].replace(':', '')
+                rtt       = '----'
+                state     = 'NO-DNS'
+                add_data  = True
+        except IndexError:
+            pass
 
         if add_data:
-            data = [hostname,state,timestamp,rtt,'',no_of_changes,'',0]
-            fping_result_data.append(data)
-            num_of_hosts +=1
+            fping_result_data.append([hostname, state, timestamp, rtt, '', no_of_changes, '', 0])
+
     with lock:
         fping_cmd_output_raw_total.extend(fping_result_data)
 
@@ -242,19 +268,30 @@ def get_date_time():
     now = datetime.datetime.now()
     return now.strftime("%d/%m/%Y %H:%M:%S")
 
+_ip_int_cache = {}
+def _ip_sort_key(h):
+    # Memoized IPv4 -> int for sort keys. Non-IP hostnames cached as None.
+    v = _ip_int_cache.get(h)
+    if v is None and h not in _ip_int_cache:
+        try:
+            v = int(ipaddress.IPv4Address(h))
+        except (ipaddress.AddressValueError, ValueError):
+            v = None
+        _ip_int_cache[h] = v
+    return v
+
 def sort_fping_result_data(fping_result_data):
-    fping_result_ip=[]
-    fping_result_fqdn=[]
-    for o in fping_result_data:
-        if match_re(o[0], ip_re):
-            data=([o[0]] + [o[1]] + [o[2]] + [o[3]] + [o[4]] + [o[5]] + [o[6]] + [o[7]])
-            fping_result_ip.append(data)
-        elif match_re(o[0], fqdn_re):
-            data=([o[0]] + [o[1]] + [o[2]] + [o[3]] + [o[4]] + [o[5]] + [o[6]] + [o[7]])
-            fping_result_fqdn.append(data)
-    sorted_fping_result_ip = sorted(fping_result_ip, key=lambda x: int(ipaddress.ip_address(x[0])))
-    sorted_fping_result_fqdn = sorted(fping_result_fqdn, key=lambda x: x[0])
-    return (sorted_fping_result_ip + sorted_fping_result_fqdn)
+    # Partition into IPv4 vs FQDN in one pass, then sort each bucket.
+    ip_rows   = []
+    fqdn_rows = []
+    for row in fping_result_data:
+        if _ip_sort_key(row[0]) is not None:
+            ip_rows.append(row)
+        else:
+            fqdn_rows.append(row)
+    ip_rows.sort(key=lambda r: _ip_sort_key(r[0]))
+    fqdn_rows.sort(key=lambda r: r[0])
+    return ip_rows + fqdn_rows
 
 def check_python_version(mrv):
     current_version = sys.version_info
@@ -329,8 +366,8 @@ if __name__=='__main__':
 
     default_hostfile = 'eping-hosts.txt'
     min_required_version = (3,6)
-    # SET HALF OF ULIMIT OF THE SYSTEM 
-    set_half_of_hard_limit()
+    # raise soft FD limit for large host counts
+    raise_fd_limit()
 
     if not check_python_version(min_required_version):
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
@@ -341,11 +378,11 @@ if __name__=='__main__':
     # adding optional argument
     parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
-    parser.add_argument('-n', '--network', default='', dest='network_cidr', help='network e.g. 172.17.17.0/24  minimum lenght is /19'  )
-    parser.add_argument('-n1', '--network1', default='', dest='network_cidr1', help='network e.g. 10.0.0.0/30  minimum lenght is /19'  )
-    parser.add_argument('-n2', '--network2', default='', dest='network_cidr2', help='network e.g. 192.168.100/25  minimum lenght is /19'  )
-    parser.add_argument('-n3', '--network3', default='', dest='network_cidr3', help='network e.g. 10.10.0.0/22  minimum lenght is /19'  )
-    parser.add_argument('-n4', '--network4', default='', dest='network_cidr4', help='network e.g. 10.180.0.0/21  minimum lenght is /19'  )
+    parser.add_argument('-n', '--network', default='', dest='network_cidr', help='network e.g. 172.17.17.0/24  minimum mask: /' + str(CIDR_MIN_MASK) )
+    parser.add_argument('-n1', '--network1', default='', dest='network_cidr1', help='network e.g. 10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
+    parser.add_argument('-n2', '--network2', default='', dest='network_cidr2', help='network e.g. 192.168.100/25  minimum mask: /' + str(CIDR_MIN_MASK) )
+    parser.add_argument('-n3', '--network3', default='', dest='network_cidr3', help='network e.g. 10.10.0.0/22  minimum mask: /' + str(CIDR_MIN_MASK) )
+    parser.add_argument('-n4', '--network4', default='', dest='network_cidr4', help='network e.g. 10.180.0.0/21  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', nargs = '*' ,dest='network_range', help='ip range e.g. 10.180.0.0 10.180.3.255')
     parser.add_argument('-r1', '--network_range1', default='', nargs = '*' ,dest='network_range1', help='ip range e.g. 172.17.1.1 172.17.1.20')
     parser.add_argument('-r2', '--network_range2', default='', nargs = '*' ,dest='network_range2', help='ip range e.g. 192.168.1.1 192.168.1.60')
@@ -359,7 +396,7 @@ if __name__=='__main__':
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
-    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="parallel threads (default: auto-scaled max 50, manual max 120)" )
+    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="parallel threads (default: auto-scaled max " + str(THREADS_AUTO_MAX) + ", manual max " + str(THREADS_MANUAL_MAX) + ")" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
     parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )   
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
@@ -403,7 +440,7 @@ if __name__=='__main__':
     for network_range in range_args:
         if network_range:
             try:
-                hosts_list_ipv4.extend(get_ipv4_from_range(network_range[0], network_range[1], 32768))
+                hosts_list_ipv4.extend(get_ipv4_from_range(network_range[0], network_range[1], MAX_IPS_PER_RANGE))
             except Exception as e:
                 error_handler(f"Range error: {e}")
     
@@ -418,7 +455,7 @@ if __name__=='__main__':
     for cidr in cidr_args:
         if cidr:
             try:
-                hosts_list_ipv4.extend(get_ipv4_from_cidr(cidr, 19, 32))
+                hosts_list_ipv4.extend(get_ipv4_from_cidr(cidr, CIDR_MIN_MASK, CIDR_MAX_MASK))
             except Exception as e:
                 error_handler(f"CIDR error: {e}")
 
@@ -430,17 +467,17 @@ if __name__=='__main__':
     except ValueError:
             error_handler("ERROR: -tz: must be between -24 and 24")
 
-    # threads 1 to 120 check / auto-scaling (auto max 50)
+    # threads 1..THREADS_MANUAL_MAX / auto-scaling (auto capped at THREADS_AUTO_MAX)
     if args.num_of_threads == 'auto':
         _threads_auto = True
     else:
         _threads_auto = False
         try:
             threads = int(args.num_of_threads)
-            if threads < 1 or threads > 120:
-                error_handler("ERROR: -p: must be between 1 and 120" )
+            if threads < 1 or threads > THREADS_MANUAL_MAX:
+                error_handler("ERROR: -p: must be between 1 and " + str(THREADS_MANUAL_MAX))
         except ValueError:
-                error_handler("ERROR: -p: must be between 1 and 120" )
+                error_handler("ERROR: -p: must be between 1 and " + str(THREADS_MANUAL_MAX))
     # waittime 
     try:
         wait_time = float(args.waittime)
@@ -489,15 +526,20 @@ if __name__=='__main__':
     summary_hosts_list =[]
     summary_hosts_list.extend(hosts_list_ipv4) 
     summary_hosts_list.extend(hosts_list_fqdn)
-    
+
+    # hard cap on total host count
+    if len(summary_hosts_list) > MAX_TOTAL_HOSTS:
+        error_handler('ERROR: Host count ' + str(len(summary_hosts_list)) +
+                      ' exceeds maximum of ' + str(MAX_TOTAL_HOSTS))
+
     #if no host with the given option exists - exit  
     if not summary_hosts_list: 
         error_handler('ERROR: There is nothing to do for me ')
 
-    # auto-scale thread count based on number of hosts (linear: 1 thread per 100 hosts)
+    # auto-scale thread count based on number of hosts
     if _threads_auto:
         num_hosts = len(summary_hosts_list)
-        auto_threads = max(3, min(50, int(math.ceil(num_hosts / 100.0))))
+        auto_threads = max(3, min(THREADS_AUTO_MAX, int(math.ceil(num_hosts / float(THREADS_PER_HOSTS)))))
         args.num_of_threads = str(auto_threads)
     
     run_counter = 1
@@ -622,6 +664,9 @@ if __name__=='__main__':
     # non-blocking keyboard input - main thread only, no separate thread
     screen.nodelay(True)
 
+    # precompute values used in hot loop
+    tz_offset = int(args.time_zone_adjust)
+
     run_counter = 1
     while True:
 
@@ -724,15 +769,16 @@ if __name__=='__main__':
                 changes   = 0
                 change_ts = ''
 
-            # timezone adjust
+            # timestamp must become a datetime object so CSV serializes as YYYY-MM-DD HH:MM:SS
             try:
                 ts_tmp = datetime.datetime.strptime(timestamp, "%d/%m/%Y %H:%M:%S")
-                timestamp = ts_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
+                timestamp = ts_tmp + datetime.timedelta(hours=tz_offset) if tz_offset else ts_tmp
             except: pass
-            try:
-                ct_tmp = datetime.datetime.strptime(change_ts, "%d/%m/%Y %H:%M:%S")
-                change_ts = ct_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
-            except: pass
+            if change_ts:
+                try:
+                    ct_tmp = datetime.datetime.strptime(change_ts, "%d/%m/%Y %H:%M:%S")
+                    change_ts = ct_tmp + datetime.timedelta(hours=tz_offset) if tz_offset else ct_tmp
+                except: pass
 
             host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd]
 
