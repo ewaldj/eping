@@ -1,4 +1,4 @@
-# eping.py 1.51
+# eping.py 1.52
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -14,14 +14,22 @@ Written by Ewald Jeitler — <https://www.jeitler.guru>
 
 `--check-source` is used automatically if the installed fping supports it (5.0+).
 
+## Installation / Update
+
+Installs and updates `eping.py`, `epinga.py` and `esplit.py`:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"
+```
+
 ## Quick start
 
 ```sh
-./eping-1.51.py                             # CLI, uses/creates eping-hosts.txt
-./eping-1.51.py -n 172.17.16.0/20           # scan a network
-./eping-1.51.py -web                        # web GUI on http://<host>:8080
-./eping-1.51.py -web -port 9000 -bind 127.0.0.1   # different port, local only
-./eping-1.51.py -wv                         # CLI plus a read-only web view
+./eping-1.52.py                             # CLI, uses/creates eping-hosts.txt
+./eping-1.52.py -n 172.17.16.0/20           # scan a network
+./eping-1.52.py -web                        # web GUI on http://<host>:8080
+./eping-1.52.py -web -port 9000 -bind 127.0.0.1   # different port, local only
+./eping-1.52.py -wv                         # CLI plus a read-only web view
 ```
 
 Without arguments a sample `eping-hosts.txt` is created. Starting with no hosts at all
