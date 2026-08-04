@@ -1,4 +1,4 @@
-# eping.py 1.52
+# eping.py 1.53
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -25,11 +25,11 @@ Installs and updates `eping.py`, `epinga.py` and `esplit.py`:
 ## Quick start
 
 ```sh
-./eping-1.52.py                             # CLI, uses/creates eping-hosts.txt
-./eping-1.52.py -n 172.17.16.0/20           # scan a network
-./eping-1.52.py -web                        # web GUI on http://<host>:8080
-./eping-1.52.py -web -port 9000 -bind 127.0.0.1   # different port, local only
-./eping-1.52.py -wv                         # CLI plus a read-only web view
+./eping-1.53.py                             # CLI, uses/creates eping-hosts.txt
+./eping-1.53.py -n 172.17.16.0/20           # scan a network
+./eping-1.53.py -web                        # web GUI on http://<host>:8080
+./eping-1.53.py -web -port 9000 -bind 127.0.0.1   # different port, local only
+./eping-1.53.py -wv                         # CLI plus a read-only web view
 ```
 
 Without arguments a sample `eping-hosts.txt` is created. Starting with no hosts at all
@@ -62,9 +62,10 @@ www.google.com            # hostname or FQDN
 8.8.8.8, 9.9.9.9; 1.1.1.1 # comma and semicolon separate like blanks
 ```
 
-Networks use the same mask range as `-n` (/13 … /32). A network outside that range is
-rejected: `-f` prints a warning and ignores it, ADD FILE and the web upload report it.
-Anything that matches none of the forms is silently ignored.
+Networks use the same mask range as `-n` (/13 … /32) everywhere — host file, ADD FILE,
+web upload and the ADD HOST / DEL HOST input. A network outside that range is rejected
+with a message naming the allowed range; `-f` prints a warning and ignores it. Anything
+that matches none of the forms is silently ignored.
 
 ## CLI mode
 
@@ -77,9 +78,9 @@ in ms, timestamp of the last state change, number of changes.
 |---|---|
 | `U` | cycle the view: ALL HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS |
 | `O` | cycle the sort order (see *Views and sort orders*) |
-| `A` | add host — IP, hostname, CIDR or `ip1-ip2` |
+| `A` | add host — IP, hostname, CIDR (/13 … /32) or `ip1-ip2` (max 524288 addresses) |
 | `F` | add hosts from a file |
-| `D` | delete host — same input formats as add |
+| `D` | delete host — same input formats and limits as add |
 | `S` | set reference — the list currently shown becomes the new base list |
 | `Z` | zero changes — reset CH-TIME and CH NO for every host, states are kept |
 | `C` | clear all hosts and their state |

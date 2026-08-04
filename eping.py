@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.52'
+VERSION = '1.53'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -731,25 +731,37 @@ def remove_hosts_from(targets, active_list, original_list, host_state):
         host_state.pop(h, None)
     return removed
 
-def parse_host_input(value):
-    """Parse a user supplied string (IP, FQDN, CIDR or 'ip1-ip2') into a host list."""
+def parse_host_input(value, stats=None):
+    """Parse a user supplied string (IP, FQDN, CIDR or 'ip1-ip2') into a host list.
+
+    Uses the same limits as -n and the host file (CIDR_MIN_MASK..CIDR_MAX_MASK,
+    MAX_IPS_PER_RANGE). Pass a dict as 'stats' to get the reason for an empty result
+    in stats['error'] instead of guessing that the input was malformed.
+    """
     value = (value or '').strip()
+    if stats is not None:
+        stats['error'] = ''
     if not value:
         return []
     new_hosts = []
     # CIDR?
     if match_re(value, cidr_ipv4_re):
         try:
-            new_hosts = get_ipv4_from_cidr(value, 19, 32)
+            new_hosts = get_ipv4_from_cidr(value, CIDR_MIN_MASK, CIDR_MAX_MASK)
         except Exception:
-            pass
+            if stats is not None:
+                stats['error'] = ('mask must be /%d../%d: %s'
+                                  % (CIDR_MIN_MASK, CIDR_MAX_MASK, value))
     # IP range  e.g. "10.0.0.1-10.0.0.20"
     elif '-' in value and value.count('-') == 1:
         parts = value.split('-')
         try:
-            new_hosts = get_ipv4_from_range(parts[0].strip(), parts[1].strip(), 32768)
+            new_hosts = get_ipv4_from_range(parts[0].strip(), parts[1].strip(),
+                                            MAX_IPS_PER_RANGE)
         except Exception:
-            pass
+            if stats is not None:
+                stats['error'] = ('bad range, or more than %d addresses: %s'
+                                  % (MAX_IPS_PER_RANGE, value))
     # single IP
     elif match_re(value, ip_re):
         new_hosts = [value]
@@ -1656,16 +1668,18 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     sort_mode = 0
                 message = 'sort: ' + SORT_MODES[sort_mode][0]
             elif cmd == 'add':
-                new_hosts = parse_host_input(value)
+                add_stats = {}
+                new_hosts = parse_host_input(value, add_stats)
                 if not new_hosts:
-                    message = 'invalid host: ' + value
+                    message = add_stats.get('error') or ('invalid host: ' + value)
                 else:
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     message = err if err else 'added ' + str(added) + ' host(s)'
             elif cmd == 'del':
-                del_hosts = parse_host_input(value)
+                del_stats = {}
+                del_hosts = parse_host_input(value, del_stats)
                 if not del_hosts:
-                    message = 'invalid host: ' + value
+                    message = del_stats.get('error') or ('invalid host: ' + value)
                 else:
                     removed = remove_hosts_from(del_hosts, active_hosts_list,
                                                 original_hosts_list, host_state)
@@ -2553,11 +2567,14 @@ if __name__=='__main__':
             sort_mode = (sort_mode + 1) % len(SORT_MODES)
             screen.clear()
         elif cmd == 'ADD':
-            value     = input_dialog(' ADD HOSTS ', ' Enter IP, hostname, CIDR or ip1-ip2:')
+            value     = input_dialog(' ADD HOSTS ',
+                                     ' IP, hostname, CIDR /%d../%d or ip1-ip2:'
+                                     % (CIDR_MIN_MASK, CIDR_MAX_MASK))
             if value:
-                new_hosts = parse_host_input(value)
+                add_stats = {}
+                new_hosts = parse_host_input(value, add_stats)
                 if not new_hosts:
-                    notice('INVALID HOST: ' + value, 3)
+                    notice((add_stats.get('error') or ('invalid host: ' + value)).upper(), 3)
                 else:
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     if err:
@@ -2575,11 +2592,14 @@ if __name__=='__main__':
                     else:
                         notice('ADDED ' + str(added) + ' NEW HOST(S) OF ' + str(len(new_hosts)) + ' FOUND', 2)
         elif cmd == 'DEL':
-            value = input_dialog(' DELETE HOSTS ', ' Enter IP, hostname, CIDR or ip1-ip2:')
+            value = input_dialog(' DELETE HOSTS ',
+                                 ' IP, hostname, CIDR /%d../%d or ip1-ip2:'
+                                 % (CIDR_MIN_MASK, CIDR_MAX_MASK))
             if value:
-                del_hosts = parse_host_input(value)
+                del_stats = {}
+                del_hosts = parse_host_input(value, del_stats)
                 if not del_hosts:
-                    notice('INVALID HOST: ' + value, 3)
+                    notice((del_stats.get('error') or ('invalid host: ' + value)).upper(), 3)
                 else:
                     removed = remove_hosts_from(del_hosts, active_hosts_list,
                                                 original_hosts_list, host_state)
