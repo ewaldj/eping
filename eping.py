@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.53'
+VERSION = '1.60'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -37,6 +37,7 @@ INTERVAL_MAX_MS    = 100      # upper bound for -i (fping accepts more, we stay 
 DNS_CACHE_TTL      = 300      # seconds a resolved hostname stays valid (0 = no caching)
 DNS_FAIL_TTL       = 30       # negative cache: retry unresolvable names sooner
 DNS_RESOLVERS      = 16       # parallel name lookups
+DNS_PTR_TIMEOUT    = 3.0      # seconds per reverse-DNS lookup for [G] GET NAMES
 
 # --- retry classes ---
 # Retries exist so that an UP host is not wrongly reported DOWN. A host that is already
@@ -293,6 +294,95 @@ def forget_names(names):
         for n in names:
             _dns_cache.pop(n, None)
 
+def _reverse_lookup_one(ip):
+    try:
+        name = socket.gethostbyaddr(ip)[0].rstrip('.')
+        return name or None
+    except Exception:
+        return None
+
+def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS):
+    """Reverse-DNS a batch of IPs in parallel. Returns {ip: hostname_or_None}.
+
+    socket.gethostbyaddr() has no per-call timeout, so the process-wide default is
+    set for the duration of this batch and restored afterwards. The CLI/web loop is
+    single-threaded around this call (called from cmd handling, before the next ping
+    round starts), so there is no other thread relying on a different timeout while
+    this runs."""
+    if not ip_list:
+        return {}
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(timeout)
+    results = {}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(1, min(workers, len(ip_list)))) as pool:
+            futs = {pool.submit(_reverse_lookup_one, ip): ip for ip in ip_list}
+            for fut in concurrent.futures.as_completed(futs):
+                results[futs[fut]] = fut.result()
+    finally:
+        socket.setdefaulttimeout(old_timeout)
+    return results
+
+def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
+                    down_streak, dns_ttl):
+    """[G] GET NAMES: reverse-DNS every raw-IP host that has no hostname counterpart
+    yet, and rename it in place (host_state, both host lists, up_seen, down_streak) so
+    history/uptime survive - a rename, not a delete+re-add. Returns a status message.
+
+    Skipped: IPs already covered by a hostname entry, IPs with no (usable) PTR record,
+    and PTR names that collide with a host already in the list or with another PTR
+    result from this same batch."""
+    covered_ips = set()
+    for h in original_hosts_list:
+        if not match_re(h, ip_re):
+            ip = resolve_name(h, dns_ttl)
+            if ip:
+                covered_ips.add(ip)
+
+    candidates = [h for h in original_hosts_list
+                 if match_re(h, ip_re) and h not in covered_ips]
+    if not candidates:
+        return 'get names: no eligible IP host(s)'
+
+    ptr = get_names_for_ips(candidates)
+
+    existing   = set(h.lower() for h in original_hosts_list)
+    used_names = set()
+    renamed_n, unresolved, collisions = 0, 0, 0
+    for ip in candidates:
+        name = ptr.get(ip)
+        if not name or not match_re(name, fqdn_re):
+            unresolved += 1
+            continue
+        key = name.lower()
+        if key in existing or key in used_names:
+            collisions += 1
+            continue
+        used_names.add(key)
+        for lst in (original_hosts_list, active_hosts_list):
+            for i, h in enumerate(lst):
+                if h == ip:
+                    lst[i] = name
+        if ip in host_state:
+            entry    = host_state.pop(ip)
+            entry[0] = name
+            host_state[name] = entry
+        if ip in up_seen:
+            up_seen.discard(ip)
+            up_seen.add(name)
+        if ip in down_streak:
+            down_streak[name] = down_streak.pop(ip)
+        forget_names([name])   # force a fresh forward lookup for the new identity
+        renamed_n += 1
+
+    parts = [str(renamed_n) + ' renamed']
+    if unresolved:
+        parts.append(str(unresolved) + ' no PTR')
+    if collisions:
+        parts.append(str(collisions) + ' name collision')
+    return 'get names: ' + ', '.join(parts)
+
 def prepare_targets(hosts, ttl):
     """Map the host list to what is actually handed to fping.
 
@@ -487,7 +577,9 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
             pass
 
         if add_data:
-            fping_result_data.append([hostname, state, timestamp, rtt, '', no_of_changes, '', 0])
+            # slot 4 carries the pinged IP - overwritten with the display name later
+            # in run_ping_round(), so we stash it here before that happens
+            fping_result_data.append([hostname, state, timestamp, rtt, hostname, no_of_changes, '', 0])
 
     with lock:
         fping_cmd_output_raw_total.extend(fping_result_data)
@@ -580,6 +672,19 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
         elif mode == 2 and host_is_flapping(entry, now_ref, flap_window):
             out.append(h)
     return out
+
+def apply_prefer_hostname(hosts_list, dns_ttl):
+    """[P] toggle: drop raw-IP entries whose address is also covered by a hostname
+    entry in the same list. The hostname gets pinged anyway, so pinging the bare IP a
+    second time is redundant - a raw IP with no hostname counterpart is kept as-is."""
+    hostname_ips = set()
+    for h in hosts_list:
+        if not match_re(h, ip_re):
+            ip = resolve_name(h, dns_ttl)
+            if ip:
+                hostname_ips.add(ip)
+    return [h for h in hosts_list
+            if not (match_re(h, ip_re) and h in hostname_ips)]
 
 def check_python_version(mrv):
     current_version = sys.version_info
@@ -789,6 +894,7 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
         new_state = entry[1]
         timestamp = entry[2]
         rtt       = entry[3]
+        resolved_ip = entry[4]
         tbd       = entry[7]
 
         # --- flap damping (UP -> not UP only) ---
@@ -830,7 +936,7 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
                 change_ts = ct_tmp + datetime.timedelta(hours=tz_offset) if tz_offset else ct_tmp
             except: pass
 
-        host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd]
+        host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd, resolved_ip]
 
         # learning phase tracking
         if not learning_done and 'UP' in new_state:
@@ -838,7 +944,7 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
 
         # logging
         if logging_enabled and learning_phase:
-            logdata = ([timestamp] + [hostname] + [old_state.replace(" ", "")] + [new_state.replace(" ", "")] + [rtt] + [changes] + [change_ts] + [tbd])
+            logdata = ([timestamp] + [hostname] + [old_state.replace(" ", "")] + [new_state.replace(" ", "")] + [rtt] + [changes] + [change_ts] + [tbd] + [resolved_ip])
             with open(logfile_file_name, 'a', encoding='UTF8') as f:
                 writer = csv.writer(f)
                 writer.writerow(logdata)
@@ -993,6 +1099,7 @@ web_state = {
     'logfile'          : '',
     'filter_mode'      : 0,
     'filter_label'     : FILTER_MODES[0][0],
+    'prefer_hostname'  : False,
     'sort_mode'        : 0,
     'readonly'         : False,
     'learning_phase'   : True,
@@ -1095,6 +1202,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   <div class="bar">
    <span id="ctrls">
     <button id="btnUp" title="cycle: ALL HOSTS / UP-ONLY / UP+FLAPPING">ALL HOSTS</button>
+    <button id="btnPreferHost" title="skip a raw IP host when the same address is already covered by a hostname">PREFER HOSTNAMES</button>
+    <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
     <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
       <option value="0">sort: ADDRESS</option>
       <option value="1">sort: UP/FLAP/DOWN</option>
@@ -1177,6 +1286,8 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
 var PENDING = {up_only:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
                del:'removing host(s) ...', set_ref:'setting reference ...',
                clear:'clearing all hosts ...', zero:'resetting change counters ...',
+               prefer_hostname:'toggling prefer hostnames ...',
+               get_names:'resolving names ...',
                exit:'stopping eping ...'};
 var pending = false, lastServerMsg = null;
 
@@ -1192,6 +1303,8 @@ function post(cmd, value){
     body: JSON.stringify({cmd:cmd, value:value||''})}).then(function(r){return r.json();});
 }
 document.getElementById('btnUp').onclick   = function(){ post('up_only'); };
+document.getElementById('btnPreferHost').onclick = function(){ post('prefer_hostname'); };
+document.getElementById('btnGetNames').onclick = function(){ post('get_names'); };
 document.getElementById('sortSel').onchange = function(){
   sortKey = null;                       // server order wins again after a mode change
   post('sort', this.value);
@@ -1422,6 +1535,8 @@ function poll(){
     var bu = document.getElementById('btnUp');
     bu.textContent = s.filter_label || 'ALL HOSTS';
     bu.className   = s.filter_mode ? 'on' : '';
+    var bp = document.getElementById('btnPreferHost');
+    bp.className   = s.prefer_hostname ? 'on' : '';
     var ss = document.getElementById('sortSel');
     if(document.activeElement !== ss) ss.value = String(s.sort_mode || 0);
     ss.className = s.sort_mode ? 'on' : '';
@@ -1539,7 +1654,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit'):
+        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'get_names'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -1588,7 +1703,7 @@ def web_rows(display_list):
 def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
-                scan_info='', sort_mode=0):
+                scan_info='', sort_mode=0, prefer_hostname=False):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
     with web_lock:
@@ -1604,6 +1719,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'logfile'         : logfile_file_name if logging_enabled else '',
             'filter_mode'     : filter_mode,
             'filter_label'    : FILTER_MODES[filter_mode][0],
+            'prefer_hostname' : prefer_hostname,
             'sort_mode'       : sort_mode,
             'learning_phase'  : learning_phase,
             'learning_run'    : learning_run,
@@ -1638,12 +1754,20 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     tz_offset         = int(args.time_zone_adjust)
     active_hosts_list = list(original_hosts_list)
     filter_mode       = 0
+    prefer_hostname   = bool(args.prefer_hostname)
     sort_mode         = 0
     down_streak       = {}
     learning_done     = (up_check_runs == 0)
     up_seen           = set()
     run_counter       = 1
     message           = ''
+
+    # -gn / -ph: applied once, before the first ping round
+    if args.get_names:
+        apply_get_names(original_hosts_list, active_hosts_list, host_state,
+                        up_seen, down_streak, int(args.dns_ttl))
+    if prefer_hostname:
+        active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
 
     while True:
         # --- commands coming from the browser ---
@@ -1657,10 +1781,21 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                          tz_offset, flap_window)
                 if next_list or next_mode == 0:
                     filter_mode       = next_mode
-                    active_hosts_list = next_list
+                    active_hosts_list = (apply_prefer_hostname(next_list, int(args.dns_ttl))
+                                         if prefer_hostname else next_list)
                     message = 'view: ' + FILTER_MODES[filter_mode][0]
                 else:
                     message = 'no hosts match ' + FILTER_MODES[next_mode][0]
+            elif cmd == 'prefer_hostname':
+                prefer_hostname = not prefer_hostname
+                base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
+                                         tz_offset, flap_window)
+                active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
+                                     if prefer_hostname else base_list)
+                message = 'prefer hostnames: ' + ('on' if prefer_hostname else 'off')
+            elif cmd == 'get_names':
+                message = apply_get_names(original_hosts_list, active_hosts_list, host_state,
+                                          up_seen, down_streak, int(args.dns_ttl))
             elif cmd == 'sort':
                 try:
                     sort_mode = int(value) % len(SORT_MODES)
@@ -1748,6 +1883,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['hosts_down']   = len(quick) - quick_up
                 web_state['filter_mode']  = filter_mode
                 web_state['filter_label'] = FILTER_MODES[filter_mode][0]
+                web_state['prefer_hostname'] = prefer_hostname
                 web_state['sort_mode']    = sort_mode
 
         # --- learning phase ---
@@ -1758,6 +1894,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 learning_done = True
                 active_hosts_list = sorted(up_seen, key=lambda h: (
                     int(ipaddress.ip_address(h)) if match_re(h, ip_re) else float('inf')))
+                if prefer_hostname:
+                    active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                 learning_phase = True
         else:
             learning_phase = True
@@ -1826,7 +1964,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     filter_mode,
                     learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available,
-                    tz_offset, message, scan_info, sort_mode)
+                    tz_offset, message, scan_info, sort_mode, prefer_hostname)
 
         run_counter += 1
 
@@ -1875,6 +2013,8 @@ if __name__=='__main__':
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
+    parser.add_argument('-ph', '--prefer_hostname', action="store_true", dest='prefer_hostname', help="start with PREFER HOSTNAMES active - skip a raw IP host when the same address is already covered by a hostname entry (toggle later with [P] / the web button)")
+    parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
     parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN (default: " + str(DOWN_RETRIES_DEF) + ", -1 = treat them like every other host)")
     parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per retry group plus dns/state/build/wait/draw")
     parser.add_argument('-fw', '--flap_window', default=str(FLAP_WINDOW_DEF), dest='flap_window', help="minutes since the last state change for a host to count as flapping (default: " + str(FLAP_WINDOW_DEF) + ")")
@@ -2122,7 +2262,7 @@ if __name__=='__main__':
         logfile_file_name = args.logfile
 
     if args.disable_logging:
-        header = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT','NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD']
+        header = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT','NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP']
         try:
             with open(logfile_file_name, 'w', encoding='UTF8') as f:
                 writer = csv.writer(f)
@@ -2130,7 +2270,7 @@ if __name__=='__main__':
         except:
             error_handler('ERROR: failed to create logfile: ' + logfile_file_name )
 
-    # --- state dict: hostname -> [hostname, state, timestamp, rtt, prev_state, changes, change_ts, tbd]
+    # --- state dict: hostname -> [hostname, state, timestamp, rtt, prev_state, changes, change_ts, tbd, resolved_ip]
     host_state = {}
 
     # =================================================================
@@ -2273,6 +2413,7 @@ if __name__=='__main__':
     # progress callback shows a 'please wait' box instead of an empty screen
     have_data      = False
     filter_mode    = 0
+    prefer_hostname = bool(args.prefer_hostname)
     sort_mode      = 0
     display_list   = []
     hosts_count_up = 0
@@ -2282,6 +2423,14 @@ if __name__=='__main__':
     used_scan      = ''
     learning_phase = True
     update_available_cli = bool(remote_version) and (remote_version > version)
+
+    # -gn / -ph: applied once, before the first ping round - by then original/active
+    # host list, host_state, up_seen and down_streak all exist in this scope
+    if args.get_names:
+        apply_get_names(original_hosts_list, active_hosts_list, host_state,
+                        up_seen, down_streak, int(args.dns_ttl))
+    if prefer_hostname:
+        active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
 
     # --web_view: read only browser view next to the terminal. The curses loop stays the
     # only driver - one process, one scan, two ways to look at it. Two separate eping
@@ -2299,7 +2448,7 @@ if __name__=='__main__':
         web_publish(display_list, run_counter, run_time, hosts_count_up, hosts_count_down,
                     filter_mode, learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available_cli,
-                    tz_offset, msg, used_scan, sort_mode)
+                    tz_offset, msg, used_scan, sort_mode, prefer_hostname)
 
 
     def rebuild_display():
@@ -2418,22 +2567,23 @@ if __name__=='__main__':
         # show the view and the order that are active right now.
         fm = FILTER_MODES[filter_mode]
         sm = SORT_MODES[sort_mode]
-        keys_full  = [' [U]=' + fm[0] + ' ', ' [A]=ADD HOST ', ' [F]=ADD FILE ', ' [D]=DEL HOST ',
+        keys_full  = [' [U]=' + fm[0] + ' ', ' [P]=PREFER HOST ', ' [G]=GET NAMES ', ' [A]=ADD HOST ', ' [F]=ADD FILE ', ' [D]=DEL HOST ',
                       ' [S]=SET REFERENCE ', ' [O]=SORT ' + sm[0] + ' ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [R]=SCREEN REFRESH ', ' [E]=EXIT ']
-        keys_short = [' [U]=' + fm[1] + ' ', ' [A]=ADD ', ' [F]=FILE ', ' [D]=DEL ',
+        keys_short = [' [U]=' + fm[1] + ' ', ' [P]=PREFER ', ' [G]=NAMES ', ' [A]=ADD ', ' [F]=FILE ', ' [D]=DEL ',
                       ' [S]=SET REF ', ' [O]=' + sm[1] + ' ', ' [Z]=ZERO ',
                       ' [C]=CLEAR ', ' [R]=REFRESH ', ' [E]=EXIT ']
-        keys_tiny  = [' [U]' + fm[2] + ' ', ' [A]ADD ', ' [F]FILE ', ' [D]DEL ',
+        keys_tiny  = [' [U]' + fm[2] + ' ', ' [P]PREF ', ' [G]NAME ', ' [A]ADD ', ' [F]FILE ', ' [D]DEL ',
                       ' [S]REF ', ' [O]' + sm[1] + ' ', ' [Z]ZERO ',
                       ' [C]CLR ', ' [R]RFR ', ' [E]EXIT ']
-        keys_micro = [' U ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' E ']
+        keys_micro = [' U ', ' P ', ' G ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
         key_col = 2
         for idx, label in enumerate(keys):
-            highlight = (idx == 0 and filter_mode != 0) or (idx == 5 and sort_mode != 0)
+            highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and prefer_hostname)
+                        or (idx == 7 and sort_mode != 0))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)
             key_col += len(label)
 
@@ -2533,6 +2683,10 @@ if __name__=='__main__':
                 cmd = 'ZERO'
             elif k in (ord('o'), ord('O')):
                 cmd = 'ORDER'
+            elif k in (ord('p'), ord('P')):
+                cmd = 'PREFER_HOSTNAME'
+            elif k in (ord('g'), ord('G')):
+                cmd = 'GET_NAMES'
             elif k in (ord('c'), ord('C')):
                 cmd = 'CLEAR'
             elif k in (ord('r'), ord('R')):
@@ -2559,10 +2713,22 @@ if __name__=='__main__':
                                      tz_offset, flap_window)
             if next_list or next_mode == 0:
                 filter_mode       = next_mode
-                active_hosts_list = next_list
+                active_hosts_list = (apply_prefer_hostname(next_list, int(args.dns_ttl))
+                                     if prefer_hostname else next_list)
                 screen.clear()
             else:
                 notice('NO HOSTS MATCH ' + FILTER_MODES[next_mode][0], 3)
+        elif cmd == 'PREFER_HOSTNAME':
+            prefer_hostname = not prefer_hostname
+            base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
+                                     tz_offset, flap_window)
+            active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
+                                 if prefer_hostname else base_list)
+            notice('PREFER HOSTNAME: ' + ('ON' if prefer_hostname else 'OFF'), 2)
+        elif cmd == 'GET_NAMES':
+            gn_msg = apply_get_names(original_hosts_list, active_hosts_list, host_state,
+                                     up_seen, down_streak, int(args.dns_ttl))
+            notice(gn_msg.upper(), 2)
         elif cmd == 'ORDER':
             sort_mode = (sort_mode + 1) % len(SORT_MODES)
             screen.clear()
@@ -2644,6 +2810,8 @@ if __name__=='__main__':
                 active_hosts_list = sorted(up_seen, key=lambda h: (
                     int(ipaddress.ip_address(h)) if match_re(h, ip_re) else float('inf')
                 ))
+                if prefer_hostname:
+                    active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                 screen.clear()
                 filter_mode = 1        # the learning phase leaves an UP-only view
                 learning_phase = True

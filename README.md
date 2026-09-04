@@ -1,4 +1,4 @@
-# eping.py 1.53
+# eping.py 1.60
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -25,11 +25,11 @@ Installs and updates `eping.py`, `epinga.py` and `esplit.py`:
 ## Quick start
 
 ```sh
-./eping-1.53.py                             # CLI, uses/creates eping-hosts.txt
-./eping-1.53.py -n 172.17.16.0/20           # scan a network
-./eping-1.53.py -web                        # web GUI on http://<host>:8080
-./eping-1.53.py -web -port 9000 -bind 127.0.0.1   # different port, local only
-./eping-1.53.py -wv                         # CLI plus a read-only web view
+./eping-1.60.py                             # CLI, uses/creates eping-hosts.txt
+./eping-1.60.py -n 172.17.16.0/20           # scan a network
+./eping-1.60.py -web                        # web GUI on http://<host>:8080
+./eping-1.60.py -web -port 9000 -bind 127.0.0.1   # different port, local only
+./eping-1.60.py -wv                         # CLI plus a read-only web view
 ```
 
 Without arguments a sample `eping-hosts.txt` is created. Starting with no hosts at all
@@ -77,6 +77,8 @@ in ms, timestamp of the last state change, number of changes.
 | Key | Action |
 |---|---|
 | `U` | cycle the view: ALL HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS |
+| `P` | toggle prefer hostnames — skip a raw IP host when the same address is already covered by a hostname entry (also shrinks what gets pinged) |
+| `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found (history/uptime carry over; one-shot, not a toggle) |
 | `O` | cycle the sort order (see *Views and sort orders*) |
 | `A` | add host — IP, hostname, CIDR (/13 … /32) or `ip1-ip2` (max 524288 addresses) |
 | `F` | add hosts from a file |
@@ -126,9 +128,10 @@ Serves a single self-contained page; no external resources are loaded.
 - Font size 6–28 px via slider, the `A−`/`A+` buttons or the `+`/`−` keys; stored in
   `localStorage`.
 - Column headers sort the whole list (IPv4-aware).
-- Buttons: view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), ADD HOST, DEL HOST,
-  UPLOAD FILE, SET REFERENCE, ZERO CHANGES, CLEAR ALL, EXIT, plus a sort order select.
-  Both work exactly as the `U` and `O` keys in the CLI.
+- Buttons: view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), PREFER HOSTNAMES,
+  GET NAMES, ADD HOST, DEL HOST, UPLOAD FILE, SET REFERENCE, ZERO CHANGES, CLEAR ALL,
+  EXIT, plus a sort order select. All work exactly as the matching CLI keys
+  (`U`, `P`, `G`, `O`).
   The text field feeds both ADD and DEL — type a value and press the matching button;
   ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **No letter shortcuts.** Only `+` and `−` are bound (font size), and only without
@@ -244,6 +247,8 @@ sends one hard burst.
 | `-i` | auto | fixed send interval in ms, overrides `-ra`; `0` = unpaced |
 | `-p` | auto | fping processes per group (auto = 1, max 32) |
 | `-dns` | 300 | hostname cache TTL in seconds (`0` = off) |
+| `-ph` | off | start with PREFER HOSTNAMES active (see `P` key) |
+| `-gn` | off | run GET NAMES once before the first ping round (see `G` key) |
 | `-fw` | 10 | minutes since the last state change for a host to count as flapping |
 | `-ncs` | off | do not pass `--check-source` to fping |
 | `-w` | 0.5 | pause between rounds in seconds |
@@ -269,13 +274,28 @@ Unless `-dl` is given, every round appends to `eping-log_YYYY-MM-DD_HH:MM:SS.csv
 (or `-o FILE`):
 
 ```
-TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTAMP,TBD
+TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTAMP,TBD,IP
 ```
 
-`TBD` holds the number of currently suppressed DOWN observations (see `-cf`).
+`TBD` holds the number of currently suppressed DOWN observations (see `-cf`). `IP` is
+the address actually pinged for that row — the same as `HOSTNAME` for a raw-IP host, or
+the resolved address for a hostname entry (empty for `NO-DNS`).
 
 `ZERO CHANGES` / `Z` resets `NO_OF_CHANGES` and `CHANGE_TIMESTAMP` for all hosts in the
 running instance; the log file keeps everything already written.
+
+`PREFER HOSTNAMES` / `P` (`-ph` to start with it on) drops a raw-IP host from what gets
+pinged as soon as another entry in the list is a hostname resolving to that same
+address — the hostname is already being probed, so the bare IP would just be a
+duplicate. A raw IP with no hostname counterpart is always kept. Toggling back off
+restores the full list.
+
+`GET NAMES` / `G` (`-gn` to run it once at startup) reverse-DNS resolves every raw-IP
+host that has no hostname counterpart and, if a PTR record is found, renames it to that
+hostname in place — `NO_OF_CHANGES`, uptime and the change history all carry over,
+nothing is reset. A host is left as an IP when it has no PTR record, or when the
+resolved name collides with a host already in the list. Unlike `PREFER HOSTNAMES` this
+is a one-shot action, not a toggle: hosts added afterwards need `G` again.
 
 ## Diagnostics (`-dg`)
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# epinga2.py by ewald@jeitler.cc 2024 https://www.jeitler.guru
+# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.guru
 # Large-file-capable analyser for eping.py CSV logfiles
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.28'
+version = '1.60'
 
 import re
 import os
@@ -44,7 +44,7 @@ def header_line(title, ch='─'):
 
 # ── signal / error helpers ────────────────────────────────────────────────────
 def sigint_handler(sig, frame):
-    print(f'\n{col("Interrupted.", CORANGE)}  epinga2.py v{version}  – www.jeitler.guru\n')
+    print(f'\n{col("Interrupted.", CORANGE)}  epinga.py v{version}  – www.jeitler.guru\n')
     sys.exit(0)
 
 def die(msg):
@@ -148,9 +148,9 @@ class HostStats:
     __slots__ = ('first_ts', 'last_ts', 'current_state', 'prev_ts',
                  'rtt_min', 'rtt_max', 'rtt_sum', 'rtt_cnt',
                  'time_up', 'time_down', 'time_nodns',
-                 'changes', 'no_of_changes')
+                 'changes', 'no_of_changes', 'ip')
 
-    def __init__(self, ts, state):
+    def __init__(self, ts, state, ip=''):
         self.first_ts      = ts
         self.last_ts       = ts
         self.prev_ts       = ts
@@ -164,9 +164,10 @@ class HostStats:
         self.time_nodns    = datetime.timedelta(0)
         self.changes       = []          # [(ts, prev_state, new_state)]
         self.no_of_changes = 0
+        self.ip             = ip or ''   # last known pinged IP (from the CSV's IP column)
 
     # ── feed one CSV row ──────────────────────────────────────────────────────
-    def feed(self, ts, prev_state, cur_state, rtt_raw, no_of_changes_raw):
+    def feed(self, ts, prev_state, cur_state, rtt_raw, no_of_changes_raw, ip_raw=''):
         # RTT
         try:
             rtt = float(rtt_raw)
@@ -191,6 +192,9 @@ class HostStats:
             self.no_of_changes = int(no_of_changes_raw)
         except (ValueError, TypeError):
             pass
+
+        if ip_raw:
+            self.ip = ip_raw
 
     def _add_time(self, state, delta):
         if state == 'UP':
@@ -227,6 +231,14 @@ class HostStats:
         if span <= 0:
             return 0.0
         return round(self.time_up.total_seconds() * 100 / span, 2)
+
+    @property
+    def real_changes(self):
+        # Actual UP/DOWN/NO-DNS transitions observed in this log, derived from
+        # PREVIOUS_STATE/CURRENT_STATE per row. Independent of the device-side
+        # NO_OF_CHANGES counter, which eping.py's 'zero' command can reset
+        # mid-log, making the raw counter unreliable for classification.
+        return len(self.changes)
 
 
 # ── stream-parse the CSV ──────────────────────────────────────────────────────
@@ -276,12 +288,13 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
             cur_state  = row['CURRENT_STATE']
             rtt_raw    = row['RTT']
             noc        = row['NO_OF_CHANGES']
+            ip_raw     = row.get('IP', '')   # absent on older logfiles - fine, defaults to ''
 
             if hostname not in hosts:
-                hosts[hostname] = HostStats(ts, cur_state)
+                hosts[hostname] = HostStats(ts, cur_state, ip_raw)
                 host_order.append(hostname)
             else:
-                hosts[hostname].feed(ts, prev_state, cur_state, rtt_raw, noc)
+                hosts[hostname].feed(ts, prev_state, cur_state, rtt_raw, noc, ip_raw)
 
             if progress and rows_read % 5000 == 0:
                 progress.update(tracker.bytes_read)
@@ -345,7 +358,7 @@ def print_host(hostname, s, show_changes):
           f'  span: {fmt_td(s.total_span)}')
 
     final_state = s.current_state
-    print(f'  State changes: {s.no_of_changes}'
+    print(f'  State changes: {s.real_changes}'
           f'  │  Final state: {state_col(final_state)}'
           f'  │  Log: {s.first_ts.strftime(TS_FMT) if s.first_ts else "?"}'
           f' → {s.last_ts.strftime(TS_FMT)  if s.last_ts  else "?"}')
@@ -380,7 +393,7 @@ def print_summary(hosts, host_order, sort_by='name'):
     always_up, always_down, always_nodns, flapping = [], [], [], []
     for h in host_order:
         s = hosts[h]
-        if s.no_of_changes == 0:
+        if s.real_changes == 0:
             if   s.current_state == 'UP':     always_up.append(h)
             elif s.current_state == 'DOWN':   always_down.append(h)
             elif s.current_state == 'NO-DNS': always_nodns.append(h)
@@ -389,7 +402,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
     # ── sort host_order for the detail table ──────────────────────────────────
     if sort_by == 'flapping':
-        ordered = sorted(host_order, key=lambda h: hosts[h].no_of_changes, reverse=True)
+        ordered = sorted(host_order, key=lambda h: hosts[h].real_changes, reverse=True)
     elif sort_by == 'uptime':
         ordered = sorted(host_order, key=lambda h: hosts[h].uptime_pct)
     elif sort_by == 'rtt':
@@ -422,7 +435,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
         # category separator when sorting by flapping
         if sort_by == 'flapping':
-            cat = 'flap' if s.no_of_changes > 0 else s.current_state
+            cat = 'flap' if s.real_changes > 0 else s.current_state
             if cat != prev_cat:
                 if prev_cat is not None:
                     hr('·')
@@ -433,8 +446,8 @@ def print_summary(hosts, host_order, sort_by='name'):
         min_rtt    = f'{s.rtt_min} ms' if s.has_rtt else '-'
         avg_rtt    = f'{s.rtt_avg} ms' if s.has_rtt else '-'
         max_rtt    = f'{s.rtt_max} ms' if s.has_rtt else '-'
-        noc        = str(s.no_of_changes)
-        noc_col    = CORANGE if s.no_of_changes > 0 else CDIM
+        noc        = str(s.real_changes)
+        noc_col    = CORANGE if s.real_changes > 0 else CDIM
 
         line = (f'  {h:<{col_h}} {state_col(s.current_state):^{col_st}}'
                 f' {col(f"{up_pct:6.1f} %", pct_colour)}'
@@ -456,7 +469,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
     bucket('Always UP   ', CGREEN,  always_up)
     bucket('Flapping    ', CORANGE, flapping,
-           sort_fn=lambda l: sorted(l, key=lambda h: hosts[h].no_of_changes, reverse=True))
+           sort_fn=lambda l: sorted(l, key=lambda h: hosts[h].real_changes, reverse=True))
     bucket('Always DOWN ', CRED,    always_down)
     bucket('No DNS      ', CRED,    always_nodns)
     hr()
@@ -478,7 +491,8 @@ def build_report_data(hosts, host_order, filename, rows_read):
             'rtt_max':       round(s.rtt_max, 2) if s.has_rtt else None,
             'rtt_avg':       s.rtt_avg           if s.has_rtt else None,
             'rtt_cnt':       s.rtt_cnt,
-            'changes':       s.no_of_changes,
+            'changes':       s.real_changes,
+            'ip':            s.ip,
             'time_up':       fmt_td(s.time_up),
             'time_down':     fmt_td(s.time_down + s.time_nodns),
             'span':          fmt_td(s.total_span),
@@ -515,7 +529,7 @@ def generate_html(data, out_path):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>epinga2 – {data['filename']}</title>
+<title>epinga – {data['filename']}</title>
 <style>
 :root {{
   --bg:      #0d1117;
@@ -568,13 +582,16 @@ a {{ color: var(--cyan); text-decoration: none; }}
 /* ── toolbar ── */
 .toolbar {{ display: flex; gap: 10px; padding: 0 24px 12px; flex-wrap: wrap;
             align-items: center; }}
-.toolbar input, .toolbar select {{
+.toolbar input, .toolbar select, .toolbar button {{
   background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
   color: var(--text); font-family: var(--font); font-size: 12px;
   padding: 6px 10px; outline: none; }}
 .toolbar input {{ width: 260px; }}
 .toolbar input:focus, .toolbar select:focus {{ border-color: var(--cyan); }}
 .toolbar label {{ color: var(--dim); font-size: 12px; }}
+.toolbar button {{ cursor: pointer; }}
+.toolbar button:hover {{ border-color: var(--cyan); }}
+.toolbar button.active {{ background: var(--orange); border-color: var(--orange); color: var(--bg); font-weight: 600; }}
 
 /* ── table ── */
 .tbl-wrap {{ padding: 0 24px 24px; overflow-x: auto; }}
@@ -670,12 +687,13 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 
 <div class="hdr">
   <div class="hdr-left">
-    <h1>epinga2 &nbsp;·&nbsp; Analysis Report</h1>
+    <h1>epinga &nbsp;·&nbsp; Analysis Report</h1>
     <div class="meta">
       File: <strong>{data['filename']}</strong> &nbsp;|&nbsp;
       Generated: {data['generated']} &nbsp;|&nbsp;
       {data['rows_read']:,} rows &nbsp;|&nbsp;
-      {n_total} hosts
+      {n_total} hosts &nbsp;|&nbsp;
+      <span id="shownHosts">{n_total} shown</span>
     </div>
   </div>
   <button class="theme-btn" onclick="toggleTheme()" id="themeBtn">☀ Light</button>
@@ -708,6 +726,8 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
     <option value="rtt_avg">Avg RTT</option>
     <option value="changes">Changes</option>
   </select>
+  <button id="btnHideIpHosts" onclick="toggleHideIpHosts()"
+          title="Hide IP-named hosts that are also monitored under a hostname">Prefer hostnames</button>
 </div>
 
 <div class="tbl-wrap">
@@ -731,12 +751,19 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 <div class="buckets" id="buckets"></div>
 
 <footer>
-  epinga2.py v{version} &nbsp;·&nbsp;
+  epinga.py v{version} &nbsp;·&nbsp;
   <a href="https://www.jeitler.guru" target="_blank">www.jeitler.guru</a>
 </footer>
 
 <script>
 const RAW = {json_data};
+
+// IP-named hosts that are ALSO monitored under a hostname pointing at the same IP -
+// these are the redundant duplicates "Prefer hostnames" hides. A raw-IP host with no
+// hostname counterpart stays visible even when the toggle is on.
+const REDUNDANT_IPS = new Set(
+  RAW.hosts.filter(h => !isIpHost(h.name) && h.ip).map(h => h.ip)
+);
 
 // ── theme ──────────────────────────────────────────────────────────────────
 (function() {{
@@ -817,7 +844,7 @@ function renderTable(data) {{
     tr.id = 'r' + idx;
     tr.dataset.idx = idx;
     tr.innerHTML = `
-      <td class="host">${{h.name}} <span class="chevron">&#8964;</span></td>
+      <td class="host"${{ h.ip && h.ip !== h.name ? ` title="IP: ${{h.ip}}"` : '' }}>${{h.name}} <span class="chevron">&#8964;</span></td>
       <td style="text-align:center;white-space:nowrap">${{stateBadge(h.state, h.changes)}}</td>
       <td style="padding:0 12px"><div style="width:200px">${{buildTimeline(h)}}</div></td>
       <td style="text-align:right">${{uptimeBar(h.uptime, h.changes > 0)}}</td>
@@ -905,16 +932,37 @@ function sortBySelect() {{
   sortBy(v);
 }}
 
+let hideIpHosts = false;
+
+function isIpHost(name) {{
+  return /^(\\d{{1,3}}\\.){{3}}\\d{{1,3}}$/.test(name);
+}}
+
+function toggleHideIpHosts() {{
+  hideIpHosts = !hideIpHosts;
+  document.getElementById('btnHideIpHosts').classList.toggle('active', hideIpHosts);
+  applyFilter();
+}}
+
 function applyFilter() {{
   const q     = document.getElementById('search').value.toLowerCase();
   const state = document.getElementById('stateFilter').value;
   let filtered = RAW.hosts.filter(h => {{
     if (q && !h.name.toLowerCase().includes(q)) return false;
     if (state === 'FLAP' && h.changes === 0) return false;
-    if (state && state !== 'FLAP' && h.state !== state) return false;
+    // UP/DOWN/NO-DNS filters must exclude flapping hosts, same as the buckets
+    if (state && state !== 'FLAP' && (h.state !== state || h.changes > 0)) return false;
+    if (hideIpHosts && isIpHost(h.name) && REDUNDANT_IPS.has(h.name)) return false;
     return true;
   }});
   filtered.sort((a, b) => {{
+    if (currentSort === 'state') {{
+      // group by UP / FLAPPING / DOWN / NO-DNS like the STATE badge shows,
+      // not by the raw last-observed state string (which has no FLAPPING value)
+      const od = stateOrder(a) - stateOrder(b);
+      if (od !== 0) return sortAsc ? od : -od;
+      return sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+    }}
     if (currentSort) {{
       let av = a[currentSort], bv = b[currentSort];
       if (av === null) av = sortAsc ? Infinity : -Infinity;
@@ -926,6 +974,7 @@ function applyFilter() {{
     const od = stateOrder(a) - stateOrder(b);
     return od !== 0 ? od : a.name.localeCompare(b.name);
   }});
+  document.getElementById('shownHosts').textContent = filtered.length + ' shown';
   renderTable(filtered);
 }}
 
@@ -1065,7 +1114,7 @@ def file_menu(ext='.csv'):
 # ── argument parsing ──────────────────────────────────────────────────────────
 def build_parser():
     p = argparse.ArgumentParser(
-        description=f'epinga2.py v{version} – eping logfile analyser (large-file capable)',
+        description=f'epinga.py v{version} – eping logfile analyser (large-file capable)',
         formatter_class=argparse.RawTextHelpFormatter
     )
     p.add_argument('-f', '--logfile',  dest='filename', default='',
@@ -1092,7 +1141,7 @@ def build_parser():
                    help='Open HTML report automatically without asking')
     p.add_argument('-q', '--quiet',    dest='quiet', action='store_true',
                    help='Suppress progress bar')
-    p.add_argument('--version',        action='version', version=f'epinga2.py {version}')
+    p.add_argument('--version',        action='version', version=f'epinga.py {version}')
     return p
 
 
@@ -1122,7 +1171,7 @@ def main():
     # ── banner (printed directly, not captured) ──
     print()
     hr('═')
-    header_line(f'epinga2.py  v{version}  –  eping logfile analyser  –  www.jeitler.guru', '═')
+    header_line(f'epinga.py  v{version}  –  eping logfile analyser  –  www.jeitler.guru', '═')
     hr('═')
     print(f'  File : {filename}  ({fmt_bytes(os.path.getsize(filename))})')
     if filter_hosts:
@@ -1174,11 +1223,11 @@ def main():
 
     # ── version check ──
     url    = 'https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions'
-    remote = check_version_online(url, 'epinga2.py')
+    remote = check_version_online(url, 'epinga.py')
     if remote and remote > version:
         print(col(f'  !! Update available (v{remote}) – https://www.jeitler.guru !!', CRED))
     else:
-        print(f'  THX for using epinga2.py v{version}  –  www.jeitler.guru')
+        print(f'  THX for using epinga.py v{version}  –  www.jeitler.guru')
 
     print()
     print(col(f'  Text saved → {txt_path}', CCYAN))
