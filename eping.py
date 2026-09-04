@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.60'
+VERSION = '1.65'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -171,6 +171,35 @@ def match_re(word,name_re):
     m = name_re.match(word)
     if m:
         return m.group(0)
+
+def is_ip_host(word):
+    """True if word is a literal IPv4 or IPv6 address (any family) - unlike ip_re,
+    which is IPv4-only and stays that way since it also backs CIDR/-r range parsing."""
+    try:
+        ipaddress.ip_address(word)
+        return True
+    except ValueError:
+        return False
+
+def normalize_ip(word):
+    """Canonical/shortest text form of a literal IP - a no-op for IPv4, but an
+    IPv6 address written in full (2001:4860:4860:0000:...:8888) is compressed
+    (2001:4860:4860::8888) so the host list, CSV log, display and DNS cache all use
+    one consistent, short spelling regardless of how it was entered (ADD HOST, host
+    file, upload). Not an IP literal - returned unchanged."""
+    try:
+        return str(ipaddress.ip_address(word))
+    except ValueError:
+        return word
+
+def ip_version_str(word):
+    """'4' or '6' for a literal IP string, else None. Only meaningful on already
+    resolved targets (see prepare_targets) - fping needs to know which binary flag
+    (-4/-6) to use since it cannot mix families in one invocation."""
+    try:
+        return str(ipaddress.ip_address(word).version)
+    except ValueError:
+        return None
         
 def get_ipv4_from_range(first_ip, last_ip, max_ip):
     # Expand an IPv4 range [first_ip, last_ip] inclusive. Returns list of strings.
@@ -272,6 +301,8 @@ def tune_group(group_hosts, total_hosts, rate_pps, threads_arg, interval_arg):
 _dns_cache = {}          # name -> (ip or None, expires_at)
 _dns_lock  = threading.Lock()
 
+dns_family = 'auto'   # '4'=force A only, '6'=force AAAA only, 'auto'=A first, AAAA fallback
+
 def resolve_name(name, ttl):
     now = time.time()
     with _dns_lock:
@@ -280,14 +311,36 @@ def resolve_name(name, ttl):
             return entry[0]
     ip = None
     try:
-        infos = socket.getaddrinfo(name, None, socket.AF_INET, socket.SOCK_DGRAM)
-        if infos:
-            ip = infos[0][4][0]
+        ips = resolve_all_ips(name)
+        if ips:
+            ip = ips[0]     # deterministic (lowest) pick when a name has several records
     except Exception:
         ip = None
     with _dns_lock:
         _dns_cache[name] = (ip, time.time() + (ttl if ip else min(ttl, DNS_FAIL_TTL)))
     return ip
+
+def resolve_all_ips(name, family=None):
+    """Every A/AAAA record for name, sorted numerically for a stable order.
+
+    family: '4' or '6' restricts to that record type; None/omitted uses the global
+    dns_family setting ('4', '6' or 'auto' - A first, AAAA only if no A record, so a
+    AAAA-only name still resolves instead of silently failing like before IPv6 support).
+    Uncached and used only where all addresses matter (prefer-hostname redundancy
+    check) or once per name resolution - not hot enough to need caching here."""
+    fam = family if family is not None else dns_family
+    af_list = {'4': [socket.AF_INET], '6': [socket.AF_INET6]}.get(
+        fam, [socket.AF_INET, socket.AF_INET6])
+    for af in af_list:
+        try:
+            infos = socket.getaddrinfo(name, None, af, socket.SOCK_DGRAM)
+            ips = sorted(set(i[4][0] for i in infos),
+                        key=lambda a: int(ipaddress.ip_address(a)))
+            if ips:
+                return ips
+        except Exception:
+            continue
+    return []
 
 def forget_names(names):
     with _dns_lock:
@@ -335,27 +388,41 @@ def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
     result from this same batch."""
     covered_ips = set()
     for h in original_hosts_list:
-        if not match_re(h, ip_re):
+        if not is_ip_host(h):
             ip = resolve_name(h, dns_ttl)
             if ip:
                 covered_ips.add(ip)
 
     candidates = [h for h in original_hosts_list
-                 if match_re(h, ip_re) and h not in covered_ips]
+                 if is_ip_host(h) and h not in covered_ips]
     if not candidates:
         return 'get names: no eligible IP host(s)'
 
     ptr = get_names_for_ips(candidates)
 
+    # A PTR name claimed by more than one candidate IP (e.g. anycast siblings that
+    # share one reverse record, like 1.1.1.1 / 1.0.0.1 -> one.one.one.one) is
+    # ambiguous: renaming only one of them would make PREFER HOSTNAMES treat the
+    # other as a redundant duplicate and silently drop it from monitoring. Keep both
+    # as plain IPs instead of renaming either.
+    name_counts = {}
+    for ip in candidates:
+        name = ptr.get(ip)
+        if name and match_re(name, fqdn_re):
+            name_counts[name.lower()] = name_counts.get(name.lower(), 0) + 1
+
     existing   = set(h.lower() for h in original_hosts_list)
     used_names = set()
-    renamed_n, unresolved, collisions = 0, 0, 0
+    renamed_n, unresolved, collisions, shared_ptr = 0, 0, 0, 0
     for ip in candidates:
         name = ptr.get(ip)
         if not name or not match_re(name, fqdn_re):
             unresolved += 1
             continue
         key = name.lower()
+        if name_counts.get(key, 0) > 1:
+            shared_ptr += 1
+            continue
         if key in existing or key in used_names:
             collisions += 1
             continue
@@ -381,6 +448,8 @@ def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
         parts.append(str(unresolved) + ' no PTR')
     if collisions:
         parts.append(str(collisions) + ' name collision')
+    if shared_ptr:
+        parts.append(str(shared_ptr) + ' shared PTR (kept as IP)')
     return 'get names: ' + ', '.join(parts)
 
 def prepare_targets(hosts, ttl):
@@ -396,7 +465,7 @@ def prepare_targets(hosts, ttl):
     now     = time.time()
     with _dns_lock:
         for h in hosts:
-            if match_re(h, ip_re):
+            if is_ip_host(h):
                 continue
             entry = _dns_cache.get(h)
             if not entry or entry[1] <= now:
@@ -414,7 +483,7 @@ def prepare_targets(hosts, ttl):
     name_map    = {}
     unresolved  = []
     for h in hosts:
-        if match_re(h, ip_re):
+        if is_ip_host(h):
             target = h
         else:
             target = resolve_name(h, ttl)
@@ -428,10 +497,12 @@ def prepare_targets(hosts, ttl):
     return targets, name_map, unresolved
 
 
-def build_fping_cmd(interval_ms, retries_override=None):
-    """Assemble the fping command line shared by all worker processes of one group."""
+def build_fping_cmd(interval_ms, retries_override=None, family='4'):
+    """Assemble the fping command line shared by all worker processes of one group.
+    family selects -4/-6 - fping cannot ping v4 and v6 targets in the same invocation,
+    so a round with both families in play runs two separate fping command lines."""
     use_retries = str(retries if retries_override is None else retries_override)
-    cmd = ['fping', '-4', '-e', '-B', backoff, '-t', timeout, '-r', use_retries]
+    cmd = ['fping', '-' + str(family), '-e', '-B', backoff, '-t', timeout, '-r', use_retries]
     # careful: 0 is a valid interval (no pacing at all) but falsy, so test explicitly
     try:
         iv = int(interval_ms)
@@ -676,15 +747,17 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
 def apply_prefer_hostname(hosts_list, dns_ttl):
     """[P] toggle: drop raw-IP entries whose address is also covered by a hostname
     entry in the same list. The hostname gets pinged anyway, so pinging the bare IP a
-    second time is redundant - a raw IP with no hostname counterpart is kept as-is."""
+    second time is redundant - a raw IP with no hostname counterpart is kept as-is.
+    A hostname with several A-records (e.g. anycast siblings) covers all of them, not
+    just the one resolve_name() currently has cached - dns_ttl is unused now that this
+    always resolves fresh, kept for call-site compatibility.
+    """
     hostname_ips = set()
     for h in hosts_list:
-        if not match_re(h, ip_re):
-            ip = resolve_name(h, dns_ttl)
-            if ip:
-                hostname_ips.add(ip)
+        if not is_ip_host(h):
+            hostname_ips.update(resolve_all_ips(h))
     return [h for h in hosts_list
-            if not (match_re(h, ip_re) and h in hostname_ips)]
+            if not (is_ip_host(h) and h in hostname_ips)]
 
 def check_python_version(mrv):
     current_version = sys.version_info
@@ -763,14 +836,17 @@ def parse_hosts_from_text(text, stats=None):
             word = word.strip()
             if not word:
                 continue
-            if match_re(word, ip_re):
-                ips.append(word)
+            if is_ip_host(word):
+                ips.append(normalize_ip(word))   # IPv6 stored in its shortest/compressed form
             elif match_re(word, cidr_ipv4_re):
                 try:
                     ips.extend(get_ipv4_from_cidr(word, CIDR_MIN_MASK, CIDR_MAX_MASK))
                     networks += 1
                 except Exception:
                     skipped.append(word)
+            elif (word.count('/') == 1 and word.rsplit('/', 1)[1] == '128'
+                  and ip_version_str(word.rsplit('/', 1)[0]) == '6'):
+                ips.append(normalize_ip(word.rsplit('/', 1)[0]))   # single-host IPv6 CIDR, no expansion
             elif match_re(word, fqdn_re):
                 fqdns.append(word)
     seen = set()
@@ -867,9 +943,18 @@ def parse_host_input(value, stats=None):
             if stats is not None:
                 stats['error'] = ('bad range, or more than %d addresses: %s'
                                   % (MAX_IPS_PER_RANGE, value))
-    # single IP
-    elif match_re(value, ip_re):
-        new_hosts = [value]
+    # single-host IPv6 written as CIDR (/128) - no IPv6 network expansion, just the
+    # one address, same as typing the bare address
+    elif (value.count('/') == 1 and value.rsplit('/', 1)[1] == '128'
+          and ip_version_str(value.rsplit('/', 1)[0]) == '6'):
+        new_hosts = [normalize_ip(value.rsplit('/', 1)[0])]
+    # any other IPv6/mask combination - no IPv6 network expansion, say so clearly
+    elif value.count('/') == 1 and ip_version_str(value.rsplit('/', 1)[0]) == '6':
+        if stats is not None:
+            stats['error'] = 'IPv6 networks are not expanded - only a single host (/128) is supported: ' + value
+    # single IP (v4 or v6) - IPv6 stored in its shortest/compressed form
+    elif is_ip_host(value):
+        new_hosts = [normalize_ip(value)]
     # hostname/fqdn
     elif match_re(value, fqdn_re):
         new_hosts = [value]
@@ -996,19 +1081,33 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
     if reduced_targets:
         groups.append((reduced_targets, down_retries, 'reduced'))
 
+    # fping cannot mix v4 and v6 targets in one invocation, so every retry-class
+    # group above is split again by address family. In the common single-family
+    # case this yields exactly one subgroup per group, same as before IPv6 support.
+    subgroups = []   # (targets, retries, label, family)
+    for grp_targets, grp_retries, grp_name in groups:
+        by_fam = {'4': [], '6': []}
+        for t in grp_targets:
+            fam = ip_version_str(t)
+            if fam:
+                by_fam[fam].append(t)
+        for fam in ('4', '6'):
+            if by_fam[fam]:
+                subgroups.append((by_fam[fam], grp_retries, grp_name, fam))
+
     lock        = threading.Lock()
     thread_list = []
     parts       = []
     total_pps   = 0.0
-    stats       = [[] for _ in groups]
+    stats       = [[] for _ in subgroups]
     meta        = []
     # the rate budget is shared between what is actually probed this round, not
     # between all known hosts - otherwise slicing would not speed anything up
-    probed_total = sum(len(g[0]) for g in groups)
-    for slot, (grp_targets, grp_retries, grp_name) in enumerate(groups):
+    probed_total = sum(len(g[0]) for g in subgroups)
+    for slot, (grp_targets, grp_retries, grp_name, fam) in enumerate(subgroups):
         procs, interval_ms = tune_group(len(grp_targets), probed_total,
                                         rate_pps, threads_arg, interval_arg)
-        cmd_base = build_fping_cmd(interval_ms, grp_retries)
+        cmd_base = build_fping_cmd(interval_ms, grp_retries, fam)
         for chunk in split_seq(grp_targets, procs):
             thread_list.append(threading.Thread(target=timed_fping,
                                                 args=(chunk, lock, cmd_base, stats, slot)))
@@ -1016,10 +1115,10 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
             total_pps += procs * 1000.0 / interval_ms
         else:
             total_pps = -1.0          # -i 0: unpaced, no meaningful rate
-        label = grp_name
+        label = grp_name + ('/v6' if fam == '6' else '')
         if grp_name == 'reduced' and slice_count > 1:
-            label = 'reduced slice %d/%d of %d' % (slice_idx % slice_count + 1,
-                                                   slice_count, down_total)
+            label = ('reduced/v6' if fam == '6' else 'reduced') + ' slice %d/%d of %d' % (
+                     slice_idx % slice_count + 1, slice_count, down_total)
         parts.append('%d %s (-r %s, %d x fping, -i %dms)'
                      % (len(grp_targets), label,
                         retries if grp_retries is None else grp_retries,
@@ -1211,7 +1310,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <option value="3">sort: FLAP/UP/DOWN</option>
       <option value="4">sort: FLAP/DOWN/UP</option>
     </select>
-    <input type="text" id="addInput" placeholder="IP / host / CIDR / ip1-ip2">
+    <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
     <button id="btnAdd">ADD HOST</button>
     <button id="btnDel" title="remove the given host(s) - same input as ADD HOST">DEL HOST</button>
     <button id="btnUpload">UPLOAD FILE</button>
@@ -1893,7 +1992,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
             else:
                 learning_done = True
                 active_hosts_list = sorted(up_seen, key=lambda h: (
-                    int(ipaddress.ip_address(h)) if match_re(h, ip_re) else float('inf')))
+                    int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')))
                 if prefer_hostname:
                     active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                 learning_phase = True
@@ -2013,6 +2112,9 @@ if __name__=='__main__':
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
+    family_group = parser.add_mutually_exclusive_group()
+    family_group.add_argument('-4', '--force_ipv4', action="store_true", dest='force_ipv4', help="only resolve/ping IPv4 (A records) - default: IPv4 first, IPv6 only for names with no A record")
+    family_group.add_argument('-6', '--force_ipv6', action="store_true", dest='force_ipv6', help="only resolve/ping IPv6 (AAAA records)")
     parser.add_argument('-ph', '--prefer_hostname', action="store_true", dest='prefer_hostname', help="start with PREFER HOSTNAMES active - skip a raw IP host when the same address is already covered by a hostname entry (toggle later with [P] / the web button)")
     parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
     parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN (default: " + str(DOWN_RETRIES_DEF) + ", -1 = treat them like every other host)")
@@ -2034,6 +2136,7 @@ if __name__=='__main__':
     retries = args.retries
     interval = args.interval
     use_check_source = not args.no_check_source
+    dns_family = '4' if args.force_ipv4 else ('6' if args.force_ipv6 else 'auto')
 
     # check online current version
     if not args.disable_versioncheck: 
@@ -2219,7 +2322,7 @@ if __name__=='__main__':
             error_handler('ERROR: Unable to open hosts file: ' + str(args.hostfile))
         hostfile_stats = {}
         for entry in parse_hosts_from_text(hostfile_text, hostfile_stats):
-            if match_re(entry, ip_re):
+            if is_ip_host(entry):
                 hosts_list_ipv4.append(entry)
             else:
                 hosts_list_fqdn.append(entry)
@@ -2399,6 +2502,26 @@ if __name__=='__main__':
         screen_output(box_y + 1, box_x, '+' + '-' * (box_w - 2) + '+', color, 1)
         screen.refresh()
         time.sleep(seconds)
+        screen.clear()
+
+    def notice_confirm(text, color=2):
+        """Message box that stays until ENTER (or ESC) is pressed, instead of
+        auto-dismissing - for messages worth actually reading (e.g. GET NAMES)."""
+        rows, cols = screen.getmaxyx()
+        text  = ' ' + text + '  [ENTER]=ok '
+        box_w = min(len(text), max(10, cols - 4))
+        box_x = max(0, (cols - box_w) // 2)
+        box_y = max(0, rows // 2)
+        screen_output(box_y - 1, box_x, '+' + '-' * (box_w - 2) + '+', color, 1)
+        screen_output(box_y,     box_x, text[:box_w], color, 1)
+        screen_output(box_y + 1, box_x, '+' + '-' * (box_w - 2) + '+', color, 1)
+        screen.refresh()
+        screen.nodelay(False)
+        while True:
+            ch = screen.getch()
+            if ch in (10, 13, 27):     # ENTER or ESC
+                break
+        screen.nodelay(True)
         screen.clear()
 
     # non-blocking keyboard input - main thread only, no separate thread
@@ -2728,13 +2851,13 @@ if __name__=='__main__':
         elif cmd == 'GET_NAMES':
             gn_msg = apply_get_names(original_hosts_list, active_hosts_list, host_state,
                                      up_seen, down_streak, int(args.dns_ttl))
-            notice(gn_msg.upper(), 2)
+            notice_confirm(gn_msg.upper(), 2)
         elif cmd == 'ORDER':
             sort_mode = (sort_mode + 1) % len(SORT_MODES)
             screen.clear()
         elif cmd == 'ADD':
             value     = input_dialog(' ADD HOSTS ',
-                                     ' IP, hostname, CIDR /%d../%d or ip1-ip2:'
+                                     ' IPv4/IPv6, hostname, IPv4 CIDR /%d../%d, IPv6 /128 or ip1-ip2:'
                                      % (CIDR_MIN_MASK, CIDR_MAX_MASK))
             if value:
                 add_stats = {}
@@ -2759,7 +2882,7 @@ if __name__=='__main__':
                         notice('ADDED ' + str(added) + ' NEW HOST(S) OF ' + str(len(new_hosts)) + ' FOUND', 2)
         elif cmd == 'DEL':
             value = input_dialog(' DELETE HOSTS ',
-                                 ' IP, hostname, CIDR /%d../%d or ip1-ip2:'
+                                 ' IPv4/IPv6, hostname, IPv4 CIDR /%d../%d, IPv6 /128 or ip1-ip2:'
                                  % (CIDR_MIN_MASK, CIDR_MAX_MASK))
             if value:
                 del_stats = {}
@@ -2808,7 +2931,7 @@ if __name__=='__main__':
             else:
                 learning_done = True
                 active_hosts_list = sorted(up_seen, key=lambda h: (
-                    int(ipaddress.ip_address(h)) if match_re(h, ip_re) else float('inf')
+                    int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')
                 ))
                 if prefer_hostname:
                     active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))

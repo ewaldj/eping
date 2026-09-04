@@ -1,4 +1,4 @@
-# eping.py 1.60
+# eping.py 1.65
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -60,12 +60,16 @@ web GUI, so all three accept:
 10.131.0.0/19             # 8192 addresses
 www.google.com            # hostname or FQDN
 8.8.8.8, 9.9.9.9; 1.1.1.1 # comma and semicolon separate like blanks
+2606:4700:4700::1111       # IPv6 address - same wherever an IPv4 address is accepted
+2606:4700:4700::1111/128   # IPv6 address with /128 - accepted as that single host
 ```
 
 Networks use the same mask range as `-n` (/13 … /32) everywhere — host file, ADD FILE,
 web upload and the ADD HOST / DEL HOST input. A network outside that range is rejected
-with a message naming the allowed range; `-f` prints a warning and ignores it. Anything
-that matches none of the forms is silently ignored.
+with a message naming the allowed range; `-f` prints a warning and ignores it. IPv6 has
+no network expansion — `/128` (a single host) is accepted, any other IPv6 mask is
+rejected with a message. Anything else that matches none of the forms is silently
+ignored.
 
 ## CLI mode
 
@@ -247,6 +251,7 @@ sends one hard burst.
 | `-i` | auto | fixed send interval in ms, overrides `-ra`; `0` = unpaced |
 | `-p` | auto | fping processes per group (auto = 1, max 32) |
 | `-dns` | 300 | hostname cache TTL in seconds (`0` = off) |
+| `-4` / `-6` | auto | force IPv4 (`-4`) or IPv6 (`-6`) for names that have both A and AAAA records; default resolves A first, AAAA only if there is no A record. Mutually exclusive. |
 | `-ph` | off | start with PREFER HOSTNAMES active (see `P` key) |
 | `-gn` | off | run GET NAMES once before the first ping round (see `G` key) |
 | `-fw` | 10 | minutes since the last state change for a host to count as flapping |
@@ -293,9 +298,27 @@ restores the full list.
 `GET NAMES` / `G` (`-gn` to run it once at startup) reverse-DNS resolves every raw-IP
 host that has no hostname counterpart and, if a PTR record is found, renames it to that
 hostname in place — `NO_OF_CHANGES`, uptime and the change history all carry over,
-nothing is reset. A host is left as an IP when it has no PTR record, or when the
-resolved name collides with a host already in the list. Unlike `PREFER HOSTNAMES` this
-is a one-shot action, not a toggle: hosts added afterwards need `G` again.
+nothing is reset. A host is left as an IP when it has no PTR record, when the resolved
+name collides with a host already in the list, or when the same PTR name is shared by
+more than one candidate IP (e.g. anycast siblings such as 1.1.1.1/1.0.0.1 both
+resolving to `one.one.one.one`) — renaming only one of them would make `PREFER
+HOSTNAMES` treat the other as a redundant duplicate and drop it, so both are kept as
+plain IPs instead. Unlike `PREFER HOSTNAMES` this is a one-shot action, not a toggle:
+hosts added afterwards need `G` again. The result message stays on screen until
+confirmed with `[ENTER]` (or `[ESC]`) instead of disappearing on its own.
+
+## IPv6
+
+IPv4 and IPv6 hosts can be mixed freely in one host list. A hostname is resolved
+according to `-4`/`-6` (default: A record first, AAAA only if there is no A record);
+`PREFER HOSTNAMES` and `GET NAMES` consider every resolved address of a hostname, not
+just one. Internally, fping cannot ping v4 and v6 targets in the same invocation, so a
+round with both families in play runs one fping process per family — this is
+transparent, `-dg` just shows an extra `full`/`reduced` group suffixed `/v6`. CIDR
+(`-n`, `-r`) and IP-range (`-r1..4`) expansion remain IPv4-only; a single IPv6 host can
+be given with `/128` (e.g. `2001:db8::1/128`), any other IPv6 mask is rejected. However
+entered — bare address, `/128`, host file, upload — an IPv6 address is always stored in
+its shortest form (`2001:4860:4860:0000:...:8888` becomes `2001:4860:4860::8888`).
 
 ## Diagnostics (`-dg`)
 
