@@ -381,3 +381,72 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
   measured to produce false DOWN reports; the defaults avoid them deliberately.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
+
+# epinga.py 1.78
+
+Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
+HTML report (no server, no external assets) with per-host detail, state-change
+timelines and always-UP/flapping/always-DOWN/no-DNS buckets.
+
+## Quick start
+
+```sh
+./epinga.py                              # interactive menu - pick a *.csv from the current dir
+./epinga.py -f eping-log_2026-09-05.csv  # analyse a specific logfile
+./epinga.py -f FILE --open               # analyse and open the HTML report right away
+```
+
+Output filenames are always auto-generated from the logfile name unless overridden:
+`<base>_report.txt` (terminal-style text) and `<base>_report.html` (`--html FILE` to
+override the latter).
+
+## Options
+
+| Option | Effect |
+|---|---|
+| `-f FILE`, `--logfile FILE` | CSV logfile (omit for the interactive file-picker menu) |
+| `-H HOST`, `--host HOST` | Only include this host (repeatable) |
+| `-s`, `--start YYYY-MM-DD HH:MM:SS` | Only rows from this timestamp onwards |
+| `-e`, `--end YYYY-MM-DD HH:MM:SS` | Only rows up to this timestamp |
+| `-S`, `--sort {name,flapping,uptime,rtt}` | Sort order for the summary table (default: `name`) |
+| `--no-detail` | Skip per-host detail, summary only |
+| `--no-changes` | Omit the state-change event list per host |
+| `--html FILE` | Custom HTML report filename |
+| `--open` | Open the HTML report automatically, no prompt |
+| `-q`, `--quiet` | Suppress the progress bar |
+
+## HTML report
+
+Everything is inlined into one `.html` file (CSS, JS and the analysed data as JSON) - it
+can be copied, emailed or opened offline, with no dependency on the log file it was
+built from.
+
+The top bar shows total/UP/flapping/DOWN/no-DNS counts, followed by a toolbar with:
+
+- **Filter** - plain text or a regex (case-insensitive), matched against both hostname
+  and IP; an invalid regex falls back to plain substring matching instead of showing
+  zero results.
+- **Show** - restrict to one state (flapping is its own entry, independent of
+  UP/DOWN/NO-DNS).
+- **Sort** - by name, uptime %, avg RTT or number of changes (click a column header for
+  the same effect).
+- **Show IP** button (green when on) - display toggle only: swaps every host's primary
+  label between hostname and IP (table and all four buckets), the other value shown
+  small next to it. Independent of deduplication below.
+- **Deduplication** dropdown (`No Deduplication` / `Hostname` / `IP`, default: no
+  deduplication) - for a host monitored under both a hostname and its own raw IP,
+  hides the redundant side; `Hostname` keeps the name and drops the IP entry,
+  `IP` keeps the IP and drops the name entry. Applies to the table and all four
+  buckets.
+
+The **Host List** section (filterable/sortable table) and each of the four bucket
+sections (**Always UP**, **Flapping**, **Always DOWN**, **No-DNS**) are independently
+collapsible by clicking their title bar (expanded by default); a bucket's collapsed
+state survives a Show IP / Deduplication change since those re-render the bucket
+content. Each bucket header also has **Download** (exports its hostnames/IPs as
+`<base>-<up|down|flap|nodns>-hosts.txt`) and **Copy** (copies the same list to the
+clipboard, with an `execCommand` fallback for `file://` pages where the async
+Clipboard API may be unavailable).
+
+Clicking a table row expands its detail: full state-change history with timestamps,
+and per-host statistics (IP, uptime, downtime, span, first/last seen, RTT min/avg/max).
