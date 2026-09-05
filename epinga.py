@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.65'
+version = '1.78'
 
 import re
 import os
@@ -476,7 +476,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
 
 # ── HTML export ───────────────────────────────────────────────────────────────
-def build_report_data(hosts, host_order, filename, rows_read):
+def build_report_data(hosts, host_order, filename, rows_read, base=''):
     """Serialize all analysis data to a plain dict for JSON embedding."""
     rows = []
     for h in host_order:
@@ -508,6 +508,7 @@ def build_report_data(hosts, host_order, filename, rows_read):
     all_last  = [r['last_ts']  for r in rows if r['last_ts']]
     return {
         'filename':     filename,
+        'base':         base,
         'generated':    datetime.datetime.now().strftime(TS_FMT),
         'rows_read':    rows_read,
         'global_start': min(all_first) if all_first else '',
@@ -588,13 +589,18 @@ a {{ color: var(--cyan); text-decoration: none; }}
   padding: 6px 10px; outline: none; }}
 .toolbar input {{ width: 260px; }}
 .toolbar input:focus, .toolbar select:focus {{ border-color: var(--cyan); }}
+.toolbar input.invalid {{ border-color: var(--red); }}
 .toolbar label {{ color: var(--dim); font-size: 12px; }}
 .toolbar button {{ cursor: pointer; }}
 .toolbar button:hover {{ border-color: var(--cyan); }}
 .toolbar button.active {{ background: var(--orange); border-color: var(--orange); color: var(--bg); font-weight: 600; }}
+#btnShowIp.active {{ background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }}
 
 /* ── table ── */
 .tbl-wrap {{ padding: 0 24px 24px; overflow-x: auto; }}
+.bucket.hostlist {{ margin: 0 24px 20px; }}
+.bucket.hostlist .tbl-wrap {{ padding: 0; }}
+.bucket.collapsed.hostlist .tbl-wrap {{ display: none; }}
 table {{ width: 100%; border-collapse: collapse; }}
 thead th {{
   background: var(--bg3); border: 1px solid var(--border); padding: 8px 12px;
@@ -658,7 +664,20 @@ tr.hidden {{ display: none; }}
 .bucket h3 {{
   font-size: 12px; letter-spacing: .6px; padding: 6px 12px;
   background: var(--bg2); border: 1px solid var(--border);
-  border-radius: 6px 6px 0 0; display: flex; justify-content: space-between; }}
+  border-radius: 6px 6px 0 0; display: flex; justify-content: space-between;
+  align-items: center; cursor: default; }}
+.bucket-toggle {{ display: flex; align-items: center; gap: 8px; cursor: pointer;
+                   flex: 1; user-select: none; }}
+.bucket-chevron {{ color: var(--dim); transition: transform .2s; display: inline-block; }}
+.bucket.collapsed .bucket-chevron {{ transform: rotate(-90deg); }}
+.bucket.collapsed .bucket-body {{ display: none; }}
+.bucket-actions {{ display: flex; align-items: center; gap: 10px; }}
+.dl-btn {{
+  background: none; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--dim); cursor: pointer; font-size: 12px; line-height: 1;
+  padding: 3px 7px; font-family: var(--font);
+  display: inline-flex; align-items: center; gap: 4px; }}
+.dl-btn:hover {{ color: var(--text); border-color: var(--cyan); }}
 .bucket-body {{ border: 1px solid var(--border); border-top: none;
                 border-radius: 0 0 6px 6px; padding: 12px; }}
 .tag-list {{ display: flex; flex-wrap: wrap; gap: 6px; }}
@@ -710,7 +729,7 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 
 <div class="toolbar">
   <label>Filter:</label>
-  <input id="search" type="text" placeholder="hostname …" oninput="applyFilter()">
+  <input id="search" type="text" placeholder="hostname/IP or /regex/ …" title="plain text or a regex (case-insensitive), matched against hostname and IP" oninput="applyFilter()">
   <label>Show:</label>
   <select id="stateFilter" onchange="applyFilter()">
     <option value="">All states</option>
@@ -727,26 +746,40 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
     <option value="rtt_avg">Avg RTT</option>
     <option value="changes">Changes</option>
   </select>
-  <button id="btnHideIpHosts" onclick="toggleHideIpHosts()"
-          title="Hide IP-named hosts that are also monitored under a hostname">Prefer hostnames</button>
+  <button id="btnShowIp" onclick="toggleShowIp()"
+          title="Quick switch between showing hostname or IP for hosts monitored under both">Show IP</button>
+  <select id="dedupSel" onchange="onDedupSelectChange()" title="Deduplication mode for hosts monitored under both a hostname and an IP">
+    <option value="" selected>No Deduplication</option>
+    <option value="name">Hostname</option>
+    <option value="ip">IP</option>
+  </select>
 </div>
 
-<div class="tbl-wrap">
-<table id="mainTable">
-<thead>
-<tr>
-  <th onclick="sortBy('name')"    data-col="name">HOST</th>
-  <th onclick="sortBy('state')"   data-col="state" style="text-align:center;width:1px;white-space:nowrap">STATE</th>
-  <th style="width:220px">TIMELINE</th>
-  <th onclick="sortBy('uptime')"  data-col="uptime" style="text-align:right">UPTIME</th>
-  <th onclick="sortBy('rtt_avg')" data-col="rtt_avg" style="text-align:right">AVG RTT</th>
-  <th onclick="sortBy('rtt_min')" data-col="rtt_min" style="text-align:right">MIN RTT</th>
-  <th onclick="sortBy('rtt_max')" data-col="rtt_max" style="text-align:right">MAX RTT</th>
-  <th onclick="sortBy('changes')" data-col="changes" style="text-align:center">CHANGES</th>
-</tr>
-</thead>
-<tbody id="tbody"></tbody>
-</table>
+<div class="bucket hostlist" id="bucket-hostlist">
+  <h3>
+    <span class="bucket-toggle" onclick="toggleBucket('hostlist')">
+      <span class="bucket-chevron">&#9662;</span><span>Host List</span>
+    </span>
+  </h3>
+  <div class="bucket-body">
+    <div class="tbl-wrap">
+    <table id="mainTable">
+    <thead>
+    <tr>
+      <th onclick="sortBy('name')"    data-col="name">HOST</th>
+      <th onclick="sortBy('state')"   data-col="state" style="text-align:center;width:1px;white-space:nowrap">STATE</th>
+      <th style="width:220px">TIMELINE</th>
+      <th onclick="sortBy('uptime')"  data-col="uptime" style="text-align:right">UPTIME</th>
+      <th onclick="sortBy('rtt_avg')" data-col="rtt_avg" style="text-align:right">AVG RTT</th>
+      <th onclick="sortBy('rtt_min')" data-col="rtt_min" style="text-align:right">MIN RTT</th>
+      <th onclick="sortBy('rtt_max')" data-col="rtt_max" style="text-align:right">MAX RTT</th>
+      <th onclick="sortBy('changes')" data-col="changes" style="text-align:center">CHANGES</th>
+    </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+    </table>
+    </div>
+  </div>
 </div>
 
 <div class="buckets" id="buckets"></div>
@@ -760,10 +793,16 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 const RAW = {json_data};
 
 // IP-named hosts that are ALSO monitored under a hostname pointing at the same IP -
-// these are the redundant duplicates "Prefer hostnames" hides. A raw-IP host with no
-// hostname counterpart stays visible even when the toggle is on.
+// these are the duplicates hidden in 'Hostnames' dedup mode. A raw-IP host with no
+// hostname counterpart stays visible in either mode.
 const REDUNDANT_IPS = new Set(
   RAW.hosts.filter(h => !isIpHost(h.name) && h.ip).map(h => h.ip)
+);
+// hostnames that are ALSO monitored as a raw IP host pointing at the same address -
+// these are the duplicates hidden in 'IPs' dedup mode.
+const IP_HOSTS_PRESENT = new Set(RAW.hosts.filter(h => isIpHost(h.name)).map(h => h.name));
+const REDUNDANT_NAMES = new Set(
+  RAW.hosts.filter(h => !isIpHost(h.name) && h.ip && IP_HOSTS_PRESENT.has(h.ip)).map(h => h.name)
 );
 
 // ── theme ──────────────────────────────────────────────────────────────────
@@ -845,7 +884,7 @@ function renderTable(data) {{
     tr.id = 'r' + idx;
     tr.dataset.idx = idx;
     tr.innerHTML = `
-      <td class="host">${{h.name}}${{ h.ip && h.ip !== h.name ? ` <span class="host-ip">| ${{h.ip}}</span>` : '' }} <span class="chevron">&#8964;</span></td>
+      <td class="host">${{hostLabel(h)}}${{ secondaryLabel(h) ? ` <span class="host-ip">| ${{secondaryLabel(h)}}</span>` : '' }} <span class="chevron">&#8964;</span></td>
       <td style="text-align:center;white-space:nowrap">${{stateBadge(h.state, h.changes)}}</td>
       <td style="padding:0 12px"><div style="width:200px">${{buildTimeline(h)}}</div></td>
       <td style="text-align:right">${{uptimeBar(h.uptime, h.changes > 0)}}</td>
@@ -934,28 +973,78 @@ function sortBySelect() {{
   sortBy(v);
 }}
 
-let hideIpHosts = false;
+let dedupMode = '';   // '': off (default), 'name': show hostname (hide its IP counterpart), 'ip': show IP (hide its hostname counterpart)
+let showIp     = false;   // display toggle only - which of name/ip is the primary label, independent of dedupMode
 
 function isIpHost(name) {{
   if (/^(\\d{{1,3}}\\.){{3}}\\d{{1,3}}$/.test(name)) return true;
   return name.indexOf(':') !== -1 && /^[0-9a-fA-F:]+$/.test(name);   // IPv6 literal
 }}
 
-function toggleHideIpHosts() {{
-  hideIpHosts = !hideIpHosts;
-  document.getElementById('btnHideIpHosts').classList.toggle('active', hideIpHosts);
+// true if 'h' is the duplicate side that the current dedup mode should hide -
+// applied to both the table filter and the bucket sections below
+function isDeduped(h) {{
+  if (dedupMode === 'name') return isIpHost(h.name) && REDUNDANT_IPS.has(h.name);
+  if (dedupMode === 'ip')   return !isIpHost(h.name) && REDUNDANT_NAMES.has(h.name);
+  return false;   // '' = no deduplication
+}}
+
+// primary label for a host row/tag - IP when 'Show IP' is on and an ip is known,
+// hostname otherwise; applied everywhere a host is displayed (table + all buckets)
+function hostLabel(h) {{
+  return (showIp && h.ip) ? h.ip : h.name;
+}}
+
+// the "other" value next to the primary label (e.g. the small "| 1.2.3.4" suffix),
+// or null when there is none / it equals the primary
+function secondaryLabel(h) {{
+  const primary = hostLabel(h);
+  if (h.ip && h.ip !== primary) return h.ip;
+  if (h.name !== primary) return h.name;
+  return null;
+}}
+
+// display-only toggle: switches every host's primary label between name and IP
+function toggleShowIp() {{
+  showIp = !showIp;
+  document.getElementById('btnShowIp').classList.toggle('active', showIp);
   applyFilter();
+  renderBuckets();
+}}
+
+function onDedupSelectChange() {{
+  dedupMode = document.getElementById('dedupSel').value;
+  applyFilter();
+  renderBuckets();
 }}
 
 function applyFilter() {{
-  const q     = document.getElementById('search').value.toLowerCase();
+  const qRaw  = document.getElementById('search').value;
   const state = document.getElementById('stateFilter').value;
+  const searchEl = document.getElementById('search');
+  // plain text is used as a substring match (old behaviour, unaffected); anything
+  // that does not parse as valid regex syntax just falls back to substring too, so
+  // typing a literal '(' or similar never surprises a user who didn't mean regex -
+  // only used when the text actually compiles as a RegExp
+  let qRe = null, qInvalid = false;
+  if (qRaw) {{
+    try {{ qRe = new RegExp(qRaw, 'i'); }}
+    catch (e) {{ qInvalid = true; }}
+  }}
+  searchEl.classList.toggle('invalid', qInvalid);
   let filtered = RAW.hosts.filter(h => {{
-    if (q && !h.name.toLowerCase().includes(q)) return false;
+    if (qRaw) {{
+      if (qInvalid) {{
+        const q = qRaw.toLowerCase();
+        if (!h.name.toLowerCase().includes(q) && !(h.ip && h.ip.toLowerCase().includes(q))) return false;
+      }} else if (!qRe.test(h.name) && !(h.ip && qRe.test(h.ip))) {{
+        return false;
+      }}
+    }}
     if (state === 'FLAP' && h.changes === 0) return false;
     // UP/DOWN/NO-DNS filters must exclude flapping hosts, same as the buckets
     if (state && state !== 'FLAP' && (h.state !== state || h.changes > 0)) return false;
-    if (hideIpHosts && isIpHost(h.name) && REDUNDANT_IPS.has(h.name)) return false;
+    if (isDeduped(h)) return false;
     return true;
   }});
   filtered.sort((a, b) => {{
@@ -982,12 +1071,67 @@ function applyFilter() {{
 }}
 
 // ── buckets ────────────────────────────────────────────────────────────────
+// download this bucket's hostnames/IPs as a .txt file, one per line - named after
+// the source logfile so it lines up with eping-log_<ts>[.csv], e.g.
+// eping-log_2026-09-05_16:50:05-up-hosts.txt
+function downloadBucketList(list, suffix) {{
+  const names = list.map(h => hostLabel(h));
+  const blob  = new Blob([names.join('\\n') + (names.length ? '\\n' : '')], {{type: 'text/plain'}});
+  const url   = URL.createObjectURL(blob);
+  const a     = document.createElement('a');
+  a.href      = url;
+  a.download  = (RAW.base || 'epinga-export') + '-' + suffix + '-hosts.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}}
+
+function fallbackCopy(text, done) {{
+  // execCommand fallback: works on file:// pages where the async Clipboard API may be unavailable
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity  = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {{ ok = document.execCommand('copy'); }} catch (e) {{ ok = false; }}
+  document.body.removeChild(ta);
+  done(ok);
+}}
+
+function copyBucketList(list, btn) {{
+  const names = list.map(h => hostLabel(h));
+  const text  = names.join('\\n') + (names.length ? '\\n' : '');
+  function done(ok) {{
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = ok ? 'Copied!' : 'Copy failed';
+    setTimeout(() => {{ btn.textContent = orig; }}, 1200);
+  }}
+  if (navigator.clipboard && navigator.clipboard.writeText) {{
+    navigator.clipboard.writeText(text).then(() => done(true)).catch(() => fallbackCopy(text, done));
+  }} else {{
+    fallbackCopy(text, done);
+  }}
+}}
+
+let BUCKET_LISTS = {{}};
+function downloadBucket(suffix) {{
+  downloadBucketList(BUCKET_LISTS[suffix] || [], suffix);
+}}
+function copyBucket(suffix, btn) {{
+  copyBucketList(BUCKET_LISTS[suffix] || [], btn);
+}}
+
 function renderBuckets() {{
-  const up    = RAW.hosts.filter(h => h.changes === 0 && h.state === 'UP');
-  const flap  = [...RAW.hosts.filter(h => h.changes > 0)]
+  const pool  = RAW.hosts.filter(h => !isDeduped(h));
+  const up    = pool.filter(h => h.changes === 0 && h.state === 'UP');
+  const flap  = [...pool.filter(h => h.changes > 0)]
                   .sort((a,b) => b.changes - a.changes);
-  const down  = RAW.hosts.filter(h => h.changes === 0 && h.state === 'DOWN');
-  const nodns = RAW.hosts.filter(h => h.changes === 0 && h.state === 'NO-DNS');
+  const down  = pool.filter(h => h.changes === 0 && h.state === 'DOWN');
+  const nodns = pool.filter(h => h.changes === 0 && h.state === 'NO-DNS');
 
   function tags(lst, cls, labelFn) {{
     if (!lst.length) return '<span style="color:var(--dim)">–</span>';
@@ -995,22 +1139,50 @@ function renderBuckets() {{
   }}
 
   const bkts = [
-    {{ title:'Always UP',    cls:'up',    list:up,
-       fn: h=>`${{h.name}}` }},
-    {{ title:'Flapping',     cls:'flap',  list:flap,
-       fn: h=>`${{h.name}} <span class="chg">(${{h.changes}})</span>` }},
-    {{ title:'Always DOWN',  cls:'down',  list:down,
-       fn: h=>`${{h.name}}` }},
-    {{ title:'No-DNS',       cls:'nodns', list:nodns,
-       fn: h=>`${{h.name}}` }},
+    {{ title:'Always UP',    cls:'up',    list:up,    suffix:'up',
+       fn: h=>`${{hostLabel(h)}}` }},
+    {{ title:'Flapping',     cls:'flap',  list:flap,  suffix:'flap',
+       fn: h=>`${{hostLabel(h)}} <span class="chg">(${{h.changes}})</span>` }},
+    {{ title:'Always DOWN',  cls:'down',  list:down,  suffix:'down',
+       fn: h=>`${{hostLabel(h)}}` }},
+    {{ title:'No-DNS',       cls:'nodns', list:nodns, suffix:'nodns',
+       fn: h=>`${{hostLabel(h)}}` }},
   ];
+  BUCKET_LISTS = {{}};
+  bkts.forEach(b => {{ BUCKET_LISTS[b.suffix] = b.list; }});
+  const wasCollapsed = new Set(
+    bkts.map(b => b.suffix).filter(s => {{
+      const el = document.getElementById('bucket-' + s);
+      return el && el.classList.contains('collapsed');
+    }})
+  );
   document.getElementById('buckets').innerHTML = bkts.map(b => `
-    <div class="bucket">
-      <h3><span>${{b.title}}</span><span>${{b.list.length}}</span></h3>
+    <div class="bucket" id="bucket-${{b.suffix}}">
+      <h3>
+        <span class="bucket-toggle" onclick="toggleBucket('${{b.suffix}}')">
+          <span class="bucket-chevron">&#9662;</span><span>${{b.title}}</span>
+        </span>
+        <span class="bucket-actions"><span>${{b.list.length}}</span>
+        <button class="dl-btn" onclick="downloadBucket('${{b.suffix}}')"
+                title="download hostnames/IPs of this list as .txt"
+                ${{b.list.length ? '' : 'disabled'}}>&#8681; Download</button>
+        <button class="dl-btn" onclick="copyBucket('${{b.suffix}}', this)"
+                title="copy hostnames/IPs of this list to clipboard"
+                ${{b.list.length ? '' : 'disabled'}}>Copy</button></span>
+      </h3>
       <div class="bucket-body">
         <div class="tag-list">${{tags(b.list, b.cls, b.fn)}}</div>
       </div>
     </div>`).join('');
+  wasCollapsed.forEach(s => {{
+    const el = document.getElementById('bucket-' + s);
+    if (el) el.classList.add('collapsed');
+  }});
+}}
+
+function toggleBucket(suffix) {{
+  const el = document.getElementById('bucket-' + suffix);
+  if (el) el.classList.toggle('collapsed');
 }}
 
 function stateOrder(h) {{
@@ -1221,7 +1393,7 @@ def main():
         fh.write(strip_ansi(_buf.getvalue()))
 
     # ── save HTML report ──
-    report_data = build_report_data(hosts, host_order, filename, rows_read)
+    report_data = build_report_data(hosts, host_order, filename, rows_read, base)
     generate_html(report_data, html_path)
 
     # ── version check ──
