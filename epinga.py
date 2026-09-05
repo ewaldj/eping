@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.78'
+version = '1.88'
 
 import re
 import os
@@ -531,6 +531,7 @@ def generate_html(data, out_path):
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>epinga – {data['filename']}</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzRhM2IzNCI+CiAgPGVsbGlwc2UgY3g9IjEyIiBjeT0iMTYuNSIgcng9IjUuNCIgcnk9IjQuMyIvPgogIDxlbGxpcHNlIGN4PSI1LjIiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjE4LjgiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjguOSIgY3k9IjUuNiIgcng9IjIuNCIgcnk9IjMuMSIvPgogIDxlbGxpcHNlIGN4PSIxNS4xIiBjeT0iNS42IiByeD0iMi40IiByeT0iMy4xIi8+Cjwvc3ZnPg==">
 <style>
 :root {{
   --bg:      #0d1117;
@@ -579,6 +580,16 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .card.flap  .num {{ color: var(--orange); }}
 .card.down  .num {{ color: var(--red);    }}
 .card.nodns .num {{ color: var(--red);    }}
+.cards {{ align-items: center; }}
+.side-widget {{ margin-left: auto; width: 190px; display: flex; justify-content: center; }}
+.cat-link {{ display: block; line-height: 0; }}
+.cat {{ height: 90px; width: auto; display: block; filter: drop-shadow(0 4px 10px rgba(0,0,0,.25)); }}
+.cat .tail {{ transform-origin: 152px 300px; animation: wag 2.6s ease-in-out infinite; }}
+.cat .lid  {{ transform-origin: center; animation: blink 5s infinite; }}
+@keyframes wag {{ 0%,100%{{ transform: rotate(0deg); }} 50%{{ transform: rotate(-11deg); }} }}
+@keyframes blink {{ 0%,94%,100%{{ transform: scaleY(0); }} 96%,98%{{ transform: scaleY(1); }} }}
+@media (prefers-reduced-motion: reduce) {{ .cat .tail, .cat .lid {{ animation: none; }} }}
+.paw-title {{ color: var(--dim); vertical-align: -2px; margin-right: 4px; }}
 
 /* ── toolbar ── */
 .toolbar {{ display: flex; gap: 10px; padding: 0 24px 12px; flex-wrap: wrap;
@@ -595,6 +606,11 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .toolbar button:hover {{ border-color: var(--cyan); }}
 .toolbar button.active {{ background: var(--orange); border-color: var(--orange); color: var(--bg); font-weight: 600; }}
 #btnShowIp.active {{ background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }}
+.toolbar .site-link {{ display: flex; align-items: center; gap: 6px;
+  color: var(--dim); text-decoration: none; font-size: 12px;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); }}
+.toolbar .site-link:hover {{ color: var(--cyan); border-color: var(--cyan); }}
+.toolbar .site-link svg {{ flex: none; }}
 
 /* ── table ── */
 .tbl-wrap {{ padding: 0 24px 24px; overflow-x: auto; }}
@@ -699,15 +715,25 @@ tr.hidden {{ display: none; }}
 .theme-btn:hover {{ background: var(--border); }}
 
 /* ── footer ── */
-footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
+footer {{ display:flex; align-items:center; justify-content:center; gap:8px;
+          padding:16px; color:var(--dim); font-size:11px;
           border-top:1px solid var(--border); }}
+footer svg {{ flex:none; }}
+footer a {{ color: inherit; text-decoration: underline; text-decoration-color: var(--border); }}
+footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
 </style>
 </head>
 <body>
 
 <div class="hdr">
   <div class="hdr-left">
-    <h1>epinga &nbsp;·&nbsp; Analysis Report</h1>
+    <h1><svg class="paw-title" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+      <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+      <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+      <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+      <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+    </svg>epinga &nbsp;·&nbsp; Analysis Report</h1>
     <div class="meta">
       File: <strong>{data['filename']}</strong> &nbsp;|&nbsp;
       Generated: {data['generated']} &nbsp;|&nbsp;
@@ -725,6 +751,55 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
   <div class="card flap"><div class="num">{n_flap}</div> <div class="lbl">FLAPPING</div></div>
   <div class="card down"><div class="num">{n_down}</div> <div class="lbl">ALWAYS DOWN</div></div>
   <div class="card nodns"><div class="num">{n_nodns}</div><div class="lbl">NO-DNS</div></div>
+  <div class="side-widget">
+  <a href="https://jeitler.cc/nelly/" class="cat-link" target="_blank" rel="noopener" aria-label="More about Nelly">
+  <svg class="cat" viewBox="0 0 320 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cute cartoon cat">
+    <g class="tail">
+      <path d="M152 300 C 220 312, 268 286, 262 236 C 259 208, 232 200, 222 220 C 214 236, 232 244, 240 232"
+            pathLength="100" fill="none" stroke="#fdfaf6" stroke-width="17" stroke-linecap="round"/>
+      <path d="M152 300 C 220 312, 268 286, 262 236 C 259 208, 232 200, 222 220 C 214 236, 232 244, 240 232"
+            pathLength="100" fill="none" stroke="#3f3733" stroke-width="17" stroke-linecap="round"
+            stroke-dasharray="24 100" stroke-dashoffset="-6"/>
+      <path d="M152 300 C 220 312, 268 286, 262 236 C 259 208, 232 200, 222 220 C 214 236, 232 244, 240 232"
+            pathLength="100" fill="none" stroke="#f0a049" stroke-width="17" stroke-linecap="round"
+            stroke-dasharray="26 100" stroke-dashoffset="-40"/>
+      <path d="M152 300 C 220 312, 268 286, 262 236 C 259 208, 232 200, 222 220 C 214 236, 232 244, 240 232"
+            pathLength="100" fill="none" stroke="#3f3733" stroke-width="17" stroke-linecap="round"
+            stroke-dasharray="20 100" stroke-dashoffset="-76"/>
+    </g>
+    <ellipse cx="160" cy="252" rx="86" ry="66" fill="#fdfaf6"/>
+    <path d="M92 216 C 108 200, 138 198, 150 214 C 160 228, 140 246, 118 244 C 100 242, 86 230, 92 216 Z" fill="#f0a049"/>
+    <path d="M206 288 C 226 280, 240 262, 238 244 C 226 268, 208 276, 192 278 Z" fill="#3f3733"/>
+    <ellipse cx="126" cy="308" rx="26" ry="15" fill="#fdfaf6" stroke="#e8ded4" stroke-width="2"/>
+    <ellipse cx="194" cy="308" rx="26" ry="15" fill="#fdfaf6" stroke="#e8ded4" stroke-width="2"/>
+    <path d="M118 306v7M126 304v9M134 306v7" stroke="#e0d3c7" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M186 306v7M194 304v9M202 306v7" stroke="#e0d3c7" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M84 108 L 82 46 L 132 82 Z" fill="#f0a049"/>
+    <path d="M92 100 L 91 64 L 122 86 Z" fill="#ffc0cb"/>
+    <path d="M236 108 L 238 46 L 188 82 Z" fill="#3f3733"/>
+    <path d="M228 100 L 229 64 L 198 86 Z" fill="#ffc0cb"/>
+    <ellipse cx="160" cy="146" rx="88" ry="78" fill="#fdfaf6"/>
+    <path d="M160 68 C 200 68, 234 92, 242 128 C 226 140, 200 132, 186 112 C 176 96, 168 78, 160 68 Z" fill="#3f3733"/>
+    <path d="M160 68 C 122 70, 92 92, 82 122 C 100 130, 122 120, 134 102 C 143 88, 152 76, 160 68 Z" fill="#f0a049"/>
+    <path d="M232 176 C 224 196, 208 210, 190 216 C 200 196, 214 182, 232 176 Z" fill="#f0a049"/>
+    <ellipse cx="128" cy="150" rx="15" ry="17" fill="#3f3733"/>
+    <ellipse cx="192" cy="150" rx="15" ry="17" fill="#3f3733"/>
+    <circle cx="133" cy="144" r="5.5" fill="#fff"/>
+    <circle cx="197" cy="144" r="5.5" fill="#fff"/>
+    <circle cx="124" cy="157" r="2.5" fill="#fff" opacity=".8"/>
+    <circle cx="188" cy="157" r="2.5" fill="#fff" opacity=".8"/>
+    <ellipse class="lid" cx="128" cy="150" rx="16" ry="18" fill="#fdfaf6"/>
+    <ellipse class="lid" cx="192" cy="150" rx="16" ry="18" fill="#fdfaf6"/>
+    <ellipse cx="104" cy="176" rx="15" ry="10" fill="#ffb7c5" opacity=".65"/>
+    <ellipse cx="216" cy="176" rx="15" ry="10" fill="#ffb7c5" opacity=".65"/>
+    <path d="M152 176 L 168 176 L 160 186 Z" fill="#ff9aa8"/>
+    <path d="M160 186 C 160 196, 150 198, 145 192 M160 186 C 160 196, 170 198, 175 192"
+          fill="none" stroke="#3f3733" stroke-width="3" stroke-linecap="round"/>
+    <path d="M96 166 L 60 158 M96 176 L 58 178 M96 186 L 62 196" stroke="#c9b8ab" stroke-width="3" stroke-linecap="round"/>
+    <path d="M224 166 L 260 158 M224 176 L 262 178 M224 186 L 258 196" stroke="#c9b8ab" stroke-width="3" stroke-linecap="round"/>
+  </svg>
+  </a>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -747,12 +822,31 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
     <option value="changes">Changes</option>
   </select>
   <button id="btnShowIp" onclick="toggleShowIp()"
-          title="Quick switch between showing hostname or IP for hosts monitored under both">Show IP</button>
+          title="Switch every host's displayed label between hostname and IP">IP View</button>
   <select id="dedupSel" onchange="onDedupSelectChange()" title="Deduplication mode for hosts monitored under both a hostname and an IP">
     <option value="" selected>No Deduplication</option>
     <option value="name">Hostname</option>
     <option value="ip">IP</option>
   </select>
+  <div class="side-widget">
+  <a class="site-link" href="https://www.jeitler.cc" target="_blank" rel="noopener">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+      <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+      <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+      <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+      <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+    </svg>
+    www.jeitler.cc
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+      <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+      <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+      <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+      <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+    </svg>
+  </a>
+  </div>
 </div>
 
 <div class="bucket hostlist" id="bucket-hostlist">
@@ -785,8 +879,25 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 <div class="buckets" id="buckets"></div>
 
 <footer>
-  epinga.py v{version} &nbsp;·&nbsp;
-  <a href="https://www.jeitler.cc" target="_blank">www.jeitler.cc</a>
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+    <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+    <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+    <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+    <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+  </svg>
+  <span>epinga.py v{version} &nbsp;·&nbsp;
+  &copy; Ewald Jeitler &nbsp;·&nbsp;
+  supervised by <a href="https://jeitler.cc/nelly/" target="_blank" rel="noopener">Nelly</a> &nbsp;·&nbsp;
+  <a href="https://tools.jeitler.cc" target="_blank" rel="noopener">tools.jeitler.cc</a> &nbsp;·&nbsp;
+  <a href="https://www.jeitler.cc" target="_blank" rel="noopener">www.jeitler.cc</a></span>
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+    <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+    <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+    <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+    <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+  </svg>
 </footer>
 
 <script>
@@ -989,7 +1100,7 @@ function isDeduped(h) {{
   return false;   // '' = no deduplication
 }}
 
-// primary label for a host row/tag - IP when 'Show IP' is on and an ip is known,
+// primary label for a host row/tag - IP when 'IP View' is on and an ip is known,
 // hostname otherwise; applied everywhere a host is displayed (table + all buckets)
 function hostLabel(h) {{
   return (showIp && h.ip) ? h.ip : h.name;
