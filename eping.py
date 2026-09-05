@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# eping.py by ewald@jeitler.cc 2024 https://www.jeitler.guru 
+# eping.py by ewald@jeitler.cc 2024 https://www.jeitler.cc 
 # - - - - - - - - - - - - - - - - - - - - - - - -
 # When I wrote this code, only god and 
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.65'
+VERSION = '1.77'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -323,19 +323,30 @@ def resolve_name(name, ttl):
 def resolve_all_ips(name, family=None):
     """Every A/AAAA record for name, sorted numerically for a stable order.
 
-    family: '4' or '6' restricts to that record type; None/omitted uses the global
-    dns_family setting ('4', '6' or 'auto' - A first, AAAA only if no A record, so a
-    AAAA-only name still resolves instead of silently failing like before IPv6 support).
+    family: '4' or '6' sets which record type is preferred; None/omitted uses the
+    global dns_family setting ('4', '6' or 'auto' - A first, AAAA only if no A
+    record). -4/-6 pick a preference, not an exclusive restriction: if the preferred
+    family has no record, the other family is used instead of failing outright - a
+    name reachable only over the non-forced family still resolves and gets pinged.
     Uncached and used only where all addresses matter (prefer-hostname redundancy
     check) or once per name resolution - not hot enough to need caching here."""
     fam = family if family is not None else dns_family
-    af_list = {'4': [socket.AF_INET], '6': [socket.AF_INET6]}.get(
+    af_list = {'4': [socket.AF_INET, socket.AF_INET6],
+              '6': [socket.AF_INET6, socket.AF_INET]}.get(
         fam, [socket.AF_INET, socket.AF_INET6])
     for af in af_list:
         try:
             infos = socket.getaddrinfo(name, None, af, socket.SOCK_DGRAM)
-            ips = sorted(set(i[4][0] for i in infos),
-                        key=lambda a: int(ipaddress.ip_address(a)))
+            ips = set(i[4][0] for i in infos)
+            if af == socket.AF_INET6:
+                # some resolvers (macOS mDNSResponder, DNS64/NAT64 synthesis) return
+                # an IPv4-mapped IPv6 address (::ffff:a.b.c.d) for an AAAA query
+                # against a v4-only name instead of failing - that is not a real
+                # AAAA record and is not a pingable native IPv6 destination (fping -6
+                # on it just reports the host down), so treat it as no AAAA record
+                # and let the loop fall through to plain IPv4 instead
+                ips = set(ip for ip in ips if not ipaddress.ip_address(ip).ipv4_mapped)
+            ips = sorted(ips, key=lambda a: int(ipaddress.ip_address(a)))
             if ips:
                 return ips
         except Exception:
@@ -377,15 +388,123 @@ def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS):
         socket.setdefaulttimeout(old_timeout)
     return results
 
+def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
+                          host_state, up_seen, down_streak):
+    """Rename one host list entry everywhere it is tracked - both host lists,
+    host_state, up_seen, down_streak - preserving history/uptime. A rename, not a
+    delete+re-add. Shared by GET NAMES (IP -> hostname) and IP ONLY (hostname -> IP)."""
+    for lst in (original_hosts_list, active_hosts_list):
+        for i, h in enumerate(lst):
+            if h == old:
+                lst[i] = new
+    if old in host_state:
+        entry    = host_state.pop(old)
+        entry[0] = new
+        host_state[new] = entry
+    if old in up_seen:
+        up_seen.discard(old)
+        up_seen.add(new)
+    if old in down_streak:
+        down_streak[new] = down_streak.pop(old)
+    forget_names([new])   # force a fresh forward lookup for the new identity
+
+def _forward_confirms(name, ip):
+    """True if 'name' has a forward record (A for an IPv4 ip, AAAA for an IPv6 ip)
+    that resolves back to exactly this ip. Guards GET NAMES: a PTR record with no
+    matching forward record must not be used to rename a host, or pinging it
+    afterwards by name would fail (NO-DNS) or silently hit a different address."""
+    try:
+        af = socket.AF_INET6 if ip_version_str(ip) == '6' else socket.AF_INET
+        infos = socket.getaddrinfo(name, None, af, socket.SOCK_DGRAM)
+        ips = set(i[4][0] for i in infos)
+        if af == socket.AF_INET6:
+            ips = set(a for a in ips if not ipaddress.ip_address(a).ipv4_mapped)
+        return ip in ips
+    except Exception:
+        return False
+
+def _get_names_lookup(candidates):
+    """Reverse-DNS 'candidates' via get_names_for_ips(), then for every IP whose PTR
+    name passes the fqdn format check, confirm it forward-resolves back to that same
+    IP (in parallel, same worker budget as the PTR batch). Returns (ptr, fwd_ok): ptr
+    is get_names_for_ips()'s {ip: name_or_None}; fwd_ok is {ip: True/False} for every
+    ip that had a plausible PTR name."""
+    ptr = get_names_for_ips(candidates)
+    checkable = [ip for ip in candidates if ptr.get(ip) and match_re(ptr[ip], fqdn_re)]
+    fwd_ok = {}
+    if checkable:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max(1, min(DNS_RESOLVERS, len(checkable)))) as pool:
+            futs = {pool.submit(_forward_confirms, ptr[ip], ip): ip for ip in checkable}
+            for fut in concurrent.futures.as_completed(futs):
+                fwd_ok[futs[fut]] = fut.result()
+    return ptr, fwd_ok
+
+def _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
+                     host_state, up_seen, down_streak):
+    """Apply reverse-DNS results already looked up for 'candidates' (ptr/fwd_ok, from
+    _get_names_lookup()): rename each confirmed IP in place. Pure in-memory work, no
+    I/O - safe to call from the main thread once the lookup has completed.
+
+    Skipped: IPs with no (usable) PTR record, PTR names with no matching forward
+    A/AAAA record back to the same IP, and PTR names that collide with a host
+    already in the list or with another PTR result from this same batch."""
+    # A PTR name claimed by more than one candidate IP (e.g. anycast siblings that
+    # share one reverse record, like 1.1.1.1 / 1.0.0.1 -> one.one.one.one) is
+    # ambiguous: renaming only one of them would make PREFER HOSTNAMES treat the
+    # other as a redundant duplicate and silently drop it from monitoring. Keep both
+    # as plain IPs instead of renaming either. Names that failed the forward check
+    # do not count here either - they will never be renamed, so they must not make
+    # some other, forward-confirmed candidate look ambiguous.
+    name_counts = {}
+    for ip in candidates:
+        name = ptr.get(ip)
+        if name and match_re(name, fqdn_re) and fwd_ok.get(ip):
+            name_counts[name.lower()] = name_counts.get(name.lower(), 0) + 1
+
+    existing   = set(h.lower() for h in original_hosts_list)
+    used_names = set()
+    renamed_n, unresolved, no_fwd, collisions, shared_ptr = 0, 0, 0, 0, 0
+    for ip in candidates:
+        name = ptr.get(ip)
+        if not name or not match_re(name, fqdn_re):
+            unresolved += 1
+            continue
+        if not fwd_ok.get(ip):
+            no_fwd += 1
+            continue
+        key = name.lower()
+        if name_counts.get(key, 0) > 1:
+            shared_ptr += 1
+            continue
+        if key in existing or key in used_names:
+            collisions += 1
+            continue
+        used_names.add(key)
+        _rename_host_in_place(ip, name, original_hosts_list, active_hosts_list,
+                              host_state, up_seen, down_streak)
+        renamed_n += 1
+
+    parts = [str(renamed_n) + ' renamed']
+    if unresolved:
+        parts.append(str(unresolved) + ' no PTR')
+    if no_fwd:
+        parts.append(str(no_fwd) + ' no matching A/AAAA (kept as IP)')
+    if collisions:
+        parts.append(str(collisions) + ' name collision')
+    if shared_ptr:
+        parts.append(str(shared_ptr) + ' shared PTR (kept as IP)')
+    return 'get names: ' + ', '.join(parts)
+
 def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
                     down_streak, dns_ttl):
-    """[G] GET NAMES: reverse-DNS every raw-IP host that has no hostname counterpart
-    yet, and rename it in place (host_state, both host lists, up_seen, down_streak) so
-    history/uptime survive - a rename, not a delete+re-add. Returns a status message.
-
-    Skipped: IPs already covered by a hostname entry, IPs with no (usable) PTR record,
-    and PTR names that collide with a host already in the list or with another PTR
-    result from this same batch."""
+    """[G] GET NAMES, synchronous: reverse-DNS every raw-IP host that has no
+    hostname counterpart yet, and rename it in place (host_state, both host lists,
+    up_seen, down_streak) so history/uptime survive - a rename, not a delete+re-add.
+    Returns a status message. Blocks until every PTR lookup is done or times out -
+    only used at startup (-gn), before the CLI/web loop exists to stay responsive
+    for. The interactive [G] key/cmd runs this in the background instead, see
+    get_names_start()/get_names_finish()."""
     covered_ips = set()
     for h in original_hosts_list:
         if not is_ip_host(h):
@@ -398,59 +517,47 @@ def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
     if not candidates:
         return 'get names: no eligible IP host(s)'
 
-    ptr = get_names_for_ips(candidates)
+    ptr, fwd_ok = _get_names_lookup(candidates)
+    return _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
+                            host_state, up_seen, down_streak)
 
-    # A PTR name claimed by more than one candidate IP (e.g. anycast siblings that
-    # share one reverse record, like 1.1.1.1 / 1.0.0.1 -> one.one.one.one) is
-    # ambiguous: renaming only one of them would make PREFER HOSTNAMES treat the
-    # other as a redundant duplicate and silently drop it from monitoring. Keep both
-    # as plain IPs instead of renaming either.
-    name_counts = {}
-    for ip in candidates:
-        name = ptr.get(ip)
-        if name and match_re(name, fqdn_re):
-            name_counts[name.lower()] = name_counts.get(name.lower(), 0) + 1
+def get_names_start(original_hosts_list, dns_ttl):
+    """[G] GET NAMES, background: compute the candidate IPs (fast, in-memory) and
+    kick off the slow part - the PTR lookups plus the forward A/AAAA confirmation -
+    on a daemon thread, so the caller's main loop is never blocked waiting on DNS.
+    Returns (thread, result_holder, candidates); thread is None (nothing started)
+    when there is nothing to look up. Poll thread.is_alive() and, once False, call
+    get_names_finish() with result_holder."""
+    covered_ips = set()
+    for h in original_hosts_list:
+        if not is_ip_host(h):
+            ip = resolve_name(h, dns_ttl)
+            if ip:
+                covered_ips.add(ip)
 
-    existing   = set(h.lower() for h in original_hosts_list)
-    used_names = set()
-    renamed_n, unresolved, collisions, shared_ptr = 0, 0, 0, 0
-    for ip in candidates:
-        name = ptr.get(ip)
-        if not name or not match_re(name, fqdn_re):
-            unresolved += 1
-            continue
-        key = name.lower()
-        if name_counts.get(key, 0) > 1:
-            shared_ptr += 1
-            continue
-        if key in existing or key in used_names:
-            collisions += 1
-            continue
-        used_names.add(key)
-        for lst in (original_hosts_list, active_hosts_list):
-            for i, h in enumerate(lst):
-                if h == ip:
-                    lst[i] = name
-        if ip in host_state:
-            entry    = host_state.pop(ip)
-            entry[0] = name
-            host_state[name] = entry
-        if ip in up_seen:
-            up_seen.discard(ip)
-            up_seen.add(name)
-        if ip in down_streak:
-            down_streak[name] = down_streak.pop(ip)
-        forget_names([name])   # force a fresh forward lookup for the new identity
-        renamed_n += 1
+    candidates = [h for h in original_hosts_list
+                 if is_ip_host(h) and h not in covered_ips]
+    if not candidates:
+        return None, None, candidates
 
-    parts = [str(renamed_n) + ' renamed']
-    if unresolved:
-        parts.append(str(unresolved) + ' no PTR')
-    if collisions:
-        parts.append(str(collisions) + ' name collision')
-    if shared_ptr:
-        parts.append(str(shared_ptr) + ' shared PTR (kept as IP)')
-    return 'get names: ' + ', '.join(parts)
+    result_holder = {}
+    def _worker():
+        ptr, fwd_ok = _get_names_lookup(candidates)
+        result_holder['ptr']    = ptr
+        result_holder['fwd_ok'] = fwd_ok
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    return thread, result_holder, candidates
+
+def get_names_finish(candidates, result_holder, original_hosts_list, active_hosts_list,
+                     host_state, up_seen, down_streak):
+    """[G] GET NAMES, background: apply the PTR/forward-check results a
+    get_names_start() thread has finished computing. Call only after
+    thread.is_alive() is False."""
+    ptr    = result_holder.get('ptr', {})    if result_holder else {}
+    fwd_ok = result_holder.get('fwd_ok', {}) if result_holder else {}
+    return _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
+                            host_state, up_seen, down_streak)
 
 def prepare_targets(hosts, ttl):
     """Map the host list to what is actually handed to fping.
@@ -727,6 +834,18 @@ def build_display(active_hosts_list, host_state, sort_mode=0, tz_offset=0,
         out.extend(rows_g)
     return out
 
+def apply_match_filter(rows, pattern):
+    """Pure display filter: keep only rows whose display name (rows[i][0]) or
+    resolved/pinged IP (rows[i][8], when present) matches 'pattern' (an already-
+    compiled regex). This is applied after build_display(), on the rows about to be
+    shown - it never touches active_hosts_list, so every host keeps being pinged on
+    every round regardless of what the filter currently hides. Pass pattern=None for
+    no-op (filter off)."""
+    if pattern is None:
+        return rows
+    return [r for r in rows
+           if pattern.search(r[0]) or (len(r) > 8 and r[8] and pattern.search(r[8]))]
+
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF):
     """Host list for the given view mode - a snapshot, taken when the view switches."""
@@ -759,6 +878,63 @@ def apply_prefer_hostname(hosts_list, dns_ttl):
     return [h for h in hosts_list
             if not (is_ip_host(h) and h in hostname_ips)]
 
+def apply_ip_only_on(original_hosts_list, active_hosts_list, host_state, up_seen,
+                     down_streak, dns_ttl):
+    """[I] IP ONLY (turning on): resolve every hostname entry to its address -
+    whichever family resolve_name() returns (A preferred by default, or whichever
+    family -4/-6 forces - no per-host choice, v4/v6 are not distinguished here) - and
+    rename it to that address in place, so pinging happens by IP, not name. History
+    and uptime carry over (see _rename_host_in_place). A hostname that does not
+    resolve is left untouched. A hostname whose resolved address collides with a host
+    already in the list (raw IP or another hostname resolving to the same address) is
+    dropped entirely - the address is already tracked under the other entry, so
+    keeping both would be a redundant duplicate. Dropped hosts are not restored when
+    IP ONLY is switched off. Returns (ip_map, message); ip_map is {ip: original_
+    hostname}, kept so IP ONLY can be turned back off later and restore the renamed
+    entries."""
+    existing = set(h.lower() for h in original_hosts_list)
+    ip_map, unresolved, dropped = {}, 0, 0
+    for h in list(original_hosts_list):
+        if is_ip_host(h):
+            continue
+        ip = resolve_name(h, dns_ttl)
+        if not ip:
+            unresolved += 1
+            continue
+        if ip in ip_map or ip.lower() in existing:
+            for lst in (original_hosts_list, active_hosts_list):
+                if h in lst:
+                    lst.remove(h)
+            host_state.pop(h, None)
+            up_seen.discard(h)
+            down_streak.pop(h, None)
+            dropped += 1
+            continue
+        _rename_host_in_place(h, ip, original_hosts_list, active_hosts_list,
+                              host_state, up_seen, down_streak)
+        ip_map[ip] = h
+        existing.add(ip.lower())
+
+    parts = [str(len(ip_map)) + ' resolved']
+    if unresolved:
+        parts.append(str(unresolved) + ' unresolved')
+    if dropped:
+        parts.append(str(dropped) + ' dropped (duplicate address)')
+    return ip_map, 'ip only: on, ' + ', '.join(parts)
+
+def apply_ip_only_off(ip_map, original_hosts_list, active_hosts_list, host_state,
+                      up_seen, down_streak):
+    """[I] IP ONLY (turning off): restore the original hostname for every entry
+    that apply_ip_only_on renamed to its IP. A host removed or renamed again (e.g. by
+    GET NAMES) meanwhile is left as-is."""
+    restored = 0
+    for ip, name in list(ip_map.items()):
+        if ip in original_hosts_list:
+            _rename_host_in_place(ip, name, original_hosts_list, active_hosts_list,
+                                  host_state, up_seen, down_streak)
+            restored += 1
+    return 'ip only: off, ' + str(restored) + ' restored'
+
 def check_python_version(mrv):
     current_version = sys.version_info
     if current_version[0] == mrv[0] and current_version[1] >= mrv[1]:
@@ -775,7 +951,7 @@ def delete_files(filestring):
         except OSError:
             error_handler('ERROR: unable to delete files' )
     print("Removed all matched files!")
-    error_handler('THX for using eping.py ')
+    error_handler(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
 
 def screen_output(line,coll,text,color,attr_val):
     attr = 0
@@ -814,8 +990,13 @@ def screen_print_horizonta_line (message,color_pair,line):
 def sigint_handler(signal, frame):
     screen=curses.initscr()
     curses.endwin()
-    print ('THX for using eping.py ')
-    sys.exit(0)
+    print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+    sys.stdout.flush()
+    # os._exit(), not sys.exit(): a running [G] GET NAMES background lookup uses a
+    # ThreadPoolExecutor whose worker threads are not daemons, so sys.exit() would
+    # block here until every in-flight PTR lookup finishes (or times out) instead of
+    # stopping right away.
+    os._exit(0)
 
 def parse_hosts_from_text(text, stats=None):
     """Extract hosts from arbitrary text (host file, upload, ADD FILE).
@@ -1199,6 +1380,7 @@ web_state = {
     'filter_mode'      : 0,
     'filter_label'     : FILTER_MODES[0][0],
     'prefer_hostname'  : False,
+    'ip_only_mode'     : False,
     'sort_mode'        : 0,
     'readonly'         : False,
     'learning_phase'   : True,
@@ -1302,7 +1484,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
    <span id="ctrls">
     <button id="btnUp" title="cycle: ALL HOSTS / UP-ONLY / UP+FLAPPING">ALL HOSTS</button>
     <button id="btnPreferHost" title="skip a raw IP host when the same address is already covered by a hostname">PREFER HOSTNAMES</button>
+    <button id="btnIpOnly" title="resolve every hostname to its IP (v4/v6, whichever resolves) and ping/track it by address instead of by name">IP ONLY</button>
     <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
+    <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="match filter: regex on host/IP, blank = off">
+    <button id="btnMatchFilter">SET FILTER</button>
+    <button id="btnClearFilter" title="disable the match filter">CLEAR FILTER</button>
     <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
       <option value="0">sort: ADDRESS</option>
       <option value="1">sort: UP/FLAP/DOWN</option>
@@ -1386,7 +1572,9 @@ var PENDING = {up_only:'switching view ...', sort:'sorting ...', add:'adding hos
                del:'removing host(s) ...', set_ref:'setting reference ...',
                clear:'clearing all hosts ...', zero:'resetting change counters ...',
                prefer_hostname:'toggling prefer hostnames ...',
+               ip_only:'toggling ip only ...',
                get_names:'resolving names ...',
+               match_filter:'applying filter ...',
                exit:'stopping eping ...'};
 var pending = false, lastServerMsg = null;
 
@@ -1403,7 +1591,18 @@ function post(cmd, value){
 }
 document.getElementById('btnUp').onclick   = function(){ post('up_only'); };
 document.getElementById('btnPreferHost').onclick = function(){ post('prefer_hostname'); };
+document.getElementById('btnIpOnly').onclick = function(){ post('ip_only'); };
 document.getElementById('btnGetNames').onclick = function(){ post('get_names'); };
+document.getElementById('btnMatchFilter').onclick = function(){
+  post('match_filter', document.getElementById('matchInput').value.trim());
+};
+document.getElementById('btnClearFilter').onclick = function(){
+  document.getElementById('matchInput').value = '';
+  post('match_filter', '');
+};
+document.getElementById('matchInput').addEventListener('keydown', function(e){
+  if(e.key === 'Enter'){ post('match_filter', this.value.trim()); }
+});
 document.getElementById('sortSel').onchange = function(){
   sortKey = null;                       // server order wins again after a mode change
   post('sort', this.value);
@@ -1636,6 +1835,12 @@ function poll(){
     bu.className   = s.filter_mode ? 'on' : '';
     var bp = document.getElementById('btnPreferHost');
     bp.className   = s.prefer_hostname ? 'on' : '';
+    var bi = document.getElementById('btnIpOnly');
+    bi.className   = s.ip_only_mode ? 'on' : '';
+    var bm = document.getElementById('btnMatchFilter');
+    bm.className   = s.match_filter ? 'on' : '';
+    var mi = document.getElementById('matchInput');
+    if(document.activeElement !== mi) mi.value = s.match_filter || '';
     var ss = document.getElementById('sortSel');
     if(document.activeElement !== ss) ss.value = String(s.sort_mode || 0);
     ss.className = s.sort_mode ? 'on' : '';
@@ -1646,7 +1851,7 @@ function poll(){
     var b = document.getElementById('banner');
     if(s.update_available){ b.style.display='block';
       b.innerHTML = 'Update available &ndash; please visit '
-        +'<a style="color:inherit" href="https://www.jeitler.guru" target="_blank" rel="noopener">https://www.jeitler.guru</a>'; }
+        +'<a style="color:inherit" href="https://www.jeitler.cc" target="_blank" rel="noopener">https://www.jeitler.cc</a>'; }
     else { b.style.display='none'; }
 
     var lz = document.getElementById('learn');
@@ -1753,7 +1958,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'get_names'):
+        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -1802,7 +2007,8 @@ def web_rows(display_list):
 def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
-                scan_info='', sort_mode=0, prefer_hostname=False):
+                scan_info='', sort_mode=0, prefer_hostname=False, ip_only_mode=0,
+                match_filter=''):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
     with web_lock:
@@ -1819,6 +2025,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'filter_mode'     : filter_mode,
             'filter_label'    : FILTER_MODES[filter_mode][0],
             'prefer_hostname' : prefer_hostname,
+            'ip_only_mode'    : ip_only_mode,
             'sort_mode'       : sort_mode,
             'learning_phase'  : learning_phase,
             'learning_run'    : learning_run,
@@ -1826,6 +2033,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'update_available': update_available,
             'message'         : message,
             'scan_info'       : scan_info,
+            'match_filter'    : match_filter,
         })
 
 
@@ -1854,21 +2062,40 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     active_hosts_list = list(original_hosts_list)
     filter_mode       = 0
     prefer_hostname   = bool(args.prefer_hostname)
+    ip_only_mode      = False
+    ip_only_map       = {}
     sort_mode         = 0
     down_streak       = {}
     learning_done     = (up_check_runs == 0)
     up_seen           = set()
     run_counter       = 1
     message           = ''
+    gn_thread         = None   # [G] background PTR lookup - see get_names_start/finish
+    gn_result         = None
+    gn_candidates     = []
+    match_filter_re   = None   # [M] display-only regex filter - active_hosts_list unaffected
+    match_filter_text = ''
 
     # -gn / -ph: applied once, before the first ping round
     if args.get_names:
         apply_get_names(original_hosts_list, active_hosts_list, host_state,
                         up_seen, down_streak, int(args.dns_ttl))
-    if prefer_hostname:
-        active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+    if args.ip_only:
+        ip_only_map, _ = apply_ip_only_on(original_hosts_list, active_hosts_list,
+                                          host_state, up_seen, down_streak, int(args.dns_ttl))
+        ip_only_mode = True
+    active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                         if prefer_hostname else active_hosts_list)
 
     while True:
+        # --- [G] background PTR lookup: apply results once the thread is done ---
+        gn_just_finished = False
+        if gn_thread is not None and not gn_thread.is_alive():
+            message = get_names_finish(gn_candidates, gn_result, original_hosts_list,
+                                       active_hosts_list, host_state, up_seen, down_streak)
+            gn_thread         = None
+            gn_just_finished  = True
+
         # --- commands coming from the browser ---
         with web_lock:
             cmds = list(web_commands)
@@ -1892,9 +2119,42 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
                                      if prefer_hostname else base_list)
                 message = 'prefer hostnames: ' + ('on' if prefer_hostname else 'off')
+            elif cmd == 'ip_only':
+                if not ip_only_mode:
+                    ip_only_map, io_msg = apply_ip_only_on(
+                        original_hosts_list, active_hosts_list, host_state,
+                        up_seen, down_streak, int(args.dns_ttl))
+                    ip_only_mode = True
+                else:
+                    io_msg = apply_ip_only_off(ip_only_map, original_hosts_list,
+                                               active_hosts_list, host_state,
+                                               up_seen, down_streak)
+                    ip_only_map = {}
+                    ip_only_mode = False
+                message = io_msg
             elif cmd == 'get_names':
-                message = apply_get_names(original_hosts_list, active_hosts_list, host_state,
-                                          up_seen, down_streak, int(args.dns_ttl))
+                if gn_thread is not None and gn_thread.is_alive():
+                    message = 'get names: already running'
+                else:
+                    gn_thread, gn_result, gn_candidates = get_names_start(
+                        original_hosts_list, int(args.dns_ttl))
+                    if gn_thread is None:
+                        message = 'get names: no eligible IP host(s)'
+                    else:
+                        message = ('get names: running in background (%d host(s))'
+                                  % len(gn_candidates))
+            elif cmd == 'match_filter':
+                value = value.strip()
+                if not value:
+                    match_filter_re, match_filter_text = None, ''
+                    message = 'match filter: off'
+                else:
+                    try:
+                        match_filter_re   = re.compile(value, re.IGNORECASE)
+                        match_filter_text = value
+                        message = 'match filter: on'
+                    except re.error as e:
+                        message = 'match filter: invalid regex - ' + str(e)
             elif cmd == 'sort':
                 try:
                     sort_mode = int(value) % len(SORT_MODES)
@@ -1965,14 +2225,19 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     web_state['stopped'] = True
                     web_state['message'] = 'stopped'
                 time.sleep(1.5)   # let the browser pick up the final status
-                print('THX for using eping.py ')
-                sys.exit(0)
+                print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+                sys.stdout.flush()
+                # os._exit(), not sys.exit(): see sigint_handler() for why - a
+                # running [G] GET NAMES lookup must not delay shutdown.
+                os._exit(0)
 
-        if cmds:
+        if cmds or gn_just_finished:
             # view and order are pure display changes - show them at once instead of
             # letting the browser wait for the running round, same as the CLI does
             quick    = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
+            if match_filter_re is not None:
+                quick = apply_match_filter(quick, match_filter_re)
             quick_up = sum(1 for e in quick if 'UP' in e[1])
             with web_lock:
                 web_state['message']      = message
@@ -1983,7 +2248,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['filter_mode']  = filter_mode
                 web_state['filter_label'] = FILTER_MODES[filter_mode][0]
                 web_state['prefer_hostname'] = prefer_hostname
+                web_state['ip_only_mode'] = ip_only_mode
                 web_state['sort_mode']    = sort_mode
+                web_state['match_filter'] = match_filter_text
 
         # --- learning phase ---
         if not learning_done:
@@ -1993,8 +2260,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 learning_done = True
                 active_hosts_list = sorted(up_seen, key=lambda h: (
                     int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')))
-                if prefer_hostname:
-                    active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                                     if prefer_hostname else active_hosts_list)
                 learning_phase = True
         else:
             learning_phase = True
@@ -2030,6 +2297,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         _t = time.time()
         display_list = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
+        if match_filter_re is not None:
+            display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
         phase['build'] = time.time() - _t
@@ -2063,7 +2332,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     filter_mode,
                     learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available,
-                    tz_offset, message, scan_info, sort_mode, prefer_hostname)
+                    tz_offset, message, scan_info, sort_mode, prefer_hostname, ip_only_mode,
+                    match_filter_text)
 
         run_counter += 1
 
@@ -2113,9 +2383,10 @@ if __name__=='__main__':
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
     family_group = parser.add_mutually_exclusive_group()
-    family_group.add_argument('-4', '--force_ipv4', action="store_true", dest='force_ipv4', help="only resolve/ping IPv4 (A records) - default: IPv4 first, IPv6 only for names with no A record")
-    family_group.add_argument('-6', '--force_ipv6', action="store_true", dest='force_ipv6', help="only resolve/ping IPv6 (AAAA records)")
+    family_group.add_argument('-4', '--force_ipv4', action="store_true", dest='force_ipv4', help="prefer IPv4 (A records); falls back to IPv6 if a name has no A record (default preference)")
+    family_group.add_argument('-6', '--force_ipv6', action="store_true", dest='force_ipv6', help="prefer IPv6 (AAAA records); falls back to IPv4 if a name has no AAAA record")
     parser.add_argument('-ph', '--prefer_hostname', action="store_true", dest='prefer_hostname', help="start with PREFER HOSTNAMES active - skip a raw IP host when the same address is already covered by a hostname entry (toggle later with [P] / the web button)")
+    parser.add_argument('-ipo', '--ip_only', action="store_true", dest='ip_only', help="start with IP ONLY active - resolve every hostname to its address (v4 or v6, whichever resolves - not distinguished) and ping/track it by IP instead of by name (toggle later with [I] / the web button)")
     parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
     parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN (default: " + str(DOWN_RETRIES_DEF) + ", -1 = treat them like every other host)")
     parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per retry group plus dns/state/build/wait/draw")
@@ -2305,8 +2576,12 @@ if __name__=='__main__':
     # create sample file if not exists and no special file is given
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
         data = ["# eping hosts - IPs, hostnames and CIDR networks, '#' starts a comment\n",
-                "# a network is expanded to every address in it, e.g.: 192.168.99.0/29\n",
-                "127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222 \n", "208.67.220.220 \n","www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n", "ö3.at www.orf.at www.jeitler.guru\n" ]
+                "# a network is expanded to every address in it, e.g.: 192.168.99.0/29 2603:c020:8016:1313::10 2603:c020:8016:1313::10/128\n",
+                "\n",
+                "127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222\n", "208.67.220.220\n",
+                "www.heise.de 193.99.144.85\n", "www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n",
+                "ö3.at www.orf.at\n", "::1\n", "ipv4.jeitler.cc\n", "ipv6.jeitler.cc\n",
+                "www.jeitler.cc\n", "2603:c020:8016:1313::10\n" ]
         try:
             create_file_if_not_exists(default_hostfile,data)
         except TypeError as error_msg:
@@ -2384,8 +2659,10 @@ if __name__=='__main__':
         with web_lock:
             web_state['version'] = version
         def _web_sigint(sig, frame):
-            print('\nTHX for using eping.py ')
-            sys.exit(0)
+            print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
+            sys.stdout.flush()
+            # os._exit(), not sys.exit(): see sigint_handler() for why.
+            os._exit(0)
         signal.signal(signal.SIGINT, _web_sigint)
         run_web_mode(list(summary_hosts_list), host_state, args, logfile_file_name,
                      _update_available, int(args.up_hosts_check), down_retries, full_sweep,
@@ -2504,26 +2781,6 @@ if __name__=='__main__':
         time.sleep(seconds)
         screen.clear()
 
-    def notice_confirm(text, color=2):
-        """Message box that stays until ENTER (or ESC) is pressed, instead of
-        auto-dismissing - for messages worth actually reading (e.g. GET NAMES)."""
-        rows, cols = screen.getmaxyx()
-        text  = ' ' + text + '  [ENTER]=ok '
-        box_w = min(len(text), max(10, cols - 4))
-        box_x = max(0, (cols - box_w) // 2)
-        box_y = max(0, rows // 2)
-        screen_output(box_y - 1, box_x, '+' + '-' * (box_w - 2) + '+', color, 1)
-        screen_output(box_y,     box_x, text[:box_w], color, 1)
-        screen_output(box_y + 1, box_x, '+' + '-' * (box_w - 2) + '+', color, 1)
-        screen.refresh()
-        screen.nodelay(False)
-        while True:
-            ch = screen.getch()
-            if ch in (10, 13, 27):     # ENTER or ESC
-                break
-        screen.nodelay(True)
-        screen.clear()
-
     # non-blocking keyboard input - main thread only, no separate thread
     screen.nodelay(True)
 
@@ -2537,6 +2794,8 @@ if __name__=='__main__':
     have_data      = False
     filter_mode    = 0
     prefer_hostname = bool(args.prefer_hostname)
+    ip_only_mode   = False
+    ip_only_map    = {}
     sort_mode      = 0
     display_list   = []
     hosts_count_up = 0
@@ -2546,14 +2805,23 @@ if __name__=='__main__':
     used_scan      = ''
     learning_phase = True
     update_available_cli = bool(remote_version) and (remote_version > version)
+    gn_thread      = None   # [G] background PTR lookup - see get_names_start/finish
+    gn_result      = None
+    gn_candidates  = []
+    match_filter_re   = None   # [M] display-only regex filter - active_hosts_list unaffected
+    match_filter_text = ''
 
     # -gn / -ph: applied once, before the first ping round - by then original/active
     # host list, host_state, up_seen and down_streak all exist in this scope
     if args.get_names:
         apply_get_names(original_hosts_list, active_hosts_list, host_state,
                         up_seen, down_streak, int(args.dns_ttl))
-    if prefer_hostname:
-        active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+    if args.ip_only:
+        ip_only_map, _ = apply_ip_only_on(original_hosts_list, active_hosts_list,
+                                          host_state, up_seen, down_streak, int(args.dns_ttl))
+        ip_only_mode = True
+    active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                         if prefer_hostname else active_hosts_list)
 
     # --web_view: read only browser view next to the terminal. The curses loop stays the
     # only driver - one process, one scan, two ways to look at it. Two separate eping
@@ -2571,7 +2839,8 @@ if __name__=='__main__':
         web_publish(display_list, run_counter, run_time, hosts_count_up, hosts_count_down,
                     filter_mode, learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available_cli,
-                    tz_offset, msg, used_scan, sort_mode, prefer_hostname)
+                    tz_offset, msg, used_scan, sort_mode, prefer_hostname, ip_only_mode,
+                    match_filter_text)
 
 
     def rebuild_display():
@@ -2583,6 +2852,8 @@ if __name__=='__main__':
         global display_list, hosts_count_up, hosts_count_down
         display_list = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
+        if match_filter_re is not None:
+            display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
 
@@ -2594,7 +2865,14 @@ if __name__=='__main__':
         """
         rows, cols = screen.getmaxyx()
         if remote_version and remote_version > version:
-            screen_print_center_top('Update available - please visit https://www.jeitler.guru', 3)
+            screen_print_center_top('Update available - please visit https://www.jeitler.cc', 3)
+        elif gn_thread is not None and gn_thread.is_alive():
+            screen_print_center_top(
+                'GET NAMES running in background (%d host(s))...' % len(gn_candidates), 2)
+        elif match_filter_re is not None:
+            screen_print_center_top(
+                "MATCH FILTER '%s' active (%d of %d hosts shown, all still pinged)"
+                % (match_filter_text, len(display_list), len(active_hosts_list)), 2)
         else:
             screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
 
@@ -2690,23 +2968,24 @@ if __name__=='__main__':
         # show the view and the order that are active right now.
         fm = FILTER_MODES[filter_mode]
         sm = SORT_MODES[sort_mode]
-        keys_full  = [' [U]=' + fm[0] + ' ', ' [P]=PREFER HOST ', ' [G]=GET NAMES ', ' [A]=ADD HOST ', ' [F]=ADD FILE ', ' [D]=DEL HOST ',
+        keys_full  = [' [U]=' + fm[0] + ' ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ', ' [M]=MATCH FILTER ', ' [A]=ADD HOST ', ' [F]=ADD FILE ', ' [D]=DEL HOST ',
                       ' [S]=SET REFERENCE ', ' [O]=SORT ' + sm[0] + ' ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [R]=SCREEN REFRESH ', ' [E]=EXIT ']
-        keys_short = [' [U]=' + fm[1] + ' ', ' [P]=PREFER ', ' [G]=NAMES ', ' [A]=ADD ', ' [F]=FILE ', ' [D]=DEL ',
+        keys_short = [' [U]=' + fm[1] + ' ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ', ' [M]=FILTER ', ' [A]=ADD ', ' [F]=FILE ', ' [D]=DEL ',
                       ' [S]=SET REF ', ' [O]=' + sm[1] + ' ', ' [Z]=ZERO ',
                       ' [C]=CLEAR ', ' [R]=REFRESH ', ' [E]=EXIT ']
-        keys_tiny  = [' [U]' + fm[2] + ' ', ' [P]PREF ', ' [G]NAME ', ' [A]ADD ', ' [F]FILE ', ' [D]DEL ',
+        keys_tiny  = [' [U]' + fm[2] + ' ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ', ' [M]FLT ', ' [A]ADD ', ' [F]FILE ', ' [D]DEL ',
                       ' [S]REF ', ' [O]' + sm[1] + ' ', ' [Z]ZERO ',
                       ' [C]CLR ', ' [R]RFR ', ' [E]EXIT ']
-        keys_micro = [' U ', ' P ', ' G ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' E ']
+        keys_micro = [' U ', ' P ', ' I ', ' G ', ' M ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
         key_col = 2
         for idx, label in enumerate(keys):
             highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and prefer_hostname)
-                        or (idx == 7 and sort_mode != 0))
+                        or (idx == 2 and ip_only_mode) or (idx == 4 and match_filter_re is not None)
+                        or (idx == 9 and sort_mode != 0))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)
             key_col += len(label)
 
@@ -2784,6 +3063,17 @@ if __name__=='__main__':
     run_counter = 1
     while True:
 
+        # --- [G] background PTR lookup: apply results once the thread is done ---
+        if gn_thread is not None and not gn_thread.is_alive():
+            gn_msg    = get_names_finish(gn_candidates, gn_result, original_hosts_list,
+                                         active_hosts_list, host_state, up_seen, down_streak)
+            gn_thread = None
+            if have_data:
+                rebuild_display()
+                draw_screen()
+                screen.refresh()
+            notice(gn_msg.upper(), 2, 3)
+
         # --- keyboard: drain all buffered keys ---
         cmd = None
         while True:
@@ -2808,8 +3098,12 @@ if __name__=='__main__':
                 cmd = 'ORDER'
             elif k in (ord('p'), ord('P')):
                 cmd = 'PREFER_HOSTNAME'
+            elif k in (ord('i'), ord('I')):
+                cmd = 'IP_ONLY'
             elif k in (ord('g'), ord('G')):
                 cmd = 'GET_NAMES'
+            elif k in (ord('m'), ord('M')):
+                cmd = 'MATCH_FILTER'
             elif k in (ord('c'), ord('C')):
                 cmd = 'CLEAR'
             elif k in (ord('r'), ord('R')):
@@ -2848,10 +3142,51 @@ if __name__=='__main__':
             active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
                                  if prefer_hostname else base_list)
             notice('PREFER HOSTNAME: ' + ('ON' if prefer_hostname else 'OFF'), 2)
+        elif cmd == 'IP_ONLY':
+            if not ip_only_mode:
+                ip_only_map, io_msg = apply_ip_only_on(
+                    original_hosts_list, active_hosts_list, host_state,
+                    up_seen, down_streak, int(args.dns_ttl))
+                ip_only_mode = True
+            else:
+                io_msg = apply_ip_only_off(ip_only_map, original_hosts_list,
+                                           active_hosts_list, host_state,
+                                           up_seen, down_streak)
+                ip_only_map = {}
+                ip_only_mode = False
+            notice(io_msg.upper(), 2)
         elif cmd == 'GET_NAMES':
-            gn_msg = apply_get_names(original_hosts_list, active_hosts_list, host_state,
-                                     up_seen, down_streak, int(args.dns_ttl))
-            notice_confirm(gn_msg.upper(), 2)
+            if gn_thread is not None and gn_thread.is_alive():
+                notice('GET NAMES: ALREADY RUNNING', 3)
+            else:
+                gn_thread, gn_result, gn_candidates = get_names_start(
+                    original_hosts_list, int(args.dns_ttl))
+                if gn_thread is None:
+                    notice('GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
+                else:
+                    notice('GET NAMES: RUNNING IN BACKGROUND (%d HOST(S))'
+                          % len(gn_candidates), 2)
+        elif cmd == 'MATCH_FILTER':
+            value = input_dialog(' MATCH FILTER ',
+                                 ' regex to match hostname/IP, case-insensitive - empty to disable:')
+            if value:
+                try:
+                    new_re = re.compile(value, re.IGNORECASE)
+                except re.error as e:
+                    notice(('INVALID REGEX: ' + str(e)).upper(), 3)
+                else:
+                    match_filter_re, match_filter_text = new_re, value
+                    rebuild_display()
+                    draw_screen()
+                    screen.refresh()
+                    notice('MATCH FILTER: ON (%d OF %d SHOWN)'
+                          % (len(display_list), len(active_hosts_list)), 2)
+            elif match_filter_re is not None:
+                match_filter_re, match_filter_text = None, ''
+                rebuild_display()
+                draw_screen()
+                screen.refresh()
+                notice('MATCH FILTER: OFF', 2)
         elif cmd == 'ORDER':
             sort_mode = (sort_mode + 1) % len(SORT_MODES)
             screen.clear()
@@ -2907,8 +3242,10 @@ if __name__=='__main__':
             screen.clear()
         elif cmd == 'EXIT':
             curses.endwin()
-            print('THX for using eping.py ')
-            sys.exit(0)
+            print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+            sys.stdout.flush()
+            # os._exit(), not sys.exit(): see sigint_handler() for why.
+            os._exit(0)
 
         # a command only changes what is shown - repaint at once instead of making
         # the user wait for the next scan round to finish
@@ -2933,8 +3270,8 @@ if __name__=='__main__':
                 active_hosts_list = sorted(up_seen, key=lambda h: (
                     int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')
                 ))
-                if prefer_hostname:
-                    active_hosts_list = apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                                     if prefer_hostname else active_hosts_list)
                 screen.clear()
                 filter_mode = 1        # the learning phase leaves an UP-only view
                 learning_phase = True
