@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.guru
+# epinga.py by ewald@jeitler.cc 2024 https://www.jeitler.cc
 # Large-file-capable analyser for eping.py CSV logfiles
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.60'
+version = '1.65'
 
 import re
 import os
@@ -44,7 +44,7 @@ def header_line(title, ch='─'):
 
 # ── signal / error helpers ────────────────────────────────────────────────────
 def sigint_handler(sig, frame):
-    print(f'\n{col("Interrupted.", CORANGE)}  epinga.py v{version}  – www.jeitler.guru\n')
+    print(f'\n{col("Interrupted.", CORANGE)}  epinga.py v{version}  – www.jeitler.cc\n')
     sys.exit(0)
 
 def die(msg):
@@ -613,6 +613,7 @@ tbody tr.detail-row {{ cursor: default; background: var(--bg3); }}
 tbody tr.detail-row:hover {{ background: var(--bg3); }}
 td {{ padding: 7px 12px; white-space: nowrap; }}
 td.host {{ font-weight: 600; color: var(--text); }}
+.host-ip {{ font-weight: 400; color: var(--dim); font-size: 12px; margin-left: 6px; }}
 
 /* state badge */
 .badge {{
@@ -752,7 +753,7 @@ footer {{ text-align:center; padding:16px; color:var(--dim); font-size:11px;
 
 <footer>
   epinga.py v{version} &nbsp;·&nbsp;
-  <a href="https://www.jeitler.guru" target="_blank">www.jeitler.guru</a>
+  <a href="https://www.jeitler.cc" target="_blank">www.jeitler.cc</a>
 </footer>
 
 <script>
@@ -844,7 +845,7 @@ function renderTable(data) {{
     tr.id = 'r' + idx;
     tr.dataset.idx = idx;
     tr.innerHTML = `
-      <td class="host"${{ h.ip && h.ip !== h.name ? ` title="IP: ${{h.ip}}"` : '' }}>${{h.name}} <span class="chevron">&#8964;</span></td>
+      <td class="host">${{h.name}}${{ h.ip && h.ip !== h.name ? ` <span class="host-ip">| ${{h.ip}}</span>` : '' }} <span class="chevron">&#8964;</span></td>
       <td style="text-align:center;white-space:nowrap">${{stateBadge(h.state, h.changes)}}</td>
       <td style="padding:0 12px"><div style="width:200px">${{buildTimeline(h)}}</div></td>
       <td style="text-align:right">${{uptimeBar(h.uptime, h.changes > 0)}}</td>
@@ -892,6 +893,7 @@ function buildDetail(h) {{
     <div class="detail-section">
       <h4>STATISTICS</h4>
       <div class="stat-list">
+        <div class="kv"><span class="k">Ip</span><span class="v">${{h.ip || h.name}}</span></div>
         <div class="kv"><span class="k">Uptime</span><span class="v">${{h.time_up}}</span></div>
         <div class="kv"><span class="k">Downtime</span><span class="v">${{h.time_down}}</span></div>
         <div class="kv"><span class="k">Total span</span><span class="v">${{h.span}}</span></div>
@@ -935,7 +937,8 @@ function sortBySelect() {{
 let hideIpHosts = false;
 
 function isIpHost(name) {{
-  return /^(\\d{{1,3}}\\.){{3}}\\d{{1,3}}$/.test(name);
+  if (/^(\\d{{1,3}}\\.){{3}}\\d{{1,3}}$/.test(name)) return true;
+  return name.indexOf(':') !== -1 && /^[0-9a-fA-F:]+$/.test(name);   // IPv6 literal
 }}
 
 function toggleHideIpHosts() {{
@@ -1171,7 +1174,7 @@ def main():
     # ── banner (printed directly, not captured) ──
     print()
     hr('═')
-    header_line(f'epinga.py  v{version}  –  eping logfile analyser  –  www.jeitler.guru', '═')
+    header_line(f'epinga.py  v{version}  –  eping logfile analyser  –  www.jeitler.cc', '═')
     hr('═')
     print(f'  File : {filename}  ({fmt_bytes(os.path.getsize(filename))})')
     if filter_hosts:
@@ -1225,9 +1228,9 @@ def main():
     url    = 'https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions'
     remote = check_version_online(url, 'epinga.py')
     if remote and remote > version:
-        print(col(f'  !! Update available (v{remote}) – https://www.jeitler.guru !!', CRED))
+        print(col(f'  !! Update available (v{remote}) – https://www.jeitler.cc !!', CRED))
     else:
-        print(f'  THX for using epinga.py v{version}  –  www.jeitler.guru')
+        print(f'  THX for using epinga.py v{version}  –  www.jeitler.cc')
 
     print()
     print(col(f'  Text saved → {txt_path}', CCYAN))

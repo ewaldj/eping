@@ -1,10 +1,10 @@
-# eping.py 1.65
+# eping.py 1.77
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
 Output is either a curses terminal UI (default) or a self-hosted web GUI.
 
-Written by Ewald Jeitler — <https://www.jeitler.guru>
+Written by Ewald Jeitler — <https://www.jeitler.cc>
 
 ## Requirements
 
@@ -82,7 +82,9 @@ in ms, timestamp of the last state change, number of changes.
 |---|---|
 | `U` | cycle the view: ALL HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS |
 | `P` | toggle prefer hostnames — skip a raw IP host when the same address is already covered by a hostname entry (also shrinks what gets pinged) |
-| `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found (history/uptime carry over; one-shot, not a toggle) |
+| `I` | toggle IP ONLY — resolve every hostname to its address (v4 or v6, whichever resolves, not distinguished) and ping/track it by IP instead of by name; a hostname whose address duplicates one already in the list is dropped instead of kept redundantly |
+| `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found and confirmed by a matching forward A/AAAA record (history/uptime carry over; one-shot, not a toggle; runs in the background, a status line shows while it is resolving) |
+| `M` | match filter — regex on hostname/IP (case-insensitive); only matching hosts are shown, every host keeps being pinged regardless; empty input turns it off (see *Match filter*) |
 | `O` | cycle the sort order (see *Views and sort orders*) |
 | `A` | add host — IP, hostname, CIDR (/13 … /32) or `ip1-ip2` (max 524288 addresses) |
 | `F` | add hosts from a file |
@@ -91,7 +93,7 @@ in ms, timestamp of the last state change, number of changes.
 | `Z` | zero changes — reset CH-TIME and CH NO for every host, states are kept |
 | `C` | clear all hosts and their state |
 | `R` | redraw the screen |
-| `E` | exit |
+| `E` | exit — terminates immediately (`os._exit()`), even with a [G] GET NAMES lookup still running in the background; it does not wait for it to finish |
 
 Dialogs are confirmed with ENTER, cancelled with ESC or empty input. The key bar
 switches to shorter labels on narrow terminals. A `PLEASE WAIT` box with an elapsed
@@ -133,9 +135,9 @@ Serves a single self-contained page; no external resources are loaded.
   `localStorage`.
 - Column headers sort the whole list (IPv4-aware).
 - Buttons: view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), PREFER HOSTNAMES,
-  GET NAMES, ADD HOST, DEL HOST, UPLOAD FILE, SET REFERENCE, ZERO CHANGES, CLEAR ALL,
-  EXIT, plus a sort order select. All work exactly as the matching CLI keys
-  (`U`, `P`, `G`, `O`).
+  IP ONLY, GET NAMES, ADD HOST, DEL HOST,
+  UPLOAD FILE, SET REFERENCE, ZERO CHANGES, CLEAR ALL, EXIT, plus a sort order
+  select. All work exactly as the matching CLI keys (`U`, `P`, `I`, `G`, `O`).
   The text field feeds both ADD and DEL — type a value and press the matching button;
   ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **No letter shortcuts.** Only `+` and `−` are bound (font size), and only without
@@ -251,8 +253,9 @@ sends one hard burst.
 | `-i` | auto | fixed send interval in ms, overrides `-ra`; `0` = unpaced |
 | `-p` | auto | fping processes per group (auto = 1, max 32) |
 | `-dns` | 300 | hostname cache TTL in seconds (`0` = off) |
-| `-4` / `-6` | auto | force IPv4 (`-4`) or IPv6 (`-6`) for names that have both A and AAAA records; default resolves A first, AAAA only if there is no A record. Mutually exclusive. |
+| `-4` / `-6` | auto | prefer IPv4 (`-4`) or IPv6 (`-6`); if the preferred family has no record for a name, the other family is used instead of failing. Mutually exclusive. |
 | `-ph` | off | start with PREFER HOSTNAMES active (see `P` key) |
+| `-ipo` | off | start with IP ONLY active (see `I` key) |
 | `-gn` | off | run GET NAMES once before the first ping round (see `G` key) |
 | `-fw` | 10 | minutes since the last state change for a host to count as flapping |
 | `-ncs` | off | do not pass `--check-source` to fping |
@@ -295,6 +298,16 @@ address — the hostname is already being probed, so the bare IP would just be a
 duplicate. A raw IP with no hostname counterpart is always kept. Toggling back off
 restores the full list.
 
+`IP ONLY` / `I` (`-ipo` to start with it on) resolves every hostname entry to its
+address — v4 or v6, whichever resolve_name() returns (see `-4`/`-6` to prefer a
+family; without either, A is preferred, AAAA only if there is no A record — either
+way, the other family is used if the preferred one has no record) — and
+renames it to that address in place, same rename-not-delete pattern as `GET NAMES`,
+so history and uptime carry over. From then on that host is pinged and tracked by
+IP, not by name. Toggling back off restores the original hostname for every entry
+that was renamed. A hostname that does not resolve, or whose address collides with
+another host already in the list, is left untouched.
+
 `GET NAMES` / `G` (`-gn` to run it once at startup) reverse-DNS resolves every raw-IP
 host that has no hostname counterpart and, if a PTR record is found, renames it to that
 hostname in place — `NO_OF_CHANGES`, uptime and the change history all carry over,
@@ -303,16 +316,46 @@ name collides with a host already in the list, or when the same PTR name is shar
 more than one candidate IP (e.g. anycast siblings such as 1.1.1.1/1.0.0.1 both
 resolving to `one.one.one.one`) — renaming only one of them would make `PREFER
 HOSTNAMES` treat the other as a redundant duplicate and drop it, so both are kept as
-plain IPs instead. Unlike `PREFER HOSTNAMES` this is a one-shot action, not a toggle:
-hosts added afterwards need `G` again. The result message stays on screen until
-confirmed with `[ENTER]` (or `[ESC]`) instead of disappearing on its own.
+plain IPs instead. A PTR name is also rejected, and the host stays as an IP, if it has
+no matching forward A (IPv4) / AAAA (IPv6) record pointing back to the same IP - a
+stale or one-sided PTR record would otherwise rename the host to a name that fping
+cannot resolve (or that resolves to a different address), breaking monitoring for it.
+Unlike `PREFER HOSTNAMES` this is a one-shot action, not a toggle: hosts added
+afterwards need `G` again.
+
+Triggered interactively (`G` key / GET NAMES button), the reverse-DNS lookups run on a
+background thread so the CLI/web loop keeps pinging and stays responsive while a large
+host list resolves — only `-gn` at startup blocks, since there is nothing to stay
+responsive for yet. While it runs, the CLI header shows "GET NAMES running in
+background (N host(s))..." and the web GUI's status line shows the same; the result
+message replaces it for 3 seconds once done. Pressing `G` again while one is still
+running shows "already running" instead of starting a second one.
+
+## Match filter
+
+`M` (CLI) / the match filter field (web GUI) applies a case-insensitive regex to the
+host list for display only - it is matched against both the shown name and the
+resolved/pinged IP, so a filter on an IP also finds a host currently displayed by
+hostname and vice versa. It never touches the ping targets: every host keeps being
+pinged and its state/history keeps being tracked exactly as before, only the rows
+that do not match are hidden from the table (and, in the CLI, the column layout
+shrinks to fit just the matches). Submitting an empty value turns the filter off
+again. In the CLI, an active filter replaces the version banner with
+`MATCH FILTER '<regex>' active (N of M hosts shown, all still pinged)`; the web GUI
+highlights the filter button the same way `PREFER HOSTNAMES`/`IP ONLY` do. An invalid
+regex is rejected with an error message and the previous filter (if any) is left
+unchanged.
 
 ## IPv6
 
 IPv4 and IPv6 hosts can be mixed freely in one host list. A hostname is resolved
-according to `-4`/`-6` (default: A record first, AAAA only if there is no A record);
-`PREFER HOSTNAMES` and `GET NAMES` consider every resolved address of a hostname, not
-just one. Internally, fping cannot ping v4 and v6 targets in the same invocation, so a
+according to `-4`/`-6` (a preference, not a restriction — the other family is used
+if the preferred one has no record for that name; default: A record first). An
+IPv4-mapped IPv6 address (`::ffff:a.b.c.d`), which some resolvers synthesize for a
+v4-only name instead of failing the AAAA query, is not treated as a real AAAA record
+either — it is not a pingable native IPv6 destination — so that case falls back to
+plain IPv4 the same way. `PREFER HOSTNAMES` and `GET NAMES` consider every resolved
+address of a hostname, not just one. Internally, fping cannot ping v4 and v6 targets in the same invocation, so a
 round with both families in play runs one fping process per family — this is
 transparent, `-dg` just shows an extra `full`/`reduced` group suffixed `/v6`. CIDR
 (`-n`, `-r`) and IP-range (`-r1..4`) expansion remain IPv4-only; a single IPv6 host can
