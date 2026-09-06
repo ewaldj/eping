@@ -35,6 +35,12 @@ Installs and updates `eping.py`, `epinga.py` and `esplit.py`:
 Without arguments a sample `eping-hosts.txt` is created. Starting with no hosts at all
 (`-df`) is valid — hosts can be added at runtime.
 
+### Running unattended (screen / tmux)
+
+CLI mode needs a live terminal, so to keep it running after you log out, run it inside
+`screen` or `tmux` and detach. Quick guide:
+<https://github.com/ewaldj/microups/blob/main/SCREEN_AND_TMUX-QUICK_GUIDE.txt>
+
 ## Host sources
 
 Combinable in one invocation:
