@@ -1,4 +1,4 @@
-# eping.py 1.84
+# eping.py 1.92
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -100,6 +100,14 @@ Dialogs are confirmed with ENTER, cancelled with ESC or empty input. The key bar
 switches to shorter labels on narrow terminals. A `PLEASE WAIT` box with an elapsed
 counter is shown until the first round has produced results.
 
+**Ping checks keep running while a dialog is open** (`A`, `D`, `F`, `M`, `T` all open
+one). Typing a hostname or a comment can take a while; without this, the whole scan
+would sit idle for that long, delaying detection of a real outage and skewing its
+retry timing and CSV timestamp. A background round uses the exact same retry-class,
+state-update and logging logic as the main loop - only the screen is not repainted
+until the dialog closes (curses itself stays main-thread-only), at which point the
+host table is refreshed at once to show everything that happened in the meantime.
+
 **The display is decoupled from the scan.** The screen is repainted about seven times a
 second, also while fping is still running, so the clock keeps ticking and a terminal
 resize takes effect immediately. `UP-ONLY`, `SET REFERENCE`, `DEL HOST` and `ZERO
@@ -131,19 +139,32 @@ Serves a single self-contained page; no external resources are loaded.
 
 - Table in CLI-style columns, filled top to bottom, then the next column to the right.
   The number of rows per column is derived from the measured row height and the window
-  size, so shrinking the font shows more hosts. Horizontal scrolling if it does not fit.
+  size, so shrinking the font shows more hosts. Horizontal scrolling if it does not fit,
+  with a "SCROLL RIGHT FOR MORE" hint shown right-aligned in the HOSTS/RUNTIME/... stats
+  bar (only while it's actually needed) - the footer stays hidden otherwise, leaving
+  the full window height for the host grid.
 - Font size 6–28 px via slider, the `A−`/`A+` buttons or the `+`/`−` keys; stored in
-  `localStorage`.
+  `localStorage`. The font control sits right-aligned at the end of row 1 (see
+  below) and stays visible even in the read-only web view, since it's a local
+  display preference, not a control over eping.py itself.
 - Column headers sort the whole list (IPv4-aware).
-- Buttons: view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), PREFER HOSTNAMES,
-  IP ONLY, GET NAMES, ADD HOST, DEL HOST,
-  UPLOAD FILE, SET REFERENCE, ZERO CHANGES, ADD COMMENT, CLEAR ALL, EXIT, plus a
-  sort order select. All work exactly as the matching CLI keys (`U`, `P`, `I`,
-  `G`, `O`, `T`).
-  The text field feeds both ADD and DEL — type a value and press the matching button;
-  ENTER triggers the button used last (ADD by default), ESC clears the field.
-- **No letter shortcuts.** Only `+` and `−` are bound (font size), and only without
-  modifier keys, so `Ctrl+C`, text selection and normal typing behave as expected.
+- Toolbar is fixed at two rows (wraps to more if the window is narrow, never
+  fewer): row 1 - view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), sort order
+  select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
+  GET NAMES, EXIT, font size (right-aligned); row 2 - match filter field with
+  SET FILTER / CLEAR FILTER, the host field with ADD / DELETE, ADD FILE, and
+  the comment field with COMMENT. All work exactly as the matching CLI keys
+  (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `E`).
+  The host field feeds both ADD and DELETE — type a value and press the matching
+  button; ENTER triggers the button used last (ADD by default), ESC clears the field.
+- **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
+  while no text field has focus (so `Ctrl+C`, text selection and normal typing
+  behave as expected): `U`, `P`, `I`, `G`, `S`, `Z`, `C`, `E` click the matching
+  button (`E`/`C` still ask for confirmation, same as clicking them); `O` cycles
+  the sort order; `A`/`D` focus the host field in ADD/DELETE mode; `M`/`T` focus
+  the match filter / comment field; `F` opens the file picker; `R` forces an
+  immediate status refresh (there's no curses screen to redraw). `+`/`−` (font
+  size) work everywhere, including while typing.
 - Host files can be uploaded via the button or dropped anywhere on the page
   (max 16 MB, same format as `-f`, see *Host file format*).
 - Commands are acknowledged immediately, and a click aborts the running round.
@@ -440,7 +461,7 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
 
-# epinga.py 1.94
+# epinga.py 1.95
 
 Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
 HTML report (no server, no external assets) with per-host detail, state-change
@@ -514,7 +535,9 @@ to see an event (maintenance, an outage ticket, ...) in context of what a specif
 host was doing at the time. Comment text is HTML-escaped before display, so it is
 shown as plain text even if it contains `<`, `&`, or a literal `</script>`. The
 same merge happens in the text output (`PER-HOST DETAIL`, both the terminal and
-the `_report.txt` file) - orange there too (ANSI in the terminal, plain in the file). A
+the `_report.txt` file) - orange there too (ANSI in the terminal, plain in the file),
+with a `COMMENT: ` prefix instead of the 💬 marker (text output uses no emoji/icons -
+plain ASCII/typographic characters only: →, ↑/↓, │, █/░, ═/─/·). A
 standalone **COMMENTS (N)** block, listing every comment in log order (or
 "No comments logged." when there are none), is also printed once before
 `PER-HOST DETAIL` in the text output - the same placement as the HTML report's

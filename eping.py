@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.84'
+VERSION = '1.92'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1462,6 +1462,7 @@ web_state = {
     'wait_time'        : 0.5,
     'stopped'          : False,
     'message'          : '',
+    'msg_seq'          : 0,
     'scan_info'        : '',
     'phase_info'       : '',
     'scanning'         : 0.0,
@@ -1514,10 +1515,13 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .stats{display:flex;flex-wrap:wrap;gap:16px;padding:5px 12px;border-bottom:1px solid var(--line);color:var(--dim)}
   .stats b{color:var(--fg);font-weight:600}
   .stats .u b{color:var(--up)} .stats .d b{color:var(--down)}
+  .stats #scrollHint{margin-left:auto;white-space:nowrap}
   .banner{padding:6px 12px;background:#2a1414;color:var(--down);border-bottom:1px solid var(--line)}
 
   /* ---- CLI style column grid ---- */
-  #ctrls{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
+  #ctrls{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
+  .ctrls-row{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
+  #ctrlsMain{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
   #ro{color:var(--acc)}
   #grid{display:flex;align-items:flex-start;gap:0;
         overflow-x:auto;overflow-y:hidden;padding:4px 0 0 8px;
@@ -1578,39 +1582,45 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 
   <div class="bar">
    <span id="ctrls">
-    <button id="btnUp" title="cycle: ALL HOSTS / UP-ONLY / UP+FLAPPING">ALL HOSTS</button>
-    <button id="btnPreferHost" title="skip a raw IP host when the same address is already covered by a hostname">PREFER HOSTNAMES</button>
-    <button id="btnIpOnly" title="resolve every hostname to its IP (v4/v6, whichever resolves) and ping/track it by address instead of by name">IP ONLY</button>
-    <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
-    <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="match filter: regex on host/IP, blank = off">
-    <button id="btnMatchFilter">SET FILTER</button>
-    <button id="btnClearFilter" title="disable the match filter">CLEAR FILTER</button>
-    <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
-      <option value="0">sort: ADDRESS</option>
-      <option value="1">sort: UP/FLAP/DOWN</option>
-      <option value="2">sort: DOWN/FLAP/UP</option>
-      <option value="3">sort: FLAP/UP/DOWN</option>
-      <option value="4">sort: FLAP/DOWN/UP</option>
-    </select>
-    <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
-    <button id="btnAdd">ADD HOST</button>
-    <button id="btnDel" title="remove the given host(s) - same input as ADD HOST">DEL HOST</button>
-    <button id="btnUpload">UPLOAD FILE</button>
-    <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
-    <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
-    <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
-    <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
-    <button id="btnComment" title="append a timestamped comment row to the CSV log">ADD COMMENT</button>
-    <button id="btnClear" class="danger">CLEAR ALL</button>
-    <button id="btnExit" class="danger">EXIT</button>
-   </span>
-    <span class="fsbox">
-      FONT
-      <button id="fsMinus" title="smaller (-)">A&minus;</button>
-      <input type="range" id="fsRange" min="6" max="28" step="1">
-      <button id="fsPlus" title="bigger (+)">A+</button>
-      <span id="fsVal"></span>
+    <span class="ctrls-row">
+     <span id="ctrlsMain">
+      <button id="btnUp" title="cycle: ALL HOSTS / UP-ONLY / UP+FLAPPING">ALL HOSTS</button>
+      <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
+        <option value="0">SORT: ADDRESS</option>
+        <option value="1">SORT: UP/FLAP/DOWN</option>
+        <option value="2">SORT: DOWN/FLAP/UP</option>
+        <option value="3">SORT: FLAP/UP/DOWN</option>
+        <option value="4">SORT: FLAP/DOWN/UP</option>
+      </select>
+      <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
+      <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
+      <button id="btnClear" class="danger">CLEAR ALL</button>
+      <button id="btnPreferHost" title="skip a raw IP host when the same address is already covered by a hostname">PREFER HOST</button>
+      <button id="btnIpOnly" title="resolve every hostname to its IP (v4/v6, whichever resolves) and ping/track it by address instead of by name">IP ONLY</button>
+      <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
+      <button id="btnExit" class="danger">EXIT</button>
+     </span>
+     <span class="fsbox">
+       FONT
+       <button id="fsMinus" title="smaller (-)">A&minus;</button>
+       <input type="range" id="fsRange" min="6" max="28" step="1">
+       <button id="fsPlus" title="bigger (+)">A+</button>
+       <span id="fsVal"></span>
+     </span>
     </span>
+    <span class="ctrls-row" id="ctrlsHosts">
+     <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="match filter: regex on host/IP, blank = off">
+     <button id="btnMatchFilter">SET FILTER</button>
+     <button id="btnClearFilter" title="disable the match filter">CLEAR FILTER</button>
+     <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
+     <button id="btnAdd">ADD</button>
+     <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
+     <button id="btnUpload" title="load hosts from a text/CSV file">ADD FILE</button>
+     <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
+     <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
+     <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
+    </span>
+   </span>
   </div>
 
   <div class="stats">
@@ -1621,6 +1631,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
     <span id="sLog"></span>
     <span class="msg" id="msg"></span>
+    <span id="scrollHint"></span>
   </div>
 
   <div class="body">
@@ -1633,7 +1644,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 <div id="probe"></div>
 
 <script>
-var sortKey = null, sortDir = 1, lastRows = [], stopped = false;
+var sortKey = null, sortDir = 1, lastRows = [], stopped = false, isReadOnly = false;
 var FS_MIN = 6, FS_MAX = 28, fontSize = 13;
 
 var COLS = [
@@ -1675,7 +1686,7 @@ var PENDING = {up_only:'switching view ...', sort:'sorting ...', add:'adding hos
                match_filter:'applying filter ...',
                add_comment:'logging comment ...',
                exit:'stopping eping ...'};
-var pending = false, lastServerMsg = null;
+var pending = false, lastMsgSeq = null;
 
 function note(text, isPending){
   var m = document.getElementById('msg');
@@ -1775,13 +1786,45 @@ document.addEventListener('drop', function(e){
   rd.readAsText(f);
 });
 
-/* Only the font size keys are bound. Everything else stays free for the browser -
-   a letter shortcut would swallow Ctrl+C, text selection and normal typing. */
+function cycleSortMode(){
+  var sel = document.getElementById('sortSel');
+  sel.selectedIndex = (sel.selectedIndex + 1) % sel.options.length;
+  sel.dispatchEvent(new Event('change'));
+}
+
+/* Letter shortcuts mirror the CLI keys 1:1 where a direct action exists
+   (buttons are .click()'ed so confirm() dialogs on EXIT/CLEAR still fire);
+   where the CLI opens an input dialog (ADD, DEL, MATCH FILTER, COMMENT) the
+   matching field is focused instead, since the web field is persistent, not
+   a one-shot dialog. R has no curses screen to redraw, so it forces an
+   immediate status refresh. Disabled entirely while the page is read-only,
+   and while a text field has focus, so normal typing and Ctrl+C keep working. */
 document.addEventListener('keydown', function(e){
   if(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if(e.key === '+' || e.key === '='){ setFont(fontSize + 1); return; }
+  if(e.key === '-' || e.key === '_'){ setFont(fontSize - 1); return; }
+  if(isReadOnly) return;
   if(document.activeElement && document.activeElement.tagName === 'INPUT') return;
-  if(e.key === '+' || e.key === '=')      setFont(fontSize + 1);
-  else if(e.key === '-' || e.key === '_') setFont(fontSize - 1);
+  switch(e.key.toLowerCase()){
+    case 'u': document.getElementById('btnUp').click(); break;
+    case 'p': document.getElementById('btnPreferHost').click(); break;
+    case 'i': document.getElementById('btnIpOnly').click(); break;
+    case 'g': document.getElementById('btnGetNames').click(); break;
+    case 'm': document.getElementById('matchInput').focus();
+              document.getElementById('matchInput').select(); break;
+    case 'o': cycleSortMode(); break;
+    case 'a': setMode('add'); document.getElementById('addInput').focus(); break;
+    case 'd': setMode('del'); document.getElementById('addInput').focus(); break;
+    case 'f': document.getElementById('btnUpload').click(); break;
+    case 's': document.getElementById('btnSetRef').click(); break;
+    case 'z': document.getElementById('btnZero').click(); break;
+    case 't': document.getElementById('commentInput').focus(); break;
+    case 'c': document.getElementById('btnClear').click(); break;
+    case 'r': poll(); break;
+    case 'e': document.getElementById('btnExit').click(); break;
+    default: return;
+  }
+  e.preventDefault();
 });
 
 /* ---------------- sorting ---------------- */
@@ -1864,6 +1907,12 @@ function hostWidthCh(rows){
   return (max + 2) + 'ch';
 }
 
+function setFoot(text){
+  var f = document.getElementById('foot');
+  f.textContent   = text || '';
+  f.style.display = text ? '' : 'none';
+}
+
 function render(rows){
   lastRows = rows || [];
   var grid = document.getElementById('grid');
@@ -1874,9 +1923,9 @@ function render(rows){
         + 'add a host above, upload a host file or drop one onto this page</div></div>'
       : '<div class="empty" style="color:var(--up)">PLEASE WAIT'
         + '<div class="hint">scanning ...</div></div>';
-    document.getElementById('foot').textContent = firstRunDone
-      ? 'live 1s | no hosts - add a host above, upload a file or drop one onto this page'
-      : 'scanning - please wait ...';
+    setFoot(firstRunDone
+      ? 'no hosts - add a host above, upload a file or drop one onto this page'
+      : 'scanning - please wait ...');
     return;
   }
   document.documentElement.style.setProperty('--hostw', hostWidthCh(lastRows));
@@ -1912,10 +1961,9 @@ function render(rows){
   }
 
   var fits = grid.scrollWidth <= grid.clientWidth + 2;
-  document.getElementById('foot').textContent =
-    'live 1s | ' + nCols + ' column(s) x ' + perCol + ' rows | font ' + fontSize + 'px'
-    + (fits ? '' : ' | SCROLL RIGHT FOR MORE - reduce font size to fit')
-    + ' | +/- font size';
+  document.getElementById('scrollHint').textContent =
+    fits ? '' : 'SCROLL RIGHT FOR MORE - reduce font size to fit';
+  setFoot('');
 }
 
 var rz;
@@ -1928,9 +1976,11 @@ function poll(){
   fetch('api/status').then(function(r){return r.json();}).then(function(s){
     document.getElementById('ver').textContent   = 'v'+s.version;
     if(s.readonly){
-      document.getElementById('ctrls').style.display = 'none';
+      document.getElementById('ctrlsMain').style.display = 'none';
+      document.getElementById('ctrlsHosts').style.display = 'none';
       document.getElementById('ro').textContent = '- read only, controlled from the terminal';
     }
+    isReadOnly = !!s.readonly;
     document.getElementById('clock').textContent = s.datetime;
     document.getElementById('sHosts').textContent   = s.hosts;
     document.getElementById('sRuntime').textContent = s.run_time;
@@ -1954,8 +2004,10 @@ function poll(){
     if(document.activeElement !== ss) ss.value = String(s.sort_mode || 0);
     ss.className = s.sort_mode ? 'on' : '';
     // keep the local 'working ...' note until the server actually answers something new
-    if(s.message !== lastServerMsg){ lastServerMsg = s.message; note(s.message || '', false); }
-    else if(!pending){ note(s.message || '', false); }
+    // msg_seq (not text) drives this: two commands in a row can produce the exact
+    // same message text ("comment logged" twice) - comparing text alone would miss
+    // the second completion and leave the "... ing" pending note stuck on screen.
+    if(s.msg_seq !== lastMsgSeq){ lastMsgSeq = s.msg_seq; note(s.message || '', false); }
 
     var b = document.getElementById('banner');
     if(s.update_available){ b.style.display='block';
@@ -1974,11 +2026,11 @@ function poll(){
     render(s.rows);
 
     if(s.stopped){ stopped = true;
-      document.getElementById('foot').textContent = 'eping.py stopped - THX for using eping.py';
+      setFoot('eping.py stopped - THX for using eping.py');
       document.body.classList.add('off');
     }
   }).catch(function(){
-    document.getElementById('foot').textContent = 'no connection to eping.py ...';
+    setFoot('no connection to eping.py ...');
   });
 }
 
@@ -2161,7 +2213,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     if args.disable_logging:
         print(' logging to ' + logfile_file_name)
     if not original_hosts_list:
-        print(' no hosts yet - use ADD HOST or UPLOAD FILE in the web gui')
+        print(' no hosts yet - use ADD or ADD FILE in the web gui')
     print(' press CTRL-C to stop\n')
 
     with web_lock:
@@ -2362,6 +2414,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
             quick_up = sum(1 for e in quick if 'UP' in e[1])
             with web_lock:
                 web_state['message']      = message
+                web_state['msg_seq']      = web_state.get('msg_seq', 0) + 1
                 web_state['rows']         = web_rows(quick)
                 web_state['hosts']        = len(quick)
                 web_state['hosts_up']     = quick_up
@@ -2845,8 +2898,46 @@ if __name__=='__main__':
     learning_done       = (up_check_runs == 0)
     up_seen             = set()
 
+    def run_background_pings(stop_event):
+        """Keep pinging while a CLI input dialog is open (see input_dialog below).
+
+        Typing a hostname or a comment can take a while - without this, the whole
+        scan would sit idle for that long, so a real outage during that time is
+        detected late (or its retries/CSV timestamps land wrong). This runs the
+        exact same round logic as the main loop (retry classes, state update,
+        CSV logging), just with no screen/keyboard access at all (progress_cb=None
+        - see run_ping_round) since curses is main-thread-only; input_dialog()
+        redraws the host table itself once it returns. Deliberately skipped: the
+        learning-phase transition and any list rebuild - those only ever change
+        what's on screen, so applying them a few seconds late (once the dialog
+        closes and the main loop's own round runs) changes nothing but the timing.
+        """
+        global run_counter
+        while not stop_event.is_set():
+            t0 = datetime.datetime.now()
+            sweep_now = (down_retries is None
+                        or (full_sweep > 0 and (run_counter - 1) % full_sweep == 0))
+            down_now  = None if sweep_now else set(
+                h for h, e in host_state.items() if 'UP' not in e[1])
+            fping_result_data_sorted, _scan, _split, _phase = run_ping_round(
+                active_hosts_list, args.num_of_threads, int(args.rate_pps),
+                args.interval, int(args.dns_ttl), down_now, down_retries, None,
+                run_counter - 1, down_slices)
+            update_host_state(host_state, fping_result_data_sorted, tz_offset,
+                              learning_done, learning_phase, up_seen,
+                              args.disable_logging, logfile_file_name,
+                              confirm, down_streak)
+            run_counter += 1
+            remaining = float(args.waittime) - (datetime.datetime.now() - t0).total_seconds()
+            if remaining > 0:
+                stop_event.wait(remaining)
+
     def input_dialog(title, prompt):
-        """Show a single line input dialog and return the entered string (may be empty)."""
+        """Show a single line input dialog and return the entered string (may be empty).
+
+        Pinging keeps running in the background for as long as the dialog is open -
+        see run_background_pings().
+        """
         rows, cols = screen.getmaxyx()
         dialog_w    = min(70, max(20, cols - 4))
         dialog_h    = 7
@@ -2874,26 +2965,39 @@ if __name__=='__main__':
         max_input = dialog_w - 6
         screen.move(input_y, input_x)
 
-        while True:
-            screen.move(input_y, input_x)
-            view = input_str[-max_input:] if len(input_str) > max_input else input_str
-            screen_output(input_y, input_x, (view + ' ' * max_input)[:max_input], 1, 1)
-            screen.move(input_y, input_x + len(view))
-            screen.refresh()
-            ch = screen.getch()
-            if ch in (10, 13):                     # ENTER = confirm
-                break
-            elif ch == 27:                         # ESC = cancel
-                input_str = ''
-                break
-            elif ch in (curses.KEY_BACKSPACE, 127, 8):
-                input_str = input_str[:-1]
-            elif 32 <= ch <= 126 and len(input_str) < 255:
-                input_str += chr(ch)
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        try:
+            while True:
+                screen.move(input_y, input_x)
+                view = input_str[-max_input:] if len(input_str) > max_input else input_str
+                screen_output(input_y, input_x, (view + ' ' * max_input)[:max_input], 1, 1)
+                screen.move(input_y, input_x + len(view))
+                screen.refresh()
+                ch = screen.getch()
+                if ch in (10, 13):                     # ENTER = confirm
+                    break
+                elif ch == 27:                         # ESC = cancel
+                    input_str = ''
+                    break
+                elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                    input_str = input_str[:-1]
+                elif 32 <= ch <= 126 and len(input_str) < 255:
+                    input_str += chr(ch)
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
 
         curses.curs_set(0)
         screen.nodelay(True)
         screen.clear()
+        # the background round(s) may have changed host state while the dialog was
+        # open - repaint at once instead of waiting for the next scheduled round
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
         return input_str.strip()
 
     def notice(text, color=3, seconds=1.4):
