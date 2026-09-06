@@ -1,4 +1,4 @@
-# eping.py 1.82
+# eping.py 1.84
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -81,19 +81,19 @@ in ms, timestamp of the last state change, number of changes.
 | Key | Action |
 |---|---|
 | `U` | cycle the view: ALL HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS |
-| `P` | toggle prefer hostnames — skip a raw IP host when the same address is already covered by a hostname entry (also shrinks what gets pinged) |
-| `I` | toggle IP ONLY — resolve every hostname to its address (v4 or v6, whichever resolves, not distinguished) and ping/track it by IP instead of by name; a hostname whose address duplicates one already in the list is dropped instead of kept redundantly |
-| `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found and confirmed by a matching forward A/AAAA record (history/uptime carry over; one-shot, not a toggle; runs in the background, a status line shows while it is resolving) |
 | `M` | match filter — regex on hostname/IP (case-insensitive); only matching hosts are shown, every host keeps being pinged regardless; empty input turns it off (see *Match filter*) |
-| `O` | cycle the sort order (see *Views and sort orders*) |
 | `A` | add host — IP, hostname, CIDR (/13 … /32) or `ip1-ip2` (max 524288 addresses) |
-| `F` | add hosts from a file |
 | `D` | delete host — same input formats and limits as add |
+| `F` | add hosts from a file |
+| `O` | cycle the sort order (see *Views and sort orders*) |
+| `T` | add comment — free text, logged with a timestamp to the CSV (only while logging is on) |
 | `S` | set reference — the list currently shown becomes the new base list |
 | `Z` | zero changes — reset CH-TIME and CH NO for every host, states are kept |
 | `C` | clear all hosts and their state |
+| `P` | toggle prefer hostnames — skip a raw IP host when the same address is already covered by a hostname entry (also shrinks what gets pinged) |
+| `I` | toggle IP ONLY — resolve every hostname to its address (v4 or v6, whichever resolves, not distinguished) and ping/track it by IP instead of by name; a hostname whose address duplicates one already in the list is dropped instead of kept redundantly |
+| `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found and confirmed by a matching forward A/AAAA record (history/uptime carry over; one-shot, not a toggle; runs in the background, a status line shows while it is resolving) |
 | `R` | redraw the screen |
-| `T` | add comment — free text, logged with a timestamp to the CSV (only while logging is on) |
 | `E` | exit — terminates immediately (`os._exit()`), even with a [G] GET NAMES lookup still running in the background; it does not wait for it to finish |
 
 Dialogs are confirmed with ENTER, cancelled with ESC or empty input. The key bar
@@ -334,6 +334,21 @@ This appears whenever the eping.py process itself is stopped from a terminal -
 plain CLI mode (`[E]` / Ctrl-C) and `--web` mode alike (its `EXIT` command and
 Ctrl-C in the terminal running it) - since both print to a real terminal. Only
 the Web GUI's own in-browser banner is a separate, shorter notice.
+
+## Run analysis on exit
+
+When eping.py stops (`[E]` / Ctrl-C in the CLI, or the `EXIT` command / Ctrl-C
+in the terminal running `--web` mode) and logging was on (no `-dl`) and the
+logfile exists and is non-empty, eping.py asks:
+
+```
+Run an analysis of this logfile with epinga.py now? [y/N]:
+```
+
+Typing `y` (case-insensitive) runs `epinga.py -f <logfile>` in-process before
+exiting; Enter or any other input skips it. If no interactive input is
+available (e.g. stdin closed), the prompt is skipped silently. No prompt is
+shown if logging is disabled or the logfile doesn't exist/is empty.
 
 `PREFER HOSTNAMES` / `P` (`-ph` to start with it on) drops a raw-IP host from what gets
 pinged as soon as another entry in the list is a hostname resolving to that same
