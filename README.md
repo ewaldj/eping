@@ -1,4 +1,4 @@
-# eping.py 1.77
+# eping.py 1.82
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -93,6 +93,7 @@ in ms, timestamp of the last state change, number of changes.
 | `Z` | zero changes — reset CH-TIME and CH NO for every host, states are kept |
 | `C` | clear all hosts and their state |
 | `R` | redraw the screen |
+| `T` | add comment — free text, logged with a timestamp to the CSV (only while logging is on) |
 | `E` | exit — terminates immediately (`os._exit()`), even with a [G] GET NAMES lookup still running in the background; it does not wait for it to finish |
 
 Dialogs are confirmed with ENTER, cancelled with ESC or empty input. The key bar
@@ -136,8 +137,9 @@ Serves a single self-contained page; no external resources are loaded.
 - Column headers sort the whole list (IPv4-aware).
 - Buttons: view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), PREFER HOSTNAMES,
   IP ONLY, GET NAMES, ADD HOST, DEL HOST,
-  UPLOAD FILE, SET REFERENCE, ZERO CHANGES, CLEAR ALL, EXIT, plus a sort order
-  select. All work exactly as the matching CLI keys (`U`, `P`, `I`, `G`, `O`).
+  UPLOAD FILE, SET REFERENCE, ZERO CHANGES, ADD COMMENT, CLEAR ALL, EXIT, plus a
+  sort order select. All work exactly as the matching CLI keys (`U`, `P`, `I`,
+  `G`, `O`, `T`).
   The text field feeds both ADD and DEL — type a value and press the matching button;
   ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **No letter shortcuts.** Only `+` and `−` are bound (font size), and only without
@@ -190,7 +192,7 @@ changes state moves to its new group right away.
 |---|---|---|---|
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan and phase info |
-| POST | `/api/command` | `{"cmd":"up_only\|sort\|add\|del\|set_ref\|zero\|clear\|exit","value":"..."}` | control |
+| POST | `/api/command` | `{"cmd":"up_only\|prefer_hostname\|ip_only\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|clear\|exit","value":"..."}` | control |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
 There is no authentication. The default bind address is `0.0.0.0` — use
@@ -292,6 +294,47 @@ the resolved address for a hostname entry (empty for `NO-DNS`).
 `ZERO CHANGES` / `Z` resets `NO_OF_CHANGES` and `CHANGE_TIMESTAMP` for all hosts in the
 running instance; the log file keeps everything already written.
 
+`ADD COMMENT` / `T` (CLI: input dialog, Web GUI: text field + button) appends a
+free-text, timestamped row to the CSV log while logging is on - useful to mark
+events (maintenance, an outage ticket, ...) on the same timeline as the ping data.
+The row uses the sentinel `#COMMENT#` in the `HOSTNAME` column and carries the
+comment text in the `IP` column; `csv.writer` quotes it like any other field, so
+Excel/Numbers import is unaffected. If logging is off (`-dl`), the command shows
+a notice and nothing is written. epinga.py recognizes these rows automatically
+(see below).
+
+## Web GUI header
+
+The Web GUI's header shows `eping.py vX.XX · © Ewald Jeitler · supervised by
+Nelly · tools.jeitler.cc · www.jeitler.cc`, framed by two small paw icons -
+matching epinga.py's HTML report footer. The CLI (curses) header is unaffected
+and still reads `eping.py version X.XX by Ewald Jeitler`, since a terminal can't
+render the SVG icons. The browser tab
+also shows the same paw favicon as epinga.py's HTML report.
+
+## Update notice (CLI)
+
+If a newer eping.py is available online (see `-dv`/`--disable_versioncheck`),
+the CLI shows a short one-line hint in its top bar while running, same as
+before. On exit (`[E]` / Ctrl-C) a full notice is printed once, with the
+install command and links:
+
+```
+  A new version of eping.py is available! (installed: vX.XX, latest: vY.YY)
+
+  Install it with:
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"
+
+  Or visit:
+    https://www.jeitler.cc
+    https://github.com/ewaldj/eping
+```
+
+This appears whenever the eping.py process itself is stopped from a terminal -
+plain CLI mode (`[E]` / Ctrl-C) and `--web` mode alike (its `EXIT` command and
+Ctrl-C in the terminal running it) - since both print to a real terminal. Only
+the Web GUI's own in-browser banner is a separate, shorter notice.
+
 `PREFER HOSTNAMES` / `P` (`-ph` to start with it on) drops a raw-IP host from what gets
 pinged as soon as another entry in the list is a hostname resolving to that same
 address — the hostname is already being probed, so the bare IP would just be a
@@ -382,7 +425,7 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
 
-# epinga.py 1.78
+# epinga.py 1.94
 
 Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
 HTML report (no server, no external assets) with per-host detail, state-change
@@ -429,8 +472,13 @@ The top bar shows total/UP/flapping/DOWN/no-DNS counts, followed by a toolbar wi
 - **Show** - restrict to one state (flapping is its own entry, independent of
   UP/DOWN/NO-DNS).
 - **Sort** - by name, uptime %, avg RTT or number of changes (click a column header for
-  the same effect).
-- **Show IP** button (green when on) - display toggle only: swaps every host's primary
+  the same effect). Shift+click a column header to add it as a secondary/tertiary/…
+  tie-breaker (any number of columns, up to all of them) instead of replacing the
+  sort - a small ①②③… badge next to the arrow shows each column's position in the
+  chain. Shift+click a column already in the chain to flip its direction without
+  changing its position; a plain click always resets to sorting by that column
+  alone.
+- **IP View** button (green when on) - display toggle only: swaps every host's primary
   label between hostname and IP (table and all four buckets), the other value shown
   small next to it. Independent of deduplication below.
 - **Deduplication** dropdown (`No Deduplication` / `Hostname` / `IP`, default: no
@@ -439,10 +487,28 @@ The top bar shows total/UP/flapping/DOWN/no-DNS counts, followed by a toolbar wi
   `IP` keeps the IP and drops the name entry. Applies to the table and all four
   buckets.
 
+A **Comments** section, populated from `#COMMENT#` rows written by eping.py's
+`ADD COMMENT` / `T` (see above), is shown above the Host List - collapsed by
+default, since it is only relevant when comments were actually logged. Each entry
+shows its timestamp and free text, in log order.
+
+Comments logged while a host was being observed also appear inline in that host's
+**STATE CHANGES** timeline (row click to expand), merged chronologically with its
+UP/DOWN transitions and shown in a distinct color (orange) with a 💬 marker - useful
+to see an event (maintenance, an outage ticket, ...) in context of what a specific
+host was doing at the time. Comment text is HTML-escaped before display, so it is
+shown as plain text even if it contains `<`, `&`, or a literal `</script>`. The
+same merge happens in the text output (`PER-HOST DETAIL`, both the terminal and
+the `_report.txt` file) - orange there too (ANSI in the terminal, plain in the file). A
+standalone **COMMENTS (N)** block, listing every comment in log order (or
+"No comments logged." when there are none), is also printed once before
+`PER-HOST DETAIL` in the text output - the same placement as the HTML report's
+Comments section above its Host List.
+
 The **Host List** section (filterable/sortable table) and each of the four bucket
 sections (**Always UP**, **Flapping**, **Always DOWN**, **No-DNS**) are independently
 collapsible by clicking their title bar (expanded by default); a bucket's collapsed
-state survives a Show IP / Deduplication change since those re-render the bucket
+state survives an IP View / Deduplication change since those re-render the bucket
 content. Each bucket header also has **Download** (exports its hostnames/IPs as
 `<base>-<up|down|flap|nodns>-hosts.txt`) and **Copy** (copies the same list to the
 clipboard, with an `execCommand` fallback for `file://` pages where the async
@@ -450,3 +516,25 @@ Clipboard API may be unavailable).
 
 Clicking a table row expands its detail: full state-change history with timestamps,
 and per-host statistics (IP, uptime, downtime, span, first/last seen, RTT min/avg/max).
+
+# esplit.py 1.14
+
+Splits a large CSV logfile into smaller parts by size - useful before importing a big
+`eping-log_*.csv` into Excel/Numbers or sharing it, since epinga.py and esplit.py have
+no size limit of their own.
+
+```sh
+./esplit.py                                      # interactive menu - pick a *.csv from the current dir
+./esplit.py -i eping-log_2026-09-05.csv -o parts -s 20   # split into ~20 MB parts
+```
+
+| Option | Effect |
+|---|---|
+| `-i`, `--input FILE` | CSV file to split (omit for the interactive file-picker menu) |
+| `-o`, `--output DIR` | Output folder for the parts (created if missing) |
+| `-s`, `--size MB` | Maximum size per part, in MB |
+
+Each part is named `part_NNN.csv` and gets its own copy of the header row, so every
+part stays independently importable. Rows are never split across parts and are not
+otherwise inspected - a `#COMMENT#` row (see eping.py's `ADD COMMENT` / `T`) is just
+another row and lands in whichever part it falls into.

@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.88'
+version = '1.94'
 
 import re
 import os
@@ -17,6 +17,7 @@ import signal
 import argparse
 import datetime
 import ipaddress
+import html as html_lib
 
 # ── optional modules ──────────────────────────────────────────────────────────
 try:
@@ -250,6 +251,7 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
 
     hosts      = {}   # hostname -> HostStats
     host_order = []   # insertion order
+    comments   = []   # [{'ts': datetime, 'text': str}, ...] - from '#COMMENT#' sentinel rows
     rows_read  = 0
 
     progress = Progress(file_size) if not quiet else None
@@ -273,6 +275,20 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
             rows_read += 1
 
             hostname = row['HOSTNAME']
+
+            if hostname == '#COMMENT#':
+                ts = parse_ts(row['TIMESTAMP'])
+                if ts is None:
+                    continue
+                if ts_start and ts < ts_start:
+                    continue
+                if ts_end   and ts > ts_end:
+                    continue
+                text = row.get('IP', '').strip()
+                if text:
+                    comments.append({'ts': ts, 'text': text})
+                continue
+
             if filter_hosts and hostname not in filter_hosts:
                 continue
 
@@ -306,7 +322,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
     for h in hosts.values():
         h.finalise()
 
-    return hosts, host_order, rows_read
+    comments.sort(key=lambda c: c['ts'])
+    return hosts, host_order, rows_read, comments
 
 
 # ── state colour ──────────────────────────────────────────────────────────────
@@ -325,14 +342,29 @@ def fmt_td(td):
     return  f'{s}s'
 
 # ── print per-host detail ─────────────────────────────────────────────────────
-def print_host(hostname, s, show_changes):
+def print_host(hostname, s, show_changes, comments=None):
     header_line(hostname)
 
-    if show_changes and s.changes:
-        for ts, frm, to in s.changes:
+    if show_changes and (s.changes or comments):
+        # comments are a global timeline - only show ones logged while this host
+        # was actually being observed (its first_ts..last_ts window), merged
+        # chronologically with its own UP/DOWN transitions (same as the HTML report)
+        relevant_comments = [
+            c for c in (comments or [])
+            if (not s.first_ts or c['ts'] >= s.first_ts) and (not s.last_ts or c['ts'] <= s.last_ts)
+        ]
+        timeline = (
+            [('change', ts, frm, to) for ts, frm, to in s.changes]
+            + [('comment', c['ts'], c['text'], None) for c in relevant_comments]
+        )
+        timeline.sort(key=lambda e: e[1] or datetime.datetime.min)
+        for kind, ts, a, b in timeline:
             ts_str = ts.strftime(TS_FMT) if ts else '?'
-            arrow  = f'{state_col(frm)} → {state_col(to)}'
-            print(f'  {ts_str}  {arrow}')
+            if kind == 'comment':
+                print(f'  {ts_str}  {col("💬 " + a, CORANGE)}')
+            else:
+                arrow = f'{state_col(a)} → {state_col(b)}'
+                print(f'  {ts_str}  {arrow}')
         print()
 
     # RTT line
@@ -476,7 +508,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
 
 # ── HTML export ───────────────────────────────────────────────────────────────
-def build_report_data(hosts, host_order, filename, rows_read, base=''):
+def build_report_data(hosts, host_order, filename, rows_read, base='', comments=None):
     """Serialize all analysis data to a plain dict for JSON embedding."""
     rows = []
     for h in host_order:
@@ -506,6 +538,10 @@ def build_report_data(hosts, host_order, filename, rows_read, base=''):
 
     all_first = [r['first_ts'] for r in rows if r['first_ts']]
     all_last  = [r['last_ts']  for r in rows if r['last_ts']]
+    comment_rows = [
+        {'ts': c['ts'].strftime(TS_FMT), 'text': c['text']}
+        for c in (comments or [])
+    ]
     return {
         'filename':     filename,
         'base':         base,
@@ -514,11 +550,21 @@ def build_report_data(hosts, host_order, filename, rows_read, base=''):
         'global_start': min(all_first) if all_first else '',
         'global_end':   max(all_last)  if all_last  else '',
         'hosts':        rows,
+        'comments':     comment_rows,
     }
 
 
 def generate_html(data, out_path):
-    json_data = json.dumps(data, ensure_ascii=False)
+    json_data = json.dumps(data, ensure_ascii=False).replace('</script', '<\\/script')
+    comments  = data.get('comments') or []
+    if comments:
+        comment_rows_html = '\n'.join(
+            f'<div class="comment-row"><span class="comment-ts">{html_lib.escape(c["ts"])}</span>'
+            f'<span class="comment-text">{html_lib.escape(c["text"])}</span></div>'
+            for c in comments
+        )
+    else:
+        comment_rows_html = '<div class="comment-row comment-empty">No comments logged.</div>'
     n_total   = len(data['hosts'])
     n_up      = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'UP')
     n_flap    = sum(1 for h in data['hosts'] if h['changes'] > 0)
@@ -616,6 +662,12 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .tbl-wrap {{ padding: 0 24px 24px; overflow-x: auto; }}
 .bucket.hostlist {{ margin: 0 24px 20px; }}
 .bucket.hostlist .tbl-wrap {{ padding: 0; }}
+.bucket.comments .bucket-body {{ padding: 10px 16px; }}
+.comment-row {{ display: flex; gap: 14px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }}
+.comment-row:last-child {{ border-bottom: none; }}
+.comment-ts {{ color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }}
+.comment-text {{ color: var(--text); word-break: break-word; }}
+.comment-row.comment-empty {{ color: var(--dim); font-style: italic; }}
 .bucket.collapsed.hostlist .tbl-wrap {{ display: none; }}
 table {{ width: 100%; border-collapse: collapse; }}
 thead th {{
@@ -626,6 +678,8 @@ thead th {{
 thead th:hover {{ color: var(--text); }}
 thead th.sort-asc::after  {{ content: ' ▲'; color: var(--cyan); }}
 thead th.sort-desc::after {{ content: ' ▼'; color: var(--cyan); }}
+thead th .sort-num {{ font-size: 9px; color: var(--cyan); font-weight: 700;
+                       margin-left: 3px; vertical-align: super; }}
 tbody tr {{
   border-bottom: 1px solid var(--border); cursor: pointer;
   transition: background .1s; }}
@@ -663,6 +717,9 @@ td.host {{ font-weight: 600; color: var(--text); }}
 .detail-section h4 {{ color: var(--dim); font-size: 11px; margin-bottom: 8px;
                        letter-spacing: .5px; }}
 .events {{ display: flex; flex-direction: column; gap: 4px; }}
+.event.comment-event {{ color: var(--orange); }}
+.event.comment-event .comment-marker {{ margin-right: 2px; }}
+.event.comment-event .comment-event-text {{ font-style: italic; word-break: break-word; }}
 .event {{ display: flex; align-items: center; gap: 10px; font-size: 12px; }}
 .event .ts  {{ color: var(--dim); width: 155px; flex-shrink: 0; }}
 .arrow {{ color: var(--dim); }}
@@ -849,6 +906,17 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
   </div>
 </div>
 
+<div class="bucket comments collapsed" id="bucket-comments">
+  <h3>
+    <span class="bucket-toggle" onclick="toggleBucket('comments')">
+      <span class="bucket-chevron">&#9662;</span><span>Comments ({len(comments)})</span>
+    </span>
+  </h3>
+  <div class="bucket-body">
+    {comment_rows_html}
+  </div>
+</div>
+
 <div class="bucket hostlist" id="bucket-hostlist">
   <h3>
     <span class="bucket-toggle" onclick="toggleBucket('hostlist')">
@@ -860,14 +928,21 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <table id="mainTable">
     <thead>
     <tr>
-      <th onclick="sortBy('name')"    data-col="name">HOST</th>
-      <th onclick="sortBy('state')"   data-col="state" style="text-align:center;width:1px;white-space:nowrap">STATE</th>
+      <th onclick="sortBy('name', event)"    data-col="name"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">HOST</th>
+      <th onclick="sortBy('state', event)"   data-col="state" style="text-align:center;width:1px;white-space:nowrap"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">STATE</th>
       <th style="width:220px">TIMELINE</th>
-      <th onclick="sortBy('uptime')"  data-col="uptime" style="text-align:right">UPTIME</th>
-      <th onclick="sortBy('rtt_avg')" data-col="rtt_avg" style="text-align:right">AVG RTT</th>
-      <th onclick="sortBy('rtt_min')" data-col="rtt_min" style="text-align:right">MIN RTT</th>
-      <th onclick="sortBy('rtt_max')" data-col="rtt_max" style="text-align:right">MAX RTT</th>
-      <th onclick="sortBy('changes')" data-col="changes" style="text-align:center">CHANGES</th>
+      <th onclick="sortBy('uptime', event)"  data-col="uptime" style="text-align:right"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">UPTIME</th>
+      <th onclick="sortBy('rtt_avg', event)" data-col="rtt_avg" style="text-align:right"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">AVG RTT</th>
+      <th onclick="sortBy('rtt_min', event)" data-col="rtt_min" style="text-align:right"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">MIN RTT</th>
+      <th onclick="sortBy('rtt_max', event)" data-col="rtt_max" style="text-align:right"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">MAX RTT</th>
+      <th onclick="sortBy('changes', event)" data-col="changes" style="text-align:center"
+          title="Click to sort - Shift+click to add as secondary/tertiary sort criterion">CHANGES</th>
     </tr>
     </thead>
     <tbody id="tbody"></tbody>
@@ -932,8 +1007,7 @@ document.addEventListener('DOMContentLoaded', function() {{
   document.getElementById('themeBtn').textContent = isLight ? '🌙 Dark' : '☀ Light';
 }});
 
-let currentSort = null;
-let sortAsc = true;
+let sortChain = [];   // [{{col, asc}}, ...] - earlier entries take priority, Shift+click appends
 let rows = [...RAW.hosts];
 
 const G_START = RAW.global_start ? new Date(RAW.global_start.replace(' ','T')).getTime() : 0;
@@ -1014,10 +1088,31 @@ function renderTable(data) {{
   }});
 }}
 
+function escHtml(s) {{
+  return String(s).replace(/[&<>"']/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
+}}
+
 function buildDetail(h) {{
-  const eventsHtml = h.events.length === 0
+  // comments are a global timeline, not per-host - only show ones logged while
+  // this host was actually being observed (its first_ts..last_ts window)
+  const relevantComments = (RAW.comments || []).filter(c =>
+    (!h.first_ts || c.ts >= h.first_ts) && (!h.last_ts || c.ts <= h.last_ts)
+  );
+  const timeline = [
+    ...h.events.map(e => ({{ts: e.ts, kind: 'change', frm: e.frm, to: e.to}})),
+    ...relevantComments.map(c => ({{ts: c.ts, kind: 'comment', text: c.text}})),
+  ].sort((a, b) => a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : 0));
+
+  const eventsHtml = timeline.length === 0
     ? '<span style="color:var(--dim)">no state changes</span>'
-    : h.events.map(e => {{
+    : timeline.map(e => {{
+        if (e.kind === 'comment') {{
+          return `<div class="event comment-event">
+            <span class="ts">${{e.ts}}</span>
+            <span class="comment-marker">&#128172;</span>
+            <span class="comment-event-text">${{escHtml(e.text)}}</span>
+          </div>`;
+        }}
         const fc = e.frm === 'UP' ? 'var(--green)' : 'var(--red)';
         const tc = e.to  === 'UP' ? 'var(--green)' : 'var(--red)';
         return `<div class="event">
@@ -1068,20 +1163,58 @@ function toggleDetail(tr, h) {{
   }}
 }}
 
-function sortBy(col) {{
-  if (currentSort === col) {{ sortAsc = !sortAsc; }}
-  else {{ currentSort = col; sortAsc = true; }}
-  document.querySelectorAll('thead th').forEach(th => {{
+// updates header arrows/order badges to match the current sortChain
+function updateSortHeaders() {{
+  document.querySelectorAll('thead th[data-col]').forEach(th => {{
     th.classList.remove('sort-asc','sort-desc');
-    if (th.dataset.col === col) th.classList.add(sortAsc ? 'sort-asc' : 'sort-desc');
+    const old = th.querySelector('.sort-num');
+    if (old) old.remove();
+    const idx = sortChain.findIndex(s => s.col === th.dataset.col);
+    if (idx !== -1) {{
+      th.classList.add(sortChain[idx].asc ? 'sort-asc' : 'sort-desc');
+      if (sortChain.length > 1) {{
+        const badge = document.createElement('span');
+        badge.className = 'sort-num';
+        badge.textContent = String(idx + 1);
+        th.appendChild(badge);
+      }}
+    }}
   }});
+  const sel = document.getElementById('sortSel');
+  sel.value = (sortChain.length === 1) ? sortChain[0].col : '';
+  sel.title = sortChain.length > 1
+    ? 'Multi-column sort active - see column headers (Shift+click a header to add/remove it)'
+    : '';
+}}
+
+// plain click: sort by only this column (toggles direction if it's already the
+// sole criterion). Shift+click: append this column as an additional tie-breaker,
+// or toggle its direction if it's already part of the chain
+function sortBy(col, ev) {{
+  const shift = !!(ev && ev.shiftKey);
+  const idx = sortChain.findIndex(s => s.col === col);
+  if (shift) {{
+    if (idx !== -1) {{
+      sortChain[idx].asc = !sortChain[idx].asc;
+    }} else {{
+      sortChain.push({{col, asc: true}});
+    }}
+  }} else {{
+    if (idx === 0 && sortChain.length === 1) {{
+      sortChain[0].asc = !sortChain[0].asc;
+    }} else {{
+      sortChain = [{{col, asc: true}}];
+    }}
+  }}
+  updateSortHeaders();
   applyFilter();
 }}
 
 function sortBySelect() {{
   const v = document.getElementById('sortSel').value;
-  if (!v) {{ currentSort = null; applyFilter(); return; }}
-  sortBy(v);
+  sortChain = v ? [{{col: v, asc: true}}] : [];
+  updateSortHeaders();
+  applyFilter();
 }}
 
 let dedupMode = '';   // '': off (default), 'name': show hostname (hide its IP counterpart), 'ip': show IP (hide its hostname counterpart)
@@ -1129,6 +1262,25 @@ function onDedupSelectChange() {{
   renderBuckets();
 }}
 
+// single-column comparator used by the sortChain - 'state' groups by the
+// UP/FLAPPING/DOWN/NO-DNS badge order (not the raw state string, which has no
+// FLAPPING value); missing values (null) always sort last regardless of direction
+function compareOneColumn(col, asc, a, b) {{
+  if (col === 'state') {{
+    const od = stateOrder(a) - stateOrder(b);
+    if (od !== 0) return asc ? od : -od;
+    return asc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+  }}
+  const av = a[col], bv = b[col];
+  const aNull = av === null, bNull = bv === null;
+  if (aNull || bNull) {{
+    if (aNull && bNull) return 0;
+    return aNull ? 1 : -1;
+  }}
+  if (typeof av === 'string') return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+  return asc ? av - bv : bv - av;
+}}
+
 function applyFilter() {{
   const qRaw  = document.getElementById('search').value;
   const state = document.getElementById('stateFilter').value;
@@ -1159,23 +1311,16 @@ function applyFilter() {{
     return true;
   }});
   filtered.sort((a, b) => {{
-    if (currentSort === 'state') {{
-      // group by UP / FLAPPING / DOWN / NO-DNS like the STATE badge shows,
-      // not by the raw last-observed state string (which has no FLAPPING value)
+    for (const {{col, asc}} of sortChain) {{
+      const c = compareOneColumn(col, asc, a, b);
+      if (c !== 0) return c;
+    }}
+    if (sortChain.length === 0) {{
+      // default: UP → FLAPPING → DOWN → NO-DNS, then by name
       const od = stateOrder(a) - stateOrder(b);
-      if (od !== 0) return sortAsc ? od : -od;
-      return sortAsc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+      return od !== 0 ? od : a.name.localeCompare(b.name);
     }}
-    if (currentSort) {{
-      let av = a[currentSort], bv = b[currentSort];
-      if (av === null) av = sortAsc ? Infinity : -Infinity;
-      if (bv === null) bv = sortAsc ? Infinity : -Infinity;
-      if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-      return sortAsc ? av - bv : bv - av;
-    }}
-    // default: UP → FLAPPING → DOWN → NO-DNS, then by name
-    const od = stateOrder(a) - stateOrder(b);
-    return od !== 0 ? od : a.name.localeCompare(b.name);
+    return 0;   // every criterion in the chain tied
   }});
   document.getElementById('shownHosts').textContent = filtered.length + ' shown';
   renderTable(filtered);
@@ -1468,7 +1613,7 @@ def main():
 
     # ── stream & analyse ──
     print('  Analysing…')
-    hosts, host_order, rows_read = analyse(
+    hosts, host_order, rows_read, comments = analyse(
         filename,
         filter_hosts=filter_hosts,
         ts_start=ts_start,
@@ -1484,6 +1629,20 @@ def main():
     _buf        = _io.StringIO()
     sys.stdout  = _Tee(sys.__stdout__, _buf)
 
+    # ── comments (global timeline, shown once before the per-host detail - like
+    # the HTML report's Comments section, placed above its Host List) ──
+    hr('═')
+    header_line(f'COMMENTS ({len(comments)})', '═')
+    hr('═')
+    print()
+    if comments:
+        for c in comments:
+            ts_str = c['ts'].strftime(TS_FMT) if c['ts'] else '?'
+            print(f'  {ts_str}  {col(c["text"], CORANGE)}')
+    else:
+        print(f'  {col("No comments logged.", CDIM)}')
+    print()
+
     # ── per-host detail ──
     if not args.no_detail:
         hr('═')
@@ -1491,7 +1650,7 @@ def main():
         hr('═')
         print()
         for h in host_order:
-            print_host(h, hosts[h], show_changes=not args.no_changes)
+            print_host(h, hosts[h], show_changes=not args.no_changes, comments=comments)
 
     # ── summary ──
     print_summary(hosts, host_order, sort_by=args.sort)
@@ -1504,7 +1663,7 @@ def main():
         fh.write(strip_ansi(_buf.getvalue()))
 
     # ── save HTML report ──
-    report_data = build_report_data(hosts, host_order, filename, rows_read, base)
+    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments)
     generate_html(report_data, html_path)
 
     # ── version check ──

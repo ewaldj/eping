@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.77'
+VERSION = '1.82'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -162,6 +162,23 @@ def check_version_online(url: str, tool_name: str, timeout: float = 2.0):
 
 def is_program_installed(program_name: str) -> bool:
     return shutil.which(program_name) is not None
+
+_remote_version = None   # set by the top-level script code after the online version
+                          # check - lets sigint_handler() (defined earlier in the file)
+                          # show the same update notice as the normal [E] EXIT path
+
+def print_update_notice(remote_ver):
+    """Printed once on CLI exit when a newer eping.py is available online."""
+    print()
+    print(f'  A new version of eping.py is available! (installed: v{VERSION}, latest: v{remote_ver})')
+    print()
+    print('  Install it with:')
+    print('    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"')
+    print()
+    print('  Or visit:')
+    print('    https://www.jeitler.cc')
+    print('    https://github.com/ewaldj/eping')
+    print()
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -991,6 +1008,8 @@ def sigint_handler(signal, frame):
     screen=curses.initscr()
     curses.endwin()
     print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+    if _remote_version and _remote_version > VERSION:
+        print_update_notice(_remote_version)
     sys.stdout.flush()
     # os._exit(), not sys.exit(): a running [G] GET NAMES background lookup uses a
     # ThreadPoolExecutor whose worker threads are not daemons, so sys.exit() would
@@ -1215,6 +1234,28 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
                 writer = csv.writer(f)
                 writer.writerow(logdata)
 
+def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offset=0):
+    """Append a free-text, timestamped comment row to the CSV log (if logging is on).
+
+    Uses the sentinel HOSTNAME '#COMMENT#' so epinga.py can split these rows out
+    of the normal host data; the comment text itself goes in the IP column (last
+    field) - csv.writer already quotes it safely for Excel/Numbers re-import.
+    Timestamp format/tz handling matches update_host_state() so epinga.py's
+    TS_FMT ('%Y-%m-%d %H:%M:%S') parser accepts it.
+    Returns True if the row was written, False if logging is currently off.
+    """
+    if not logging_enabled or not comment_text:
+        return False
+    now_str = get_date_time()
+    ts = datetime.datetime.strptime(now_str, "%d/%m/%Y %H:%M:%S")
+    if tz_offset:
+        ts = ts + datetime.timedelta(hours=tz_offset)
+    logdata = [ts, '#COMMENT#', '', '', '', '', '', '', comment_text]
+    with open(logfile_file_name, 'a', encoding='UTF8') as f:
+        writer = csv.writer(f)
+        writer.writerow(logdata)
+    return True
+
 def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
                    interval_arg='', dns_ttl=DNS_CACHE_TTL,
                    down_hosts=None, down_retries=None, progress_cb=None,
@@ -1400,6 +1441,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>eping.py</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzRhM2IzNCI+CiAgPGVsbGlwc2UgY3g9IjEyIiBjeT0iMTYuNSIgcng9IjUuNCIgcnk9IjQuMyIvPgogIDxlbGxpcHNlIGN4PSI1LjIiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjE4LjgiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjguOSIgY3k9IjUuNiIgcng9IjIuNCIgcnk9IjMuMSIvPgogIDxlbGxpcHNlIGN4PSIxNS4xIiBjeT0iNS42IiByeD0iMi40IiByeT0iMy4xIi8+Cjwvc3ZnPg==">
 <style>
   :root{
     --bg:#0b0f0b; --fg:#c8d6c8; --dim:#5d6b5d; --line:#1e2a1e;
@@ -1413,8 +1455,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        font-size:13px}
   header{padding:6px 12px;border-bottom:1px solid var(--line);
          display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}
-  .title{font-weight:700;letter-spacing:.5px}
+  .title{display:flex;align-items:center;gap:8px;font-weight:700;letter-spacing:.5px}
+  .title svg{flex:none;color:var(--dim)}
   .title small{color:var(--dim);font-weight:400}
+  .title a{color:inherit;text-decoration:underline;text-decoration-color:var(--line)}
+  .title a:hover{color:var(--acc);text-decoration-color:currentColor}
   .clock{color:var(--dim)}
   .bar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;border-bottom:1px solid var(--line);align-items:center}
   button{background:var(--panel);color:var(--fg);border:1px solid var(--line);
@@ -1475,7 +1520,26 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 <div class="layout">
   <div id="banner" class="banner" style="display:none"></div>
   <header>
-    <div class="title">eping.py <small id="ver"></small> <small>by Ewald Jeitler</small>
+    <div class="title">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+        <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+        <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+        <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+        <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+      </svg>
+      <span>eping.py <small id="ver"></small> &nbsp;&middot;&nbsp;
+      &copy; Ewald Jeitler &nbsp;&middot;&nbsp;
+      supervised by <a href="https://jeitler.cc/nelly/" target="_blank" rel="noopener">Nelly</a> &nbsp;&middot;&nbsp;
+      <a href="https://tools.jeitler.cc" target="_blank" rel="noopener">tools.jeitler.cc</a> &nbsp;&middot;&nbsp;
+      <a href="https://www.jeitler.cc" target="_blank" rel="noopener">www.jeitler.cc</a></span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
+        <ellipse cx="5.2" cy="10.5" rx="2.5" ry="3.1"/>
+        <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
+        <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
+        <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
+      </svg>
       <small id="ro"></small></div>
     <div class="clock" id="clock"></div>
   </header>
@@ -1503,6 +1567,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
     <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
     <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
+    <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
+    <button id="btnComment" title="append a timestamped comment row to the CSV log">ADD COMMENT</button>
     <button id="btnClear" class="danger">CLEAR ALL</button>
     <button id="btnExit" class="danger">EXIT</button>
    </span>
@@ -1575,6 +1641,7 @@ var PENDING = {up_only:'switching view ...', sort:'sorting ...', add:'adding hos
                ip_only:'toggling ip only ...',
                get_names:'resolving names ...',
                match_filter:'applying filter ...',
+               add_comment:'logging comment ...',
                exit:'stopping eping ...'};
 var pending = false, lastServerMsg = null;
 
@@ -1632,6 +1699,16 @@ document.getElementById('addInput').addEventListener('keydown', function(e){
 
 document.getElementById('btnSetRef').onclick = function(){ post('set_ref'); };
 document.getElementById('btnZero').onclick   = function(){ post('zero'); };
+function sendComment(){
+  var el = document.getElementById('commentInput');
+  var v = el.value.trim();
+  if(!v){ el.focus(); return; }
+  post('add_comment', v).then(function(){ el.value=''; });
+}
+document.getElementById('btnComment').onclick = function(){ sendComment(); };
+document.getElementById('commentInput').addEventListener('keydown', function(e){
+  if(e.key === 'Enter'){ sendComment(); }
+});
 document.getElementById('btnClear').onclick  = function(){
   if(confirm('Remove ALL hosts and reset their state?')){ post('clear'); } };
 
@@ -1817,7 +1894,7 @@ window.addEventListener('resize', function(){
 function poll(){
   if(stopped) return;
   fetch('api/status').then(function(r){return r.json();}).then(function(s){
-    document.getElementById('ver').textContent   = 'version '+s.version;
+    document.getElementById('ver').textContent   = 'v'+s.version;
     if(s.readonly){
       document.getElementById('ctrls').style.display = 'none';
       document.getElementById('ro').textContent = '- read only, controlled from the terminal';
@@ -1958,7 +2035,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter'):
+        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter', 'add_comment'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -2211,6 +2288,15 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     _entry[5] = 0
                     _entry[6] = ''
                 message = 'change counters reset'
+            elif cmd == 'add_comment':
+                value = value.strip()
+                if not args.disable_logging:
+                    message = 'logging is off - comment not saved'
+                elif not value:
+                    message = 'comment: empty, not saved'
+                else:
+                    write_log_comment(args.disable_logging, logfile_file_name, value, tz_offset)
+                    message = 'comment logged'
             elif cmd == 'clear':
                 active_hosts_list   = []
                 original_hosts_list[:] = []
@@ -2226,6 +2312,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     web_state['message'] = 'stopped'
                 time.sleep(1.5)   # let the browser pick up the final status
                 print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+                if _remote_version and _remote_version > VERSION:
+                    print_update_notice(_remote_version)
                 sys.stdout.flush()
                 # os._exit(), not sys.exit(): see sigint_handler() for why - a
                 # running [G] GET NAMES lookup must not delay shutdown.
@@ -2416,6 +2504,8 @@ if __name__=='__main__':
            remote_version = check_version_online(url, toolname)
     else: 
         remote_version = version
+
+    _remote_version = remote_version
 
     # regex IP/FQDN/CIDR .... 
     ip_re = re.compile(r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
@@ -2660,6 +2750,8 @@ if __name__=='__main__':
             web_state['version'] = version
         def _web_sigint(sig, frame):
             print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
+            if _remote_version and _remote_version > VERSION:
+                print_update_notice(_remote_version)
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
             os._exit(0)
@@ -2970,14 +3062,14 @@ if __name__=='__main__':
         sm = SORT_MODES[sort_mode]
         keys_full  = [' [U]=' + fm[0] + ' ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ', ' [M]=MATCH FILTER ', ' [A]=ADD HOST ', ' [F]=ADD FILE ', ' [D]=DEL HOST ',
                       ' [S]=SET REFERENCE ', ' [O]=SORT ' + sm[0] + ' ', ' [Z]=ZERO CHANGES ',
-                      ' [C]=CLEAR ALL ', ' [R]=SCREEN REFRESH ', ' [E]=EXIT ']
+                      ' [C]=CLEAR ALL ', ' [R]=SCREEN REFRESH ', ' [T]=COMMENT ', ' [E]=EXIT ']
         keys_short = [' [U]=' + fm[1] + ' ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ', ' [M]=FILTER ', ' [A]=ADD ', ' [F]=FILE ', ' [D]=DEL ',
                       ' [S]=SET REF ', ' [O]=' + sm[1] + ' ', ' [Z]=ZERO ',
-                      ' [C]=CLEAR ', ' [R]=REFRESH ', ' [E]=EXIT ']
+                      ' [C]=CLEAR ', ' [R]=REFRESH ', ' [T]=COMMENT ', ' [E]=EXIT ']
         keys_tiny  = [' [U]' + fm[2] + ' ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ', ' [M]FLT ', ' [A]ADD ', ' [F]FILE ', ' [D]DEL ',
                       ' [S]REF ', ' [O]' + sm[1] + ' ', ' [Z]ZERO ',
-                      ' [C]CLR ', ' [R]RFR ', ' [E]EXIT ']
-        keys_micro = [' U ', ' P ', ' I ', ' G ', ' M ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' E ']
+                      ' [C]CLR ', ' [R]RFR ', ' [T]CMT ', ' [E]EXIT ']
+        keys_micro = [' U ', ' P ', ' I ', ' G ', ' M ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' T ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
@@ -3110,6 +3202,8 @@ if __name__=='__main__':
                 cmd = 'SCREENREFRESH'
             elif k in (ord('e'), ord('E')):
                 cmd = 'EXIT'
+            elif k in (ord('t'), ord('T')):
+                cmd = 'ADD_COMMENT'
         if cmd == 'SET_REFERENCE':
             # the currently displayed host list becomes the new reference list
             original_hosts_list = list(active_hosts_list)
@@ -3238,11 +3332,22 @@ if __name__=='__main__':
                 _entry[5] = 0
                 _entry[6] = ''
             notice('CHANGE COUNTERS RESET', 2)
+        elif cmd == 'ADD_COMMENT':
+            if not args.disable_logging:
+                notice('LOGGING IS OFF - COMMENT NOT SAVED', 3)
+            else:
+                value = input_dialog(' ADD COMMENT ',
+                                     ' free text, logged with a timestamp to the CSV:')
+                if value:
+                    write_log_comment(args.disable_logging, logfile_file_name, value, tz_offset)
+                    notice('COMMENT LOGGED', 2)
         elif cmd == 'SCREENREFRESH':
             screen.clear()
         elif cmd == 'EXIT':
             curses.endwin()
             print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+            if remote_version and remote_version > version:
+                print_update_notice(remote_version)
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
             os._exit(0)
