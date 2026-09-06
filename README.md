@@ -39,7 +39,7 @@ Without arguments a sample `eping-hosts.txt` is created. Starting with no hosts 
 
 CLI mode needs a live terminal, so to keep it running after you log out, run it inside
 `screen` or `tmux` and detach. Quick guide:
-<https://github.com/ewaldj/microups/blob/main/SCREEN_AND_TMUX-QUICK_GUIDE.txt>
+<https://github.com/ewaldj/microups/blob/main/SCREEN_AND_TMUX-QUICK_GUIDE.md>
 
 ## Host sources
 
