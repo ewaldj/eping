@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.82'
+VERSION = '1.84'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -166,6 +166,8 @@ def is_program_installed(program_name: str) -> bool:
 _remote_version = None   # set by the top-level script code after the online version
                           # check - lets sigint_handler() (defined earlier in the file)
                           # show the same update notice as the normal [E] EXIT path
+_logfile_file_name = None   # ditto, for maybe_run_epinga() - the actual logfile path
+_logging_enabled = False    # ditto - args.disable_logging (True unless -dl was given)
 
 def print_update_notice(remote_ver):
     """Printed once on CLI exit when a newer eping.py is available online."""
@@ -179,6 +181,35 @@ def print_update_notice(remote_ver):
     print('    https://www.jeitler.cc')
     print('    https://github.com/ewaldj/eping')
     print()
+
+def maybe_run_epinga(logfile_file_name, logging_enabled):
+    """Offer to analyse the just-written logfile with epinga.py, on exit.
+
+    Only offered if logging was on and the logfile actually exists and has
+    content - running epinga.py on a missing/empty file would just fail.
+    Enter (or anything but 'y') skips it, same as an empty input elsewhere.
+    """
+    if not logging_enabled or not logfile_file_name:
+        return
+    try:
+        if not os.path.exists(logfile_file_name) or os.path.getsize(logfile_file_name) == 0:
+            return
+    except OSError:
+        return
+    try:
+        answer = input('\n  Run an analysis of this logfile with epinga.py now? [y/N]: ').strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return
+    if answer != 'y':
+        return
+    epinga_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'epinga.py')
+    if not os.path.exists(epinga_path):
+        print(f'  epinga.py not found next to eping.py ({epinga_path}) - skipping.')
+        return
+    try:
+        subprocess.call([sys.executable, epinga_path, '-f', logfile_file_name])
+    except Exception as e:
+        print(f'  Failed to run epinga.py: {e}')
 
 def error_handler(message):
     print ('\n ' + str(message) + '\n')
@@ -1010,6 +1041,7 @@ def sigint_handler(signal, frame):
     print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
     if _remote_version and _remote_version > VERSION:
         print_update_notice(_remote_version)
+    maybe_run_epinga(_logfile_file_name, _logging_enabled)
     sys.stdout.flush()
     # os._exit(), not sys.exit(): a running [G] GET NAMES background lookup uses a
     # ThreadPoolExecutor whose worker threads are not daemons, so sys.exit() would
@@ -2314,6 +2346,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
                 if _remote_version and _remote_version > VERSION:
                     print_update_notice(_remote_version)
+                maybe_run_epinga(logfile_file_name, args.disable_logging)
                 sys.stdout.flush()
                 # os._exit(), not sys.exit(): see sigint_handler() for why - a
                 # running [G] GET NAMES lookup must not delay shutdown.
@@ -2738,6 +2771,9 @@ if __name__=='__main__':
         except:
             error_handler('ERROR: failed to create logfile: ' + logfile_file_name )
 
+    _logfile_file_name = logfile_file_name
+    _logging_enabled = args.disable_logging
+
     # --- state dict: hostname -> [hostname, state, timestamp, rtt, prev_state, changes, change_ts, tbd, resolved_ip]
     host_state = {}
 
@@ -2752,6 +2788,7 @@ if __name__=='__main__':
             print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
             if _remote_version and _remote_version > VERSION:
                 print_update_notice(_remote_version)
+            maybe_run_epinga(logfile_file_name, args.disable_logging)
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
             os._exit(0)
@@ -3060,24 +3097,29 @@ if __name__=='__main__':
         # show the view and the order that are active right now.
         fm = FILTER_MODES[filter_mode]
         sm = SORT_MODES[sort_mode]
-        keys_full  = [' [U]=' + fm[0] + ' ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ', ' [M]=MATCH FILTER ', ' [A]=ADD HOST ', ' [F]=ADD FILE ', ' [D]=DEL HOST ',
-                      ' [S]=SET REFERENCE ', ' [O]=SORT ' + sm[0] + ' ', ' [Z]=ZERO CHANGES ',
-                      ' [C]=CLEAR ALL ', ' [R]=SCREEN REFRESH ', ' [T]=COMMENT ', ' [E]=EXIT ']
-        keys_short = [' [U]=' + fm[1] + ' ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ', ' [M]=FILTER ', ' [A]=ADD ', ' [F]=FILE ', ' [D]=DEL ',
-                      ' [S]=SET REF ', ' [O]=' + sm[1] + ' ', ' [Z]=ZERO ',
-                      ' [C]=CLEAR ', ' [R]=REFRESH ', ' [T]=COMMENT ', ' [E]=EXIT ']
-        keys_tiny  = [' [U]' + fm[2] + ' ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ', ' [M]FLT ', ' [A]ADD ', ' [F]FILE ', ' [D]DEL ',
-                      ' [S]REF ', ' [O]' + sm[1] + ' ', ' [Z]ZERO ',
-                      ' [C]CLR ', ' [R]RFR ', ' [T]CMT ', ' [E]EXIT ']
-        keys_micro = [' U ', ' P ', ' I ', ' G ', ' M ', ' A ', ' F ', ' D ', ' S ', ' O ', ' Z ', ' C ', ' R ', ' T ', ' E ']
+        # order: U, M, A, D, F, O, T, S, Z, C, P, I, G, R, E - grouped by how often
+        # each is used, rather than the historical add-order
+        keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=MATCH FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
+                      ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
+                      ' [C]=CLEAR ALL ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ',
+                      ' [R]=SCREEN REFRESH ', ' [E]=EXIT ']
+        keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
+                      ' [O]=' + sm[1] + ' ', ' [T]=COMMENT ', ' [S]=SET REF ', ' [Z]=ZERO ',
+                      ' [C]=CLEAR ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ',
+                      ' [R]=REFRESH ', ' [E]=EXIT ']
+        keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
+                      ' [O]' + sm[1] + ' ', ' [T]CMT ', ' [S]REF ', ' [Z]ZERO ',
+                      ' [C]CLR ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ',
+                      ' [R]RFR ', ' [E]EXIT ']
+        keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' I ', ' G ', ' R ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
         key_col = 2
         for idx, label in enumerate(keys):
-            highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and prefer_hostname)
-                        or (idx == 2 and ip_only_mode) or (idx == 4 and match_filter_re is not None)
-                        or (idx == 9 and sort_mode != 0))
+            highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and match_filter_re is not None)
+                        or (idx == 5 and sort_mode != 0) or (idx == 10 and prefer_hostname)
+                        or (idx == 11 and ip_only_mode))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)
             key_col += len(label)
 
@@ -3348,6 +3390,7 @@ if __name__=='__main__':
             print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
             if remote_version and remote_version > version:
                 print_update_notice(remote_version)
+            maybe_run_epinga(logfile_file_name, args.disable_logging)
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
             os._exit(0)
