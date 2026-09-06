@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.94'
+version = '1.95'
 
 import re
 import os
@@ -361,7 +361,7 @@ def print_host(hostname, s, show_changes, comments=None):
         for kind, ts, a, b in timeline:
             ts_str = ts.strftime(TS_FMT) if ts else '?'
             if kind == 'comment':
-                print(f'  {ts_str}  {col("💬 " + a, CORANGE)}')
+                print(f'  {ts_str}  {col("COMMENT: " + a, CORANGE)}')
             else:
                 arrow = f'{state_col(a)} → {state_col(b)}'
                 print(f'  {ts_str}  {arrow}')
