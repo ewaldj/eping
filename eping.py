@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.10'
+VERSION = '2.11'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -81,10 +81,9 @@ FILTER_MODES = [
 # web gui only: the view dropdown offers every combination filter_hosts() supports,
 # not just the 3 the CLI's [U] key cycles through - see WEB_VIEW_MODES below.
 WEB_VIEW_MODES = FILTER_MODES + [
-    ('DOWN',            'DOWN',  'DWN'),
-    ('FLAPPING-ONLY',   'FLAP',  'FLP'),
-    ('DOWN+FLAPPING',   'DN+FL', 'D+F'),
-    ('UP+NO-FLAPPING',  'UP-FL', 'U-F'),
+    ('DOWN',           'DOWN',  'DWN'),
+    ('FLAPPING-ONLY',  'FLAP',  'FLP'),
+    ('DOWN+FLAPPING',  'DN+FL', 'D+F'),
 ]
 
 # [O] cycles through these orders. A flapping host is also UP or DOWN right now, so the
@@ -984,7 +983,7 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF):
     """Host list for the given view mode - a snapshot, taken when the view switches.
     Modes 0-2 (ALL/UP/UP+FLAPPING) are also used by the CLI's [U] key and its web
-    gui keyboard-shortcut equivalent; modes 3-6 are reachable only through the web
+    gui keyboard-shortcut equivalent; modes 3-5 are reachable only through the web
     gui's view dropdown (set_filter) - see WEB_VIEW_MODES."""
     if mode <= 0:
         return list(original_hosts_list)
@@ -1005,8 +1004,6 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
         elif mode == 4 and is_flap:
             out.append(h)
         elif mode == 5 and (not is_up or is_flap):
-            out.append(h)
-        elif mode == 6 and is_up and not is_flap:
             out.append(h)
     return out
 
@@ -1755,7 +1752,6 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="0">ALL HOSTS</option>
         <option value="1">UP</option>
         <option value="2">UP+FLAPPING</option>
-        <option value="6">UP+NO-FLAPPING</option>
         <option value="4">FLAPPING-ONLY</option>
         <option value="3">DOWN</option>
         <option value="5">DOWN+FLAPPING</option>

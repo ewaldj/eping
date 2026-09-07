@@ -1,4 +1,4 @@
-# eping.py 2.10
+# eping.py 2.11
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -224,7 +224,7 @@ how often a host has changed; `Z` resets it.
 
 `U` cycles the original three views (CLI, and as a web gui keyboard shortcut: ALL
 HOSTS → UP → UP+FLAPPING → ALL HOSTS). The web gui's view dropdown additionally
-offers 4 more views that only it can reach - the CLI has no way to select them and `U`
+offers 3 more views that only it can reach - the CLI has no way to select them and `U`
 skips over them (cycling in from one of them resets to ALL HOSTS first). Either way,
 the view also shrinks what is probed, which is what makes UP (and the other
 non-ALL views) shorten the round - hosts filtered away are not probed and cannot come
@@ -234,16 +234,13 @@ is shown) and the previous view stays active.
 
 The web gui dropdown lists the views in this order (independent of their internal
 index, which stays stable for scripting against `/api/status`'s `filter_mode`):
-ALL HOSTS, UP, UP+FLAPPING, UP+NO-FLAPPING, FLAPPING-ONLY, DOWN, DOWN+FLAPPING.
-(A `DOWN+NO-FLAPPING` view was tried and dropped again - too close to `DOWN` to be
-useful, since most DOWN hosts are not flapping anyway.)
+ALL HOSTS, UP, UP+FLAPPING, FLAPPING-ONLY, DOWN, DOWN+FLAPPING.
 
 | View | Contains | Where |
 |---|---|---|
 | ALL HOSTS | everything in the reference list | CLI + web gui |
 | UP | hosts currently UP | CLI + web gui |
 | UP+FLAPPING | hosts currently UP plus flapping hosts, even if they are DOWN now | CLI + web gui |
-| UP+NO-FLAPPING | hosts currently UP and NOT flapping - the "quiet" UP hosts | web gui only |
 | FLAPPING-ONLY | hosts currently flapping, regardless of UP/DOWN | web gui only |
 | DOWN | hosts currently DOWN or NO-DNS, flapping or not | web gui only |
 | DOWN+FLAPPING | hosts currently DOWN/NO-DNS plus flapping hosts, even if UP now | web gui only |
