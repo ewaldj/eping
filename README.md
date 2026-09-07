@@ -1,4 +1,4 @@
-# eping.py 2.11
+# eping.py 2.17
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -192,12 +192,13 @@ Serves a single self-contained page; no external resources are loaded.
   display preference, not a control over eping.py itself.
 - Column headers sort the whole list (IPv4-aware).
 - Toolbar is fixed at two rows (wraps to more if the window is narrow, never
-  fewer): row 1 - view select (7 views, picked directly from a dropdown - web
+  fewer): row 1 - view select (6 views, picked directly from a dropdown - web
   gui only, see *Views and sort orders*; the CLI still cycles the original 3
   with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
-  GET NAMES, RESET LOG, EXIT, font size (right-aligned); row 2 - match filter field with
-  SET / CLEAR, the host field with ADD / DELETE, ADD FILE, and
-  the comment field with COMMENT. All work exactly as the matching CLI keys
+  GET NAMES, RESET LOG (reads `START LOG` while logging is off), EXIT, font size
+  (right-aligned); row 2, in order and separated by `|`: the match filter field with
+  SET / CLEAR, the host field with ADD / DELETE, the comment field with COMMENT, then
+  ADD FILE on its own at the end. All work exactly as the matching CLI keys
   (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`).
   The host field feeds both ADD and DELETE — type a value and press the matching
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
@@ -271,7 +272,7 @@ changes state moves to its new group right away.
 |---|---|---|---|
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan and phase info |
-| POST | `/api/command` | `{"cmd":"up_only\|prefer_hostname\|ip_only\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
+| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|prefer_hostname\|ip_only\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
 There is no authentication. The default bind address is `0.0.0.0` — use
