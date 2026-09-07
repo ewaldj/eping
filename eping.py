@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.92'
+VERSION = '1.96'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -112,6 +112,7 @@ import resource
 import http.server
 import socketserver
 import socket
+import shlex
 import concurrent.futures
 #checkversion online
 try:
@@ -182,13 +183,25 @@ def print_update_notice(remote_ver):
     print('    https://github.com/ewaldj/eping')
     print()
 
+_epinga_prompt_active = False
+
 def maybe_run_epinga(logfile_file_name, logging_enabled):
     """Offer to analyse the just-written logfile with epinga.py, on exit.
 
     Only offered if logging was on and the logfile actually exists and has
     content - running epinga.py on a missing/empty file would just fail.
     Enter (or anything but 'y') skips it, same as an empty input elsewhere.
+
+    Reentrancy guard: a Ctrl+C while the input() prompt below is blocked
+    triggers the installed SIGINT handler, which calls this function again
+    to print the THX message and exit. Without the guard that nested call
+    would hit input() a second time while the first call's readline state
+    is still unwound, raising 'RuntimeError: can't re-enter readline'. The
+    guard makes the nested call a no-op so the handler can exit cleanly.
     """
+    global _epinga_prompt_active
+    if _epinga_prompt_active:
+        return
     if not logging_enabled or not logfile_file_name:
         return
     try:
@@ -196,10 +209,13 @@ def maybe_run_epinga(logfile_file_name, logging_enabled):
             return
     except OSError:
         return
+    _epinga_prompt_active = True
     try:
         answer = input('\n  Run an analysis of this logfile with epinga.py now? [y/N]: ').strip().lower()
     except (EOFError, KeyboardInterrupt):
         return
+    finally:
+        _epinga_prompt_active = False
     if answer != 'y':
         return
     epinga_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'epinga.py')
@@ -274,6 +290,59 @@ def get_ipv4_from_cidr(cidr, min_mask, max_mask):
     start = int(net.network_address)
     size  = net.num_addresses
     return [str(ipaddress.IPv4Address(start + i)) for i in range(size)]
+
+def expand_range_end(start_ip, end_fragment):
+    """Fill in a shortened -r range end using the start address's leading octets.
+
+    A full address (4 octets) is returned unchanged. 1-3 octets borrow that many
+    leading octets from start_ip instead, e.g. start '172.19.0.0' + end '1.13' ->
+    '172.19.1.13'; start '172.20.2.0' + end '15' -> '172.20.2.15'.
+    """
+    end_parts = end_fragment.split('.')
+    if len(end_parts) == 4:
+        return end_fragment
+    if not (1 <= len(end_parts) <= 3):
+        raise TypeError("ERROR: Not a valid range end: '" + end_fragment
+                        + "' (expected a full IPv4 address, or its last 1-3 octets)")
+    start_parts = start_ip.split('.')
+    if len(start_parts) != 4:
+        raise TypeError('ERROR: Not a valid start IPv4 address: ' + start_ip)
+    return '.'.join(start_parts[:4 - len(end_parts)] + end_parts)
+
+
+def parse_ranges_arg(value, max_ip_per_range):
+    """Parse a -r value: one or more comma-separated 'start-end' ranges.
+
+    'end' may be abbreviated to its last 1-3 octets, borrowed from 'start' - see
+    expand_range_end(). Blanks around commas/dashes are tolerated. Returns the
+    combined list of expanded IPv4 address strings.
+    """
+    hosts = []
+    for chunk in (value or '').split(','):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if '-' not in chunk:
+            raise TypeError("ERROR: Range '" + chunk
+                            + "' must be start-end, e.g. 10.0.0.1-10.0.0.10")
+        start_str, end_str = chunk.split('-', 1)
+        start_str = start_str.strip()
+        end_str   = end_str.strip()
+        if not match_re(start_str, ip_re):
+            raise TypeError('ERROR: Not a valid start IPv4 address: ' + start_str)
+        end_full = expand_range_end(start_str, end_str)
+        hosts.extend(get_ipv4_from_range(start_str, end_full, max_ip_per_range))
+    return hosts
+
+
+def parse_cidrs_arg(value, min_mask, max_mask):
+    """Parse a -n value: one or more comma-separated CIDR networks."""
+    hosts = []
+    for chunk in (value or '').split(','):
+        chunk = chunk.strip()
+        if chunk:
+            hosts.extend(get_ipv4_from_cidr(chunk, min_mask, max_mask))
+    return hosts
 
 def create_file_if_not_exists(filename,data):
     try:
@@ -1091,6 +1160,30 @@ def parse_hosts_from_text(text, stats=None):
         stats['networks'] = networks
         stats['skipped']  = skipped
     return out
+
+def extract_opt_lines(text):
+    """Pull CLI options out of a host file's 'opt:'/'OPT:' lines.
+
+    A line counts only if it starts with exactly 'opt:' or 'OPT:' (leading blanks
+    are fine); anything else ('Opt:', 'options:', ...) is left alone as a plain
+    host line. Several opt: lines are allowed and are concatenated in file order.
+    '#' works exactly like it does for host lines: it comments out the rest of the
+    line (or, at the very start, the whole line), so a commented-out opt: line
+    contributes nothing. Values with spaces can be quoted, e.g. opt: -f "my hosts.txt".
+    Returns a list of tokens (possibly empty).
+    """
+    tokens = []
+    for raw in (text or '').splitlines():
+        line = raw.split('#', 1)[0].strip()      # '#' comments out the rest (or all) of the line
+        if line.startswith('opt:') or line.startswith('OPT:'):
+            rest = line[4:].strip()
+            if rest:
+                try:
+                    tokens.extend(shlex.split(rest))
+                except ValueError:
+                    pass   # unbalanced quotes - ignore this one line rather than crash
+    return tokens
+
 
 def load_hosts_file(path):
     """Read a host file from disk. Returns (hosts, error_message)."""
@@ -2436,6 +2529,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')))
                 active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                                      if prefer_hostname else active_hosts_list)
+                if args.set_reference:
+                    # -setref: same as the 'set_ref' web command, once learning ends
+                    original_hosts_list = list(active_hosts_list)
                 learning_phase = True
         else:
             learning_phase = True
@@ -2532,16 +2628,8 @@ if __name__=='__main__':
     # adding optional argument
     parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
-    parser.add_argument('-n', '--network', default='', dest='network_cidr', help='network e.g. 172.17.17.0/24  minimum mask: /' + str(CIDR_MIN_MASK) )
-    parser.add_argument('-n1', '--network1', default='', dest='network_cidr1', help='network e.g. 10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
-    parser.add_argument('-n2', '--network2', default='', dest='network_cidr2', help='network e.g. 192.168.100/25  minimum mask: /' + str(CIDR_MIN_MASK) )
-    parser.add_argument('-n3', '--network3', default='', dest='network_cidr3', help='network e.g. 10.10.0.0/22  minimum mask: /' + str(CIDR_MIN_MASK) )
-    parser.add_argument('-n4', '--network4', default='', dest='network_cidr4', help='network e.g. 10.180.0.0/21  minimum mask: /' + str(CIDR_MIN_MASK) )
-    parser.add_argument('-r', '--network_range', default='', nargs = '*' ,dest='network_range', help='ip range e.g. 10.180.0.0 10.180.3.255')
-    parser.add_argument('-r1', '--network_range1', default='', nargs = '*' ,dest='network_range1', help='ip range e.g. 172.17.1.1 172.17.1.20')
-    parser.add_argument('-r2', '--network_range2', default='', nargs = '*' ,dest='network_range2', help='ip range e.g. 192.168.1.1 192.168.1.60')
-    parser.add_argument('-r3', '--network_range3', default='', nargs = '*' ,dest='network_range3', help='ip range e.g. 1.1.1.0 1.1.1.255')
-    parser.add_argument('-r4', '--network_range4', default='', nargs = '*' ,dest='network_range4', help='ip range e.g. 8.8.8.8 8.8.8.8')
+    parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
+    parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
     parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5)" )
     parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms)") 
     parser.add_argument('-re', '--retries', default='3', dest='retries', help="number of retries per host (default: 3)")
@@ -2550,6 +2638,7 @@ if __name__=='__main__':
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
+    parser.add_argument('-setref', '--set_reference', action="store_true", dest='set_reference', help="with -up: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing [S]/SET REFERENCE)" )
     parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="fping processes per retry group (default: auto = " + str(PROCS_PER_GROUP) + "; higher values cost accuracy)" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
     parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )   
@@ -2573,6 +2662,26 @@ if __name__=='__main__':
     parser.add_argument('-wv', '--web_view', action="store_true", dest='web_view', help="CLI mode plus a read-only web view on --port (browser shows the same data, no controls)")
     parser.add_argument('-port', '--port', default=str(WEB_DEFAULT_PORT), dest='web_port', help="http port for --web and --web_view (default: " + str(WEB_DEFAULT_PORT) + ")")
     parser.add_argument('-bind', '--bind', default=WEB_DEFAULT_BIND, dest='web_bind', help="bind address for --web and --web_view (default: " + WEB_DEFAULT_BIND + " = all interfaces)")
+
+    # host file 'opt:'/'OPT:' lines let a host file carry its own CLI options (e.g.
+    # a per-site file that should always run with -ph -du). Found via a lightweight
+    # pre-parse with the same parser, so -f/--hostfile and -df/--disable_hostfile are
+    # resolved exactly like the real parse below; any opt: tokens found are prepended
+    # to argv, so real command-line flags still win on conflict (argparse keeps the
+    # last occurrence of a flag). Only the initial -f load is scanned this way - [F]
+    # ADD FILE and the web GUI upload only ever add hosts, never options.
+    try:
+        _pre_args, _ = parser.parse_known_args()
+        if not _pre_args.disable_hostfile:
+            with open(_pre_args.hostfile, 'r', encoding='utf-8', errors='replace') as _f:
+                _opt_tokens = extract_opt_lines(_f.read(WEB_MAX_UPLOAD + 1))
+            if _opt_tokens:
+                sys.argv = [sys.argv[0]] + _opt_tokens + sys.argv[1:]
+    except SystemExit:
+        raise   # a genuinely bad command line (or -h/--help) - let argparse handle it
+    except Exception:
+        pass    # hosts file missing/unreadable at this point - the real parse below
+                # reports it properly once -f itself is actually validated
 
     # read arguments from command line
     args = parser.parse_args()
@@ -2606,35 +2715,19 @@ if __name__=='__main__':
     if args.delete_files:
         delete_files('eping-*')
 
-    # --- network range -r and r1 to r4  
-    range_args = [
-        args.network_range,
-        args.network_range1,
-        args.network_range2,
-        args.network_range3,
-        args.network_range4
-    ]
-    for network_range in range_args:
-        if network_range:
-            try:
-                hosts_list_ipv4.extend(get_ipv4_from_range(network_range[0], network_range[1], MAX_IPS_PER_RANGE))
-            except Exception as e:
-                error_handler(f"Range error: {e}")
-    
-    # --- cidr  -n  and n1 to n4 
-    cidr_args = [
-        args.network_cidr,
-        args.network_cidr1,
-        args.network_cidr2,
-        args.network_cidr3,
-        args.network_cidr4
-    ]
-    for cidr in cidr_args:
-        if cidr:
-            try:
-                hosts_list_ipv4.extend(get_ipv4_from_cidr(cidr, CIDR_MIN_MASK, CIDR_MAX_MASK))
-            except Exception as e:
-                error_handler(f"CIDR error: {e}")
+    # --- network range(s) -r: comma separated, 'start-end', end may be shortened
+    if args.network_range:
+        try:
+            hosts_list_ipv4.extend(parse_ranges_arg(args.network_range, MAX_IPS_PER_RANGE))
+        except Exception as e:
+            error_handler(f"Range error: {e}")
+
+    # --- cidr network(s) -n: comma separated
+    if args.network_cidr:
+        try:
+            hosts_list_ipv4.extend(parse_cidrs_arg(args.network_cidr, CIDR_MIN_MASK, CIDR_MAX_MASK))
+        except Exception as e:
+            error_handler(f"CIDR error: {e}")
 
     # time_zone_range -24 to +24 check 
     try:
@@ -2740,6 +2833,14 @@ if __name__=='__main__':
     except ValueError:
         error_handler("ERROR: --dns_ttl: must be between 0 and 86400")
 
+    # -setref only makes sense together with a learning phase
+    try:
+        up_hosts_check_int = int(args.up_hosts_check)
+    except ValueError:
+        error_handler("ERROR: --up: must be a whole number")
+    if args.set_reference and up_hosts_check_int <= 0:
+        error_handler("ERROR: --set_reference requires --up N (N > 0)")
+
     # web gui port check (relevant with --web and --web_view)
     if args.web or args.web_view:
         try:
@@ -2753,6 +2854,14 @@ if __name__=='__main__':
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
         data = ["# eping hosts - IPs, hostnames and CIDR networks, '#' starts a comment\n",
                 "# a network is expanded to every address in it, e.g.: 192.168.99.0/29 2603:c020:8016:1313::10 2603:c020:8016:1313::10/128\n",
+                "#\n",
+                "# a line starting with exactly 'opt:' or 'OPT:' carries CLI options that are\n",
+                "# applied as if typed on the command line (several such lines are allowed and\n",
+                "# are joined in file order; a real CLI option always wins over one from here).\n",
+                "# examples (commented out - remove the leading '# ' to activate):\n",
+                "# opt: -ph -du -w 2\n",
+                "# opt: -web -port 9000\n",
+                "# opt: -up 5 -setref\n",
                 "\n",
                 "127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222\n", "208.67.220.220\n",
                 "www.heise.de 193.99.144.85\n", "www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n",
@@ -3524,6 +3633,9 @@ if __name__=='__main__':
                 ))
                 active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                                      if prefer_hostname else active_hosts_list)
+                if args.set_reference:
+                    # -setref: same as pressing [S]/SET REFERENCE once learning ends
+                    original_hosts_list = list(active_hosts_list)
                 screen.clear()
                 filter_mode = 1        # the learning phase leaves an UP-only view
                 learning_phase = True
