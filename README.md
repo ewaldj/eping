@@ -1,4 +1,4 @@
-# eping.py 1.92
+# eping.py 1.96
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -48,8 +48,15 @@ Combinable in one invocation:
 | Source | Option |
 |---|---|
 | Host file | `-f FILE`, disable with `-df` |
-| CIDR network | `-n`, `-n1` … `-n4` (mask /13 … /32) |
-| IP range | `-r`, `-r1` … `-r4` (`-r 10.0.0.1 10.0.0.99`) |
+| CIDR network | `-n` (mask /13 … /32), one or more, comma separated |
+| IP range | `-r`, one or more `start-end` ranges, comma separated |
+
+`-n`: `-n 172.17.17.0/24,10.0.0.0/30`.
+
+`-r`: `-r 10.0.0.0-10.0.0.10,172.19.0.0-1.13,172.20.2.0-15`. The end of a range may be
+shortened to its last 1-3 octets, borrowed from that range's start address — so
+`172.19.0.0-1.13` means `172.19.0.0-172.19.1.13` and `172.20.2.0-15` means
+`172.20.2.0-172.20.2.15`.
 
 Limits: 512000 hosts total, 524288 addresses per range. Duplicates are removed.
 CIDR expansion includes network and broadcast addresses.
@@ -76,6 +83,32 @@ with a message naming the allowed range; `-f` prints a warning and ignores it. I
 no network expansion — `/128` (a single host) is accepted, any other IPv6 mask is
 rejected with a message. Anything else that matches none of the forms is silently
 ignored.
+
+### Options embedded in the host file (`opt:` / `OPT:`)
+
+A line starting with exactly `opt:` or `OPT:` (leading blanks are fine) carries CLI
+options instead of hosts — handy for a per-site file that should always run the same
+way, without retyping the flags every time:
+
+```
+opt: -ph -du -w 2
+opt: -web -port 9000
+1.1.1.1
+8.8.8.8
+```
+
+Several `opt:` lines are allowed and are joined together in file order. `#` works
+exactly like it does for a host line — it comments out the rest of the line, or the
+whole line if it's right at the start (`# opt: -w 2` is ignored, not applied). Quote a
+value that contains spaces, e.g. `opt: -f "my hosts.txt"`. An option actually typed on
+the command line always wins over the same option from the file.
+
+This only applies to the initial `-f` host file read at startup (including the default
+`eping-hosts.txt`) — `F` / ADD FILE in the CLI and a web GUI upload only ever add
+hosts, an `opt:` line in one of those is left alone as ordinary (harmless) text.
+
+The generated default `eping-hosts.txt` ships with this section explained and a
+few `opt:` examples, commented out.
 
 ## CLI mode
 
@@ -266,7 +299,7 @@ sends one hard burst.
 ## Options
 
 ### Host selection
-`-f` hostfile · `-df` disable hostfile · `-n`/`-n1..4` CIDR · `-r`/`-r1..4` IP range
+`-f` hostfile · `-df` disable hostfile · `-n` CIDR (comma separated) · `-r` IP range (comma separated, shortened end)
 
 ### Probing
 | Option | Default | Meaning |
@@ -290,6 +323,7 @@ sends one hard burst.
 | `-ncs` | off | do not pass `--check-source` to fping |
 | `-w` | 0.5 | pause between rounds in seconds |
 | `-up` | 0 | learning phase: after N rounds keep only hosts seen UP |
+| `-setref` | off | with `-up`: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing `S`/SET REFERENCE); requires `-up N` with N > 0 |
 
 ### Output
 | Option | Default | Meaning |
@@ -443,7 +477,7 @@ plain IPv4 the same way. `PREFER HOSTNAMES` and `GET NAMES` consider every resol
 address of a hostname, not just one. Internally, fping cannot ping v4 and v6 targets in the same invocation, so a
 round with both families in play runs one fping process per family — this is
 transparent, `-dg` just shows an extra `full`/`reduced` group suffixed `/v6`. CIDR
-(`-n`, `-r`) and IP-range (`-r1..4`) expansion remain IPv4-only; a single IPv6 host can
+(`-n`) and IP-range (`-r`) expansion remain IPv4-only; a single IPv6 host can
 be given with `/128` (e.g. `2001:db8::1/128`), any other IPv6 mask is rejected. However
 entered — bare address, `/128`, host file, upload — an IPv6 address is always stored in
 its shortest form (`2001:4860:4860:0000:...:8888` becomes `2001:4860:4860::8888`).
