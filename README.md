@@ -1,4 +1,4 @@
-# eping.py 2.07
+# eping.py 2.10
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -122,7 +122,7 @@ in ms, timestamp of the last state change, number of changes.
 
 | Key | Action |
 |---|---|
-| `U` | cycle the view: ALL HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS |
+| `U` | cycle the view: ALL HOSTS → UP → UP+FLAPPING → ALL HOSTS |
 | `M` | match filter — regex on hostname/IP (case-insensitive); only matching hosts are shown, every host keeps being pinged regardless; empty input turns it off (see *Match filter*) |
 | `A` | add host — IP, hostname, CIDR (/13 … /32) or `ip1-ip2` (max 524288 addresses) |
 | `D` | delete host — same input formats and limits as add |
@@ -153,7 +153,7 @@ host table is refreshed at once to show everything that happened in the meantime
 
 **The display is decoupled from the scan.** The screen is repainted about seven times a
 second, also while fping is still running, so the clock keeps ticking and a terminal
-resize takes effect immediately. `UP-ONLY`, `SET REFERENCE`, `DEL HOST` and `ZERO
+resize takes effect immediately. `UP`, `SET REFERENCE`, `DEL HOST` and `ZERO
 CHANGES` only change what is shown and are applied at once, without waiting for the
 running round.
 
@@ -204,7 +204,7 @@ Serves a single self-contained page; no external resources are loaded.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
   while no text field has focus (so `Ctrl+C`, text selection and normal typing
   behave as expected): `U` cycles the view dropdown (same order as the CLI: ALL
-  HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS); `P`, `I`, `G`, `S`, `Z`, `C`, `L`, `E`
+  HOSTS → UP → UP+FLAPPING → ALL HOSTS); `P`, `I`, `G`, `S`, `Z`, `C`, `L`, `E`
   click the matching button (`E`/`C`/`L` still ask for confirmation, same as
   clicking them); `O` cycles the sort order; `A`/`D` focus the host field in
   ADD/DELETE mode; `M`/`T` focus the match filter / comment field; `F` opens
@@ -223,23 +223,29 @@ unstable*, not a measured change rate. The change counter in the `CH NO` column 
 how often a host has changed; `Z` resets it.
 
 `U` cycles the original three views (CLI, and as a web gui keyboard shortcut: ALL
-HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS). The web gui's view dropdown additionally
+HOSTS → UP → UP+FLAPPING → ALL HOSTS). The web gui's view dropdown additionally
 offers 4 more views that only it can reach - the CLI has no way to select them and `U`
 skips over them (cycling in from one of them resets to ALL HOSTS first). Either way,
-the view also shrinks what is probed, which is what makes UP-ONLY (and the other
+the view also shrinks what is probed, which is what makes UP (and the other
 non-ALL views) shorten the round - hosts filtered away are not probed and cannot come
 back until the view is `ALL HOSTS` again. The host list is a snapshot taken when the
 view is switched. Picking a view with no matching hosts is rejected (a notice/message
 is shown) and the previous view stays active.
 
+The web gui dropdown lists the views in this order (independent of their internal
+index, which stays stable for scripting against `/api/status`'s `filter_mode`):
+ALL HOSTS, UP, UP+FLAPPING, UP+NO-FLAPPING, FLAPPING-ONLY, DOWN, DOWN+FLAPPING.
+(A `DOWN+NO-FLAPPING` view was tried and dropped again - too close to `DOWN` to be
+useful, since most DOWN hosts are not flapping anyway.)
+
 | View | Contains | Where |
 |---|---|---|
 | ALL HOSTS | everything in the reference list | CLI + web gui |
-| UP-ONLY | hosts currently UP | CLI + web gui |
+| UP | hosts currently UP | CLI + web gui |
 | UP+FLAPPING | hosts currently UP plus flapping hosts, even if they are DOWN now | CLI + web gui |
 | UP+NO-FLAPPING | hosts currently UP and NOT flapping - the "quiet" UP hosts | web gui only |
-| DOWN-ONLY | hosts currently DOWN or NO-DNS, flapping or not | web gui only |
 | FLAPPING-ONLY | hosts currently flapping, regardless of UP/DOWN | web gui only |
+| DOWN | hosts currently DOWN or NO-DNS, flapping or not | web gui only |
 | DOWN+FLAPPING | hosts currently DOWN/NO-DNS plus flapping hosts, even if UP now | web gui only |
 
 `O` cycles five sort orders. A flapping host is also UP or DOWN right now, so the FLAP
