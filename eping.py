@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.06'
+VERSION = '2.07'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -76,6 +76,15 @@ FILTER_MODES = [
     ('ALL HOSTS',   'ALL',   'ALL'),
     ('UP-ONLY',     'UP',    'UP'),
     ('UP+FLAPPING', 'UP+FL', 'U+F'),
+]
+
+# web gui only: the view dropdown offers every combination filter_hosts() supports,
+# not just the 3 the CLI's [U] key cycles through - see WEB_VIEW_MODES below.
+WEB_VIEW_MODES = FILTER_MODES + [
+    ('DOWN-ONLY',      'DOWN',  'DWN'),
+    ('FLAPPING-ONLY',  'FLAP',  'FLP'),
+    ('DOWN+FLAPPING',  'DN+FL', 'D+F'),
+    ('UP+NO-FLAPPING', 'UP-FL', 'U-F'),
 ]
 
 # [O] cycles through these orders. A flapping host is also UP or DOWN right now, so the
@@ -973,7 +982,10 @@ def apply_match_filter(rows, pattern):
 
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF):
-    """Host list for the given view mode - a snapshot, taken when the view switches."""
+    """Host list for the given view mode - a snapshot, taken when the view switches.
+    Modes 0-2 (ALL/UP-ONLY/UP+FLAPPING) are also used by the CLI's [U] key and its web
+    gui keyboard-shortcut equivalent; modes 3-6 are reachable only through the web
+    gui's view dropdown (set_filter) - see WEB_VIEW_MODES."""
     if mode <= 0:
         return list(original_hosts_list)
     now_ref = now_local(tz_offset)
@@ -982,9 +994,19 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
         entry = host_state.get(h)
         if not entry:
             continue
-        if 'UP' in entry[1]:
+        is_up   = 'UP' in entry[1]
+        is_flap = host_is_flapping(entry, now_ref, flap_window)
+        if mode == 1 and is_up:
             out.append(h)
-        elif mode == 2 and host_is_flapping(entry, now_ref, flap_window):
+        elif mode == 2 and (is_up or is_flap):
+            out.append(h)
+        elif mode == 3 and not is_up:
+            out.append(h)
+        elif mode == 4 and is_flap:
+            out.append(h)
+        elif mode == 5 and (not is_up or is_flap):
+            out.append(h)
+        elif mode == 6 and is_up and not is_flap:
             out.append(h)
     return out
 
@@ -1733,6 +1755,10 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="0">ALL HOSTS</option>
         <option value="1">UP-ONLY</option>
         <option value="2">UP+FLAPPING</option>
+        <option value="6">UP+NO-FLAPPING</option>
+        <option value="3">DOWN-ONLY</option>
+        <option value="4">FLAPPING-ONLY</option>
+        <option value="5">DOWN+FLAPPING</option>
       </select>
       <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
         <option value="0">SORT: ADDRESS</option>
@@ -2359,7 +2385,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'logging'         : bool(logging_enabled),
             'logfile'         : logfile_file_name if logging_enabled else '',
             'filter_mode'     : filter_mode,
-            'filter_label'    : FILTER_MODES[filter_mode][0],
+            'filter_label'    : WEB_VIEW_MODES[filter_mode][0],
             'prefer_hostname' : prefer_hostname,
             'ip_only_mode'    : ip_only_mode,
             'sort_mode'       : sort_mode,
@@ -2439,7 +2465,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
             del web_commands[:]
         for cmd, value in cmds:
             if cmd == 'up_only':
-                next_mode = (filter_mode + 1) % len(FILTER_MODES)
+                # [U] / web keyboard shortcut - always cycles the original 3 CLI
+                # views; jumping in from a web-only extended view (3-6, picked via
+                # the dropdown) resets to ALL HOSTS first, then continues cycling
+                next_mode = (filter_mode + 1) % len(FILTER_MODES) if filter_mode < len(FILTER_MODES) else 0
                 next_list = filter_hosts(next_mode, original_hosts_list, host_state,
                                          tz_offset, flap_window)
                 if next_list or next_mode == 0:
@@ -2450,21 +2479,22 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 else:
                     message = 'no hosts match ' + FILTER_MODES[next_mode][0]
             elif cmd == 'set_filter':
-                # direct selection from the web gui dropdown, no cycling
+                # direct selection from the web gui dropdown, no cycling - covers all
+                # views in WEB_VIEW_MODES, not just the 3 the CLI's [U] key cycles
                 try:
                     target_mode = int(value)
                 except (TypeError, ValueError):
                     target_mode = filter_mode
-                if 0 <= target_mode < len(FILTER_MODES) and target_mode != filter_mode:
+                if 0 <= target_mode < len(WEB_VIEW_MODES) and target_mode != filter_mode:
                     target_list = filter_hosts(target_mode, original_hosts_list, host_state,
                                                tz_offset, flap_window)
                     if target_list or target_mode == 0:
                         filter_mode       = target_mode
                         active_hosts_list = (apply_prefer_hostname(target_list, int(args.dns_ttl))
                                              if prefer_hostname else target_list)
-                        message = 'view: ' + FILTER_MODES[filter_mode][0]
+                        message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
                     else:
-                        message = 'no hosts match ' + FILTER_MODES[target_mode][0]
+                        message = 'no hosts match ' + WEB_VIEW_MODES[target_mode][0]
             elif cmd == 'prefer_hostname':
                 prefer_hostname = not prefer_hostname
                 base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
@@ -2641,7 +2671,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['hosts_up']     = quick_up
                 web_state['hosts_down']   = len(quick) - quick_up
                 web_state['filter_mode']  = filter_mode
-                web_state['filter_label'] = FILTER_MODES[filter_mode][0]
+                web_state['filter_label'] = WEB_VIEW_MODES[filter_mode][0]
                 web_state['prefer_hostname'] = prefer_hostname
                 web_state['ip_only_mode'] = ip_only_mode
                 web_state['sort_mode']    = sort_mode

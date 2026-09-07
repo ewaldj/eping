@@ -1,4 +1,4 @@
-# eping.py 2.06
+# eping.py 2.07
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -192,9 +192,9 @@ Serves a single self-contained page; no external resources are loaded.
   display preference, not a control over eping.py itself.
 - Column headers sort the whole list (IPv4-aware).
 - Toolbar is fixed at two rows (wraps to more if the window is narrow, never
-  fewer): row 1 - view select (ALL HOSTS / UP-ONLY / UP+FLAPPING, picked directly
-  from a dropdown - web gui only, the CLI still cycles with `U`), sort order
-  select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
+  fewer): row 1 - view select (7 views, picked directly from a dropdown - web
+  gui only, see *Views and sort orders*; the CLI still cycles the original 3
+  with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
   GET NAMES, RESET LOG, EXIT, font size (right-aligned); row 2 - match filter field with
   SET FILTER / CLEAR FILTER, the host field with ADD / DELETE, ADD FILE, and
   the comment field with COMMENT. All work exactly as the matching CLI keys
@@ -222,19 +222,25 @@ A host counts as **flapping** while its last state change lies within `-fw` minu
 unstable*, not a measured change rate. The change counter in the `CH NO` column shows
 how often a host has changed; `Z` resets it.
 
-`U` cycles three views (CLI, and as a web gui keyboard shortcut); the web gui also has
-a dropdown to pick a view directly, without cycling through the others. Either way, the
-view also shrinks what is probed, which is what makes UP-ONLY shorten the cycle — hosts
-filtered away are not probed and cannot come back until the view is `ALL HOSTS` again.
-The host list is a snapshot taken when the view is switched. Picking a view with no
-matching hosts is rejected (a notice/message is shown) and the previous view stays
-active.
+`U` cycles the original three views (CLI, and as a web gui keyboard shortcut: ALL
+HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS). The web gui's view dropdown additionally
+offers 4 more views that only it can reach - the CLI has no way to select them and `U`
+skips over them (cycling in from one of them resets to ALL HOSTS first). Either way,
+the view also shrinks what is probed, which is what makes UP-ONLY (and the other
+non-ALL views) shorten the round - hosts filtered away are not probed and cannot come
+back until the view is `ALL HOSTS` again. The host list is a snapshot taken when the
+view is switched. Picking a view with no matching hosts is rejected (a notice/message
+is shown) and the previous view stays active.
 
-| View | Contains |
-|---|---|
-| ALL HOSTS | everything in the reference list |
-| UP-ONLY | hosts currently UP |
-| UP+FLAPPING | hosts currently UP plus flapping hosts, even if they are DOWN now |
+| View | Contains | Where |
+|---|---|---|
+| ALL HOSTS | everything in the reference list | CLI + web gui |
+| UP-ONLY | hosts currently UP | CLI + web gui |
+| UP+FLAPPING | hosts currently UP plus flapping hosts, even if they are DOWN now | CLI + web gui |
+| UP+NO-FLAPPING | hosts currently UP and NOT flapping - the "quiet" UP hosts | web gui only |
+| DOWN-ONLY | hosts currently DOWN or NO-DNS, flapping or not | web gui only |
+| FLAPPING-ONLY | hosts currently flapping, regardless of UP/DOWN | web gui only |
+| DOWN+FLAPPING | hosts currently DOWN/NO-DNS plus flapping hosts, even if UP now | web gui only |
 
 `O` cycles five sort orders. A flapping host is also UP or DOWN right now, so the FLAP
 group wins over its current state and therefore contains both green and red rows;
