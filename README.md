@@ -1,4 +1,4 @@
-# eping.py 2.04
+# eping.py 2.05
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -136,7 +136,7 @@ in ms, timestamp of the last state change, number of changes.
 | `I` | toggle IP ONLY — resolve every hostname to its address (v4 or v6, whichever resolves, not distinguished) and ping/track it by IP instead of by name; a hostname whose address duplicates one already in the list is dropped instead of kept redundantly |
 | `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found and confirmed by a matching forward A/AAAA record (history/uptime carry over; one-shot, not a toggle; runs in the background, a status line shows while it is resolving) |
 | `R` | redraw the screen |
-| `L` | reset logging — single keypress: `Y` deletes ALL entries in the CSV log file and restarts logging into it, `N` starts a fresh `eping-log_<timestamp>.csv` and keeps the old file untouched, `ESC`/`ENTER` cancels |
+| `L` | logging on: reset logging — single keypress: `Y` deletes ALL entries in the CSV log file and restarts logging into it, `N` starts a fresh `eping-log_<timestamp>.csv` and keeps the old file untouched, `ESC`/`ENTER` cancels. Logging off: label switches to `START LOG` and starts logging into a new `eping-log_<timestamp>.csv` immediately, no confirmation |
 | `E` | exit — terminates immediately (`os._exit()`), even with a [G] GET NAMES lookup still running in the background; it does not wait for it to finish |
 
 Dialogs are confirmed with ENTER, cancelled with ESC or empty input. The key bar
@@ -368,18 +368,20 @@ Excel/Numbers import is unaffected. If logging is off (`-dl`), the command shows
 a notice and nothing is written. epinga.py recognizes these rows automatically
 (see below).
 
-`RESET LOGGING` / `L` opens a confirmation before doing anything - CLI: a message box
-waiting for a single keypress; Web GUI: a modal with three buttons (CLEAR LOGGING /
-NEW FILE / CANCEL) that also responds to the same keys while it's open, no typing
-needed either way. `Y`/`N` decide, `ESC`/`ENTER` cancel, any other key is ignored and
-the dialog/modal keeps waiting:
-- `Y` - deletes ALL entries from the current CSV log file and restarts logging into the
-  same file (the header row is rewritten, everything after it is gone) - keeps the
-  existing filename/timestamp, e.g. if something else already references it.
-- `N` - starts a fresh `eping-log_<timestamp>.csv` (same naming as at startup) and
-  switches logging to it; the old file is left exactly as it was.
-
-If logging is off (`-dl`), the command shows a notice and does nothing.
+`RESET LOGGING` / `L` behaves differently depending on whether logging is currently on:
+- Logging on: opens a confirmation before doing anything - CLI: a message box waiting
+  for a single keypress; Web GUI: a modal with three buttons (CLEAR LOGGING / NEW FILE /
+  CANCEL) that also responds to the same keys while it's open, no typing needed either
+  way. `Y`/`N` decide, `ESC`/`ENTER` cancel, any other key is ignored and the
+  dialog/modal keeps waiting:
+  - `Y` - deletes ALL entries from the current CSV log file and restarts logging into
+    the same file (the header row is rewritten, everything after it is gone) - keeps
+    the existing filename/timestamp, e.g. if something else already references it.
+  - `N` - starts a fresh `eping-log_<timestamp>.csv` (same naming as at startup) and
+    switches logging to it; the old file is left exactly as it was.
+- Logging off (`-dl`): the key/button reads `START LOG` instead and starts logging
+  immediately into a fresh `eping-log_<timestamp>.csv` - no confirmation, since there
+  is nothing to lose yet. `ADD COMMENT` / `T` works normally right after.
 
 ## Web GUI header
 
