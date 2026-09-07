@@ -196,7 +196,7 @@ Serves a single self-contained page; no external resources are loaded.
   gui only, see *Views and sort orders*; the CLI still cycles the original 3
   with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
   GET NAMES, RESET LOG, EXIT, font size (right-aligned); row 2 - match filter field with
-  SET FILTER / CLEAR FILTER, the host field with ADD / DELETE, ADD FILE, and
+  SET / CLEAR, the host field with ADD / DELETE, ADD FILE, and
   the comment field with COMMENT. All work exactly as the matching CLI keys
   (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`).
   The host field feeds both ADD and DELETE — type a value and press the matching
