@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.04'
+VERSION = '2.05'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1865,10 +1865,14 @@ document.getElementById('sortSel').onchange = function(){
   post('sort', this.value);
 };
 var resetLogModal = document.getElementById('resetLogModal');
+var loggingOn = false;   // kept in sync from every status poll, see render()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
 function openResetLog(){ resetLogModal.style.display = 'flex'; }
 function closeResetLog(){ resetLogModal.style.display = 'none'; }
-document.getElementById('btnResetLog').onclick = openResetLog;
+document.getElementById('btnResetLog').onclick = function(){
+  if(loggingOn){ openResetLog(); }
+  else{ post('reset_log'); }   // logging is off - start it right away, no confirmation
+};
 document.getElementById('modalBtnClearLog').onclick = function(){ closeResetLog(); post('reset_log', 'y'); };
 document.getElementById('modalBtnNewLog').onclick   = function(){ closeResetLog(); post('reset_log', 'new'); };
 document.getElementById('modalBtnCancelLog').onclick = function(){ closeResetLog(); };
@@ -2152,6 +2156,12 @@ function poll(){
     document.getElementById('sDown').textContent    = s.hosts_down;
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
+    loggingOn = !!s.logging;
+    var brl = document.getElementById('btnResetLog');
+    brl.textContent = loggingOn ? 'RESET LOG' : 'START LOG';
+    brl.title = loggingOn
+      ? 'Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel'
+      : 'start logging right away, no confirmation needed';
     var bu = document.getElementById('btnUp');
     bu.textContent = s.filter_label || 'ALL HOSTS';
     bu.className   = s.filter_mode ? 'on' : '';
@@ -2365,6 +2375,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                  update_available, up_check_runs, down_retries=None, full_sweep=0,
                  confirm=1, down_slices=1, flap_window=FLAP_WINDOW_DEF):
     """Headless main loop - same logic as the CLI loop, output goes to the web gui."""
+    global _logfile_file_name   # kept in sync with logfile_file_name - see _web_sigint()
     bind_addr = args.web_bind
     port      = int(args.web_port)
     start_web_server(bind_addr, port)
@@ -2546,7 +2557,16 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     message = 'comment logged'
             elif cmd == 'reset_log':
                 if not args.disable_logging:
-                    message = 'logging is off - nothing to reset'
+                    # logging is currently OFF - START LOG turns it on right away,
+                    # no confirmation needed (there is nothing to lose yet)
+                    new_name = new_logfile_name(tz_offset)
+                    if reset_logfile(new_name):
+                        args.disable_logging = True   # True means 'logging enabled' (see -dl)
+                        logfile_file_name = new_name
+                        _logfile_file_name = new_name   # keep _web_sigint() in sync
+                        message = 'logging started: ' + logfile_file_name
+                    else:
+                        message = 'failed to start logging'
                 else:
                     choice = value.strip().lower()
                     if choice == 'y':
@@ -2557,8 +2577,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     elif choice == 'new':
                         new_name = new_logfile_name(tz_offset)
                         if reset_logfile(new_name):
-                            logfile_file_name = new_name
-                            global _logfile_file_name
+                            logfile_file_name  = new_name
                             _logfile_file_name = new_name   # keep _web_sigint() in sync
                             message = 'new logfile: ' + logfile_file_name
                         else:
@@ -2609,6 +2628,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['ip_only_mode'] = ip_only_mode
                 web_state['sort_mode']    = sort_mode
                 web_state['match_filter'] = match_filter_text
+                # logging state can flip live (START LOG) - keep the quick path in sync too
+                web_state['logging']      = bool(args.disable_logging)
+                web_state['logfile']      = logfile_file_name if args.disable_logging else ''
 
         # --- learning phase ---
         if not learning_done:
@@ -3462,18 +3484,21 @@ if __name__=='__main__':
         sm = SORT_MODES[sort_mode]
         # order: U, M, A, D, F, O, T, S, Z, C, P, I, G, R, E - grouped by how often
         # each is used, rather than the historical add-order
+        l_full  = ' [L]=RESET LOGGING ' if args.disable_logging else ' [L]=START LOG '
+        l_short = ' [L]=RESET LOG '     if args.disable_logging else ' [L]=START LOG '
+        l_tiny  = ' [L]RSTLOG '         if args.disable_logging else ' [L]STARTLOG '
         keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=MATCH FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ',
-                      ' [R]=SCREEN REFRESH ', ' [L]=RESET LOGGING ', ' [E]=EXIT ']
+                      ' [R]=SCREEN REFRESH ', l_full, ' [E]=EXIT ']
         keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
                       ' [O]=' + sm[1] + ' ', ' [T]=COMMENT ', ' [S]=SET REF ', ' [Z]=ZERO ',
                       ' [C]=CLEAR ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ',
-                      ' [R]=REFRESH ', ' [L]=RESET LOG ', ' [E]=EXIT ']
+                      ' [R]=REFRESH ', l_short, ' [E]=EXIT ']
         keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
                       ' [O]' + sm[1] + ' ', ' [T]CMT ', ' [S]REF ', ' [Z]ZERO ',
                       ' [C]CLR ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ',
-                      ' [R]RFR ', ' [L]RSTLOG ', ' [E]EXIT ']
+                      ' [R]RFR ', l_tiny, ' [E]EXIT ']
         keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' I ', ' G ', ' R ', ' L ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
@@ -3752,7 +3777,16 @@ if __name__=='__main__':
             screen.clear()
         elif cmd == 'RESET_LOGGING':
             if not args.disable_logging:
-                notice('LOGGING IS OFF - NOTHING TO RESET', 3)
+                # logging is currently OFF - [L]/START LOG turns it on right away,
+                # no confirmation needed (there is nothing to lose yet)
+                new_name = new_logfile_name(tz_offset)
+                if reset_logfile(new_name):
+                    args.disable_logging = True   # True means 'logging enabled' (see -dl)
+                    logfile_file_name  = new_name
+                    _logfile_file_name = new_name   # keep sigint_handler() in sync
+                    notice('LOGGING STARTED: ' + logfile_file_name, 2)
+                else:
+                    notice('FAILED TO START LOGGING', 3)
             else:
                 answer = key_confirm_dialog(' RESET LOGGING ',
                     ['[Y] clear this file   [N] start a fresh file (old kept)',
