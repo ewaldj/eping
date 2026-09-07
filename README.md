@@ -1,4 +1,4 @@
-# eping.py 2.05
+# eping.py 2.06
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -192,7 +192,8 @@ Serves a single self-contained page; no external resources are loaded.
   display preference, not a control over eping.py itself.
 - Column headers sort the whole list (IPv4-aware).
 - Toolbar is fixed at two rows (wraps to more if the window is narrow, never
-  fewer): row 1 - view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), sort order
+  fewer): row 1 - view select (ALL HOSTS / UP-ONLY / UP+FLAPPING, picked directly
+  from a dropdown - web gui only, the CLI still cycles with `U`), sort order
   select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
   GET NAMES, RESET LOG, EXIT, font size (right-aligned); row 2 - match filter field with
   SET FILTER / CLEAR FILTER, the host field with ADD / DELETE, ADD FILE, and
@@ -202,12 +203,14 @@ Serves a single self-contained page; no external resources are loaded.
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
   while no text field has focus (so `Ctrl+C`, text selection and normal typing
-  behave as expected): `U`, `P`, `I`, `G`, `S`, `Z`, `C`, `L`, `E` click the matching
-  button (`E`/`C`/`L` still ask for confirmation, same as clicking them); `O` cycles
-  the sort order; `A`/`D` focus the host field in ADD/DELETE mode; `M`/`T` focus
-  the match filter / comment field; `F` opens the file picker; `R` forces an
-  immediate status refresh (there's no curses screen to redraw). `+`/`−` (font
-  size) work everywhere, including while typing.
+  behave as expected): `U` cycles the view dropdown (same order as the CLI: ALL
+  HOSTS → UP-ONLY → UP+FLAPPING → ALL HOSTS); `P`, `I`, `G`, `S`, `Z`, `C`, `L`, `E`
+  click the matching button (`E`/`C`/`L` still ask for confirmation, same as
+  clicking them); `O` cycles the sort order; `A`/`D` focus the host field in
+  ADD/DELETE mode; `M`/`T` focus the match filter / comment field; `F` opens
+  the file picker; `R` forces an immediate status refresh (there's no curses
+  screen to redraw). `+`/`−` (font size) work everywhere, including while
+  typing.
 - Host files can be uploaded via the button or dropped anywhere on the page
   (max 16 MB, same format as `-f`, see *Host file format*).
 - Commands are acknowledged immediately, and a click aborts the running round.
@@ -219,10 +222,13 @@ A host counts as **flapping** while its last state change lies within `-fw` minu
 unstable*, not a measured change rate. The change counter in the `CH NO` column shows
 how often a host has changed; `Z` resets it.
 
-`U` cycles three views. Like before, the view also shrinks what is probed, which is what
-makes UP-ONLY shorten the cycle — hosts filtered away are not probed and cannot come
-back until the view is `ALL HOSTS` again. The host list is a snapshot taken when the
-view is switched.
+`U` cycles three views (CLI, and as a web gui keyboard shortcut); the web gui also has
+a dropdown to pick a view directly, without cycling through the others. Either way, the
+view also shrinks what is probed, which is what makes UP-ONLY shorten the cycle — hosts
+filtered away are not probed and cannot come back until the view is `ALL HOSTS` again.
+The host list is a snapshot taken when the view is switched. Picking a view with no
+matching hosts is rejected (a notice/message is shown) and the previous view stays
+active.
 
 | View | Contains |
 |---|---|

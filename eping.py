@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.05'
+VERSION = '2.06'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1729,7 +1729,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
    <span id="ctrls">
     <span class="ctrls-row">
      <span id="ctrlsMain">
-      <button id="btnUp" title="cycle: ALL HOSTS / UP-ONLY / UP+FLAPPING">ALL HOSTS</button>
+      <select id="selFilter" title="choose which hosts are shown">
+        <option value="0">ALL HOSTS</option>
+        <option value="1">UP-ONLY</option>
+        <option value="2">UP+FLAPPING</option>
+      </select>
       <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
         <option value="0">SORT: ADDRESS</option>
         <option value="1">SORT: UP/FLAP/DOWN</option>
@@ -1823,7 +1827,7 @@ document.getElementById('fsPlus').onclick  = function(){ setFont(fontSize + 1); 
 document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.value,10)); };
 
 /* ---------------- commands ---------------- */
-var PENDING = {up_only:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
+var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
                del:'removing host(s) ...', set_ref:'setting reference ...',
                clear:'clearing all hosts ...', zero:'resetting change counters ...',
                prefer_hostname:'toggling prefer hostnames ...',
@@ -1846,7 +1850,7 @@ function post(cmd, value){
   return fetch('api/command', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({cmd:cmd, value:value||''})}).then(function(r){return r.json();});
 }
-document.getElementById('btnUp').onclick   = function(){ post('up_only'); };
+document.getElementById('selFilter').onchange = function(){ post('set_filter', this.value); };
 document.getElementById('btnPreferHost').onclick = function(){ post('prefer_hostname'); };
 document.getElementById('btnIpOnly').onclick = function(){ post('ip_only'); };
 document.getElementById('btnGetNames').onclick = function(){ post('get_names'); };
@@ -1972,7 +1976,7 @@ document.addEventListener('keydown', function(e){
   if(isReadOnly) return;
   if(document.activeElement && document.activeElement.tagName === 'INPUT') return;
   switch(e.key.toLowerCase()){
-    case 'u': document.getElementById('btnUp').click(); break;
+    case 'u': post('up_only'); break;   // cycle ALL/UP/UP+FLAP, dropdown stays in sync via render()
     case 'p': document.getElementById('btnPreferHost').click(); break;
     case 'i': document.getElementById('btnIpOnly').click(); break;
     case 'g': document.getElementById('btnGetNames').click(); break;
@@ -2162,9 +2166,7 @@ function poll(){
     brl.title = loggingOn
       ? 'Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel'
       : 'start logging right away, no confirmation needed';
-    var bu = document.getElementById('btnUp');
-    bu.textContent = s.filter_label || 'ALL HOSTS';
-    bu.className   = s.filter_mode ? 'on' : '';
+    document.getElementById('selFilter').value = s.filter_mode;
     var bp = document.getElementById('btnPreferHost');
     bp.className   = s.prefer_hostname ? 'on' : '';
     var bi = document.getElementById('btnIpOnly');
@@ -2292,7 +2294,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter', 'add_comment', 'reset_log'):
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter', 'add_comment', 'reset_log'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -2447,6 +2449,22 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     message = 'view: ' + FILTER_MODES[filter_mode][0]
                 else:
                     message = 'no hosts match ' + FILTER_MODES[next_mode][0]
+            elif cmd == 'set_filter':
+                # direct selection from the web gui dropdown, no cycling
+                try:
+                    target_mode = int(value)
+                except (TypeError, ValueError):
+                    target_mode = filter_mode
+                if 0 <= target_mode < len(FILTER_MODES) and target_mode != filter_mode:
+                    target_list = filter_hosts(target_mode, original_hosts_list, host_state,
+                                               tz_offset, flap_window)
+                    if target_list or target_mode == 0:
+                        filter_mode       = target_mode
+                        active_hosts_list = (apply_prefer_hostname(target_list, int(args.dns_ttl))
+                                             if prefer_hostname else target_list)
+                        message = 'view: ' + FILTER_MODES[filter_mode][0]
+                    else:
+                        message = 'no hosts match ' + FILTER_MODES[target_mode][0]
             elif cmd == 'prefer_hostname':
                 prefer_hostname = not prefer_hostname
                 base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
