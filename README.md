@@ -1,4 +1,4 @@
-# eping.py 2.02
+# eping.py 2.03
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -47,7 +47,7 @@ Combinable in one invocation:
 
 | Source | Option |
 |---|---|
-| Host file | `-f FILE`, disable with `-df` |
+| Host file | `-f FILE[,FILE...]`, one or more, comma separated, disable with `-df` |
 | CIDR network | `-n` (mask /13 … /32), one or more, comma separated |
 | IP range | `-r`, one or more `start-end` ranges, comma separated |
 
@@ -59,7 +59,9 @@ shortened to its last 1-3 octets, borrowed from that range's start address — s
 `172.20.2.0-172.20.2.15`.
 
 Limits: 512000 hosts total, 524288 addresses per range. Duplicates are removed.
-CIDR expansion includes network and broadcast addresses.
+CIDR expansion includes network and broadcast addresses. With several `-f` files,
+entries from all of them are combined before deduplication - a host in more than
+one file is only pinged once.
 
 ### Host file format
 
@@ -104,8 +106,9 @@ value that contains spaces, e.g. `opt: -f "my hosts.txt"`. An option actually ty
 the command line always wins over the same option from the file.
 
 This only applies to the initial `-f` host file read at startup (including the default
-`eping-hosts.txt`) — `F` / ADD FILE in the CLI and a web GUI upload only ever add
-hosts, an `opt:` line in one of those is left alone as ordinary (harmless) text.
+`eping-hosts.txt`, and every file when `-f` names more than one, comma separated) —
+`F` / ADD FILE in the CLI and a web GUI upload only ever add hosts, an `opt:` line in
+one of those is left alone as ordinary (harmless) text.
 
 The generated default `eping-hosts.txt` ships with this section explained and a
 few `opt:` examples, commented out.
@@ -300,7 +303,7 @@ sends one hard burst.
 ## Options
 
 ### Host selection
-`-f` hostfile · `-df` disable hostfile · `-n` CIDR (comma separated) · `-r` IP range (comma separated, shortened end)
+`-f` hostfile(s), comma separated (e.g. `-f hosts1.txt,hosts2.txt`) · `-df` disable hostfile · `-n` CIDR (comma separated) · `-r` IP range (comma separated, shortened end)
 
 ### Probing
 | Option | Default | Meaning |
