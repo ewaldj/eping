@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.02'
+VERSION = '2.03'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2712,7 +2712,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     
     # adding optional argument
-    parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename" )
+    parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename, one or more, comma separated, e.g. hosts1.txt,hosts2.txt" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
@@ -2759,14 +2759,16 @@ if __name__=='__main__':
     try:
         _pre_args, _ = parser.parse_known_args()
         if not _pre_args.disable_hostfile:
-            with open(_pre_args.hostfile, 'r', encoding='utf-8', errors='replace') as _f:
-                _opt_tokens = extract_opt_lines(_f.read(WEB_MAX_UPLOAD + 1))
+            _opt_tokens = []
+            for _hf in [p.strip() for p in _pre_args.hostfile.split(',') if p.strip()]:
+                with open(_hf, 'r', encoding='utf-8', errors='replace') as _f:
+                    _opt_tokens.extend(extract_opt_lines(_f.read(WEB_MAX_UPLOAD + 1)))
             if _opt_tokens:
                 sys.argv = [sys.argv[0]] + _opt_tokens + sys.argv[1:]
     except SystemExit:
         raise   # a genuinely bad command line (or -h/--help) - let argparse handle it
     except Exception:
-        pass    # hosts file missing/unreadable at this point - the real parse below
+        pass    # a hosts file missing/unreadable at this point - the real parse below
                 # reports it properly once -f itself is actually validated
 
     # read arguments from command line
@@ -2958,24 +2960,33 @@ if __name__=='__main__':
         except TypeError as error_msg:
             error_handler(error_msg)
     
-    # get ip's, networks, hostname's and fqdn's from file - same parser as the web
-    # upload and [F]=ADD FILE, so all three understand CIDR networks and comments
+    # get ip's, networks, hostname's and fqdn's from file(s) - one or more, comma
+    # separated - same parser as the web upload and [F]=ADD FILE, so all three
+    # understand CIDR networks and comments; entries from every file are combined,
+    # duplicates removed the same way as always (below)
     if not args.disable_hostfile:
-        try:
-            with open(args.hostfile, 'r', encoding='utf-8', errors='replace') as f:
-                hostfile_text = f.read()
-        except Exception:
-            error_handler('ERROR: Unable to open hosts file: ' + str(args.hostfile))
-        hostfile_stats = {}
-        for entry in parse_hosts_from_text(hostfile_text, hostfile_stats):
-            if is_ip_host(entry):
-                hosts_list_ipv4.append(entry)
-            else:
-                hosts_list_fqdn.append(entry)
-        if hostfile_stats.get('skipped'):
-            print('\n WARNING: ' + args.hostfile + ' - network(s) ignored, mask must be /'
+        hostfile_paths = [p.strip() for p in args.hostfile.split(',') if p.strip()]
+        if not hostfile_paths:
+            error_handler('ERROR: --hostfile: no file given')
+        hostfile_skipped = []
+        for hostfile_path in hostfile_paths:
+            try:
+                with open(hostfile_path, 'r', encoding='utf-8', errors='replace') as f:
+                    hostfile_text = f.read()
+            except Exception:
+                error_handler('ERROR: Unable to open hosts file: ' + str(hostfile_path))
+            file_stats = {}
+            for entry in parse_hosts_from_text(hostfile_text, file_stats):
+                if is_ip_host(entry):
+                    hosts_list_ipv4.append(entry)
+                else:
+                    hosts_list_fqdn.append(entry)
+            if file_stats.get('skipped'):
+                hostfile_skipped.extend(hostfile_path + ': ' + s for s in file_stats['skipped'])
+        if hostfile_skipped:
+            print('\n WARNING: network(s) ignored, mask must be /'
                   + str(CIDR_MIN_MASK) + ' .. /' + str(CIDR_MAX_MASK) + ': '
-                  + ', '.join(hostfile_stats['skipped'][:5]) + '\n')
+                  + ', '.join(hostfile_skipped[:5]) + '\n')
             time.sleep(2)
         
     #remove duplicates from list 
