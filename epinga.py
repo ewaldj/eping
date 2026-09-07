@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.95'
+version = '1.96'
 
 import re
 import os
@@ -660,7 +660,10 @@ a {{ color: var(--cyan); text-decoration: none; }}
 
 /* ── table ── */
 .tbl-wrap {{ padding: 0 24px 24px; overflow-x: auto; }}
-.bucket.hostlist {{ margin: 0 24px 20px; }}
+/* comments + hostlist are static buckets outside #buckets (which supplies its
+   own 24px via .buckets padding for the dynamically-generated buckets) - give
+   both the same horizontal margin so all bucket boxes line up */
+.bucket.hostlist, .bucket.comments {{ margin: 0 24px 20px; }}
 .bucket.hostlist .tbl-wrap {{ padding: 0; }}
 .bucket.comments .bucket-body {{ padding: 10px 16px; }}
 .comment-row {{ display: flex; gap: 14px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }}

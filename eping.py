@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.11'
+VERSION = '2.17'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1622,6 +1622,9 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     --bg:#0b0f0b; --fg:#c8d6c8; --dim:#5d6b5d; --line:#1e2a1e;
     --up:#3ddc60; --down:#ff4b4b; --acc:#7fd1ff; --panel:#101610;
     --fs:14px; --hostw:26ch;
+    /* brighter than --line (structural dividers) so buttons/selects/inputs stand
+       out against the near-black panel background */
+    --ctrl-line:#42593f;
   }
   *{box-sizing:border-box}
   html,body{height:100%}
@@ -1637,7 +1640,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .title a:hover{color:var(--acc);text-decoration-color:currentColor}
   .clock{color:var(--dim)}
   .bar{display:flex;flex-wrap:wrap;gap:6px;padding:6px 12px;border-bottom:1px solid var(--line);align-items:center}
-  button{background:var(--panel);color:var(--fg);border:1px solid var(--line);
+  button{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
          padding:4px 10px;cursor:pointer;font:inherit;border-radius:3px}
   button:hover{border-color:var(--acc);color:var(--acc)}
   button.on{border-color:var(--up);color:var(--up)}
@@ -1645,15 +1648,19 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .fsbox{display:flex;align-items:center;gap:4px;margin-left:auto;color:var(--dim)}
   .fsbox button{padding:4px 9px}
   .fsbox #fsVal{min-width:5ch;text-align:right;color:var(--fg)}
-  input[type=text]{background:var(--panel);color:var(--fg);border:1px solid var(--line);
+  input[type=text]{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
                    padding:4px 8px;font:inherit;border-radius:3px;min-width:200px}
-  select{background:var(--panel);color:var(--fg);border:1px solid var(--line);
+  select{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
          padding:4px 8px;font:inherit;border-radius:3px}
   select:hover{border-color:var(--acc)}
   select.on{border-color:var(--up);color:var(--up)}
   input[type=text]:focus{outline:none;border-color:var(--acc)}
   input[type=text].delmode{border-color:var(--down);color:var(--down)}
   input[type=range]{width:110px;accent-color:var(--acc)}
+  /* unites an input + its action button(s) as one group - no border/background,
+     just keeps them tight while .sep marks the boundary to the next group */
+  .grp{display:inline-flex;align-items:center;gap:6px}
+  .sep{color:var(--dim);user-select:none}
   .stats{display:flex;flex-wrap:wrap;gap:16px;padding:5px 12px;border-bottom:1px solid var(--line);color:var(--dim)}
   .stats b{color:var(--fg);font-weight:600}
   .stats .u b{color:var(--up)} .stats .d b{color:var(--down)}
@@ -1781,23 +1788,32 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
      </span>
     </span>
     <span class="ctrls-row" id="ctrlsHosts">
-     <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="match filter: regex on host/IP, blank = off">
-     <button id="btnMatchFilter">SET FILTER</button>
-     <button id="btnClearFilter" title="disable the match filter">CLEAR FILTER</button>
-     <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
-     <button id="btnAdd">ADD</button>
-     <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
+     <span class="grp">
+      <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="match filter: regex on host/IP, blank = off">
+      <button id="btnMatchFilter">SET</button>
+      <button id="btnClearFilter" title="disable the match filter">CLEAR</button>
+     </span>
+     <span class="sep">&nbsp;|&nbsp;</span>
+     <span class="grp">
+      <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
+      <button id="btnAdd">ADD</button>
+      <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
+     </span>
+     <span class="sep">&nbsp;|&nbsp;</span>
+     <span class="grp">
+      <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
+      <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
+     </span>
+     <span class="sep">&nbsp;|&nbsp;</span>
      <button id="btnUpload" title="load hosts from a text/CSV file">ADD FILE</button>
      <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
-     <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
-     <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
     </span>
    </span>
   </div>
 
   <div class="stats">
     <span>HOSTS: <b id="sHosts">0</b></span>
-    <span>RUNTIME: <b id="sRuntime">0.00</b>sec</span>
+    <span>RUNTIME: <b id="sRuntime">0.00</b><b>s</b></span>
     <span>RUNS: <b id="sRuns">0</b></span>
     <span class="u">HOSTS-UP: <b id="sUp">0</b></span>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
@@ -3510,7 +3526,7 @@ if __name__=='__main__':
         hosts_up   = '{m: <5}'.format(m=hosts_count_up)
         hosts_down = '{m: <5}'.format(m=hosts_count_down)
         screen_output(rows - 1, 1,  'HOSTS: '   + str(num_of_hosts), 1, 1)
-        screen_output(rows - 1, 14, 'RUNTIME: ' + str(run_time) + 'sec', 1, 1)
+        screen_output(rows - 1, 14, 'RUNTIME: ' + str(run_time) + 's', 1, 1)
         screen_output(rows - 1, 35, 'RUNS: '    + str(run_counter), 1, 1)
         screen_output(rows - 1, 50, 'HOSTS-UP: '   + str(hosts_up),   2, 1)
         screen_output(rows - 1, 66, 'HOSTS-DOWN: ' + str(hosts_down), 3, 1)
