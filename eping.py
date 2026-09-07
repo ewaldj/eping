@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.03'
+VERSION = '2.04'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -346,6 +346,11 @@ def parse_cidrs_arg(value, min_mask, max_mask):
         if chunk:
             hosts.extend(get_ipv4_from_cidr(chunk, min_mask, max_mask))
     return hosts
+
+def split_hostfile_list(value):
+    """Split a -f value into individual file paths - comma and/or whitespace
+    separated (e.g. 'a.txt,b.txt', 'a.txt b.txt' or a mix), empty parts dropped."""
+    return [p for p in re.split(r'[,\s]+', (value or '').strip()) if p]
 
 def create_file_if_not_exists(filename,data):
     try:
@@ -2712,7 +2717,7 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     
     # adding optional argument
-    parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename, one or more, comma separated, e.g. hosts1.txt,hosts2.txt" )
+    parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename, one or more, comma and/or space separated, e.g. hosts1.txt,hosts2.txt or \"hosts1.txt hosts2.txt\"" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
@@ -2760,7 +2765,7 @@ if __name__=='__main__':
         _pre_args, _ = parser.parse_known_args()
         if not _pre_args.disable_hostfile:
             _opt_tokens = []
-            for _hf in [p.strip() for p in _pre_args.hostfile.split(',') if p.strip()]:
+            for _hf in split_hostfile_list(_pre_args.hostfile):
                 with open(_hf, 'r', encoding='utf-8', errors='replace') as _f:
                     _opt_tokens.extend(extract_opt_lines(_f.read(WEB_MAX_UPLOAD + 1)))
             if _opt_tokens:
@@ -2965,7 +2970,7 @@ if __name__=='__main__':
     # understand CIDR networks and comments; entries from every file are combined,
     # duplicates removed the same way as always (below)
     if not args.disable_hostfile:
-        hostfile_paths = [p.strip() for p in args.hostfile.split(',') if p.strip()]
+        hostfile_paths = split_hostfile_list(args.hostfile)
         if not hostfile_paths:
             error_handler('ERROR: --hostfile: no file given')
         hostfile_skipped = []

@@ -1,4 +1,4 @@
-# eping.py 2.03
+# eping.py 2.04
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -47,7 +47,7 @@ Combinable in one invocation:
 
 | Source | Option |
 |---|---|
-| Host file | `-f FILE[,FILE...]`, one or more, comma separated, disable with `-df` |
+| Host file | `-f FILE[,FILE...]`, one or more, comma and/or space separated (quote if space separated), disable with `-df` |
 | CIDR network | `-n` (mask /13 … /32), one or more, comma separated |
 | IP range | `-r`, one or more `start-end` ranges, comma separated |
 
@@ -303,7 +303,7 @@ sends one hard burst.
 ## Options
 
 ### Host selection
-`-f` hostfile(s), comma separated (e.g. `-f hosts1.txt,hosts2.txt`) · `-df` disable hostfile · `-n` CIDR (comma separated) · `-r` IP range (comma separated, shortened end)
+`-f` hostfile(s), comma and/or space separated (e.g. `-f hosts1.txt,hosts2.txt` or `-f "hosts1.txt hosts2.txt"`) · `-df` disable hostfile · `-n` CIDR (comma separated) · `-r` IP range (comma separated, shortened end)
 
 ### Probing
 | Option | Default | Meaning |
