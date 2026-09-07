@@ -1,4 +1,4 @@
-# eping.py 1.96
+# eping.py 2.02
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -133,6 +133,7 @@ in ms, timestamp of the last state change, number of changes.
 | `I` | toggle IP ONLY — resolve every hostname to its address (v4 or v6, whichever resolves, not distinguished) and ping/track it by IP instead of by name; a hostname whose address duplicates one already in the list is dropped instead of kept redundantly |
 | `G` | get names — reverse-DNS every raw IP host without a hostname counterpart and rename it in place if a PTR record is found and confirmed by a matching forward A/AAAA record (history/uptime carry over; one-shot, not a toggle; runs in the background, a status line shows while it is resolving) |
 | `R` | redraw the screen |
+| `L` | reset logging — single keypress: `Y` deletes ALL entries in the CSV log file and restarts logging into it, `N` starts a fresh `eping-log_<timestamp>.csv` and keeps the old file untouched, `ESC`/`ENTER` cancels |
 | `E` | exit — terminates immediately (`os._exit()`), even with a [G] GET NAMES lookup still running in the background; it does not wait for it to finish |
 
 Dialogs are confirmed with ENTER, cancelled with ESC or empty input. The key bar
@@ -190,16 +191,16 @@ Serves a single self-contained page; no external resources are loaded.
 - Toolbar is fixed at two rows (wraps to more if the window is narrow, never
   fewer): row 1 - view (cycles ALL HOSTS / UP-ONLY / UP+FLAPPING), sort order
   select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
-  GET NAMES, EXIT, font size (right-aligned); row 2 - match filter field with
+  GET NAMES, RESET LOG, EXIT, font size (right-aligned); row 2 - match filter field with
   SET FILTER / CLEAR FILTER, the host field with ADD / DELETE, ADD FILE, and
   the comment field with COMMENT. All work exactly as the matching CLI keys
-  (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `E`).
+  (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`).
   The host field feeds both ADD and DELETE — type a value and press the matching
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
   while no text field has focus (so `Ctrl+C`, text selection and normal typing
-  behave as expected): `U`, `P`, `I`, `G`, `S`, `Z`, `C`, `E` click the matching
-  button (`E`/`C` still ask for confirmation, same as clicking them); `O` cycles
+  behave as expected): `U`, `P`, `I`, `G`, `S`, `Z`, `C`, `L`, `E` click the matching
+  button (`E`/`C`/`L` still ask for confirmation, same as clicking them); `O` cycles
   the sort order; `A`/`D` focus the host field in ADD/DELETE mode; `M`/`T` focus
   the match filter / comment field; `F` opens the file picker; `R` forces an
   immediate status refresh (there's no curses screen to redraw). `+`/`−` (font
@@ -211,7 +212,7 @@ Serves a single self-contained page; no external resources are loaded.
 ### Views and sort orders
 
 A host counts as **flapping** while its last state change lies within `-fw` minutes
-(default 10). Only the timestamp of the last change is kept, so this means *recently
+(default: the max, 72000 = 50 days - effectively off unless lowered). Only the timestamp of the last change is kept, so this means *recently
 unstable*, not a measured change rate. The change counter in the `CH NO` column shows
 how often a host has changed; `Z` resets it.
 
@@ -252,7 +253,7 @@ changes state moves to its new group right away.
 |---|---|---|---|
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan and phase info |
-| POST | `/api/command` | `{"cmd":"up_only\|prefer_hostname\|ip_only\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|clear\|exit","value":"..."}` | control |
+| POST | `/api/command` | `{"cmd":"up_only\|prefer_hostname\|ip_only\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
 There is no authentication. The default bind address is `0.0.0.0` — use
@@ -319,7 +320,7 @@ sends one hard burst.
 | `-ph` | off | start with PREFER HOSTNAMES active (see `P` key) |
 | `-ipo` | off | start with IP ONLY active (see `I` key) |
 | `-gn` | off | run GET NAMES once before the first ping round (see `G` key) |
-| `-fw` | 10 | minutes since the last state change for a host to count as flapping |
+| `-fw` | 72000 (max, 50 days) | minutes since the last state change for a host to count as flapping |
 | `-ncs` | off | do not pass `--check-source` to fping |
 | `-w` | 0.5 | pause between rounds in seconds |
 | `-up` | 0 | learning phase: after N rounds keep only hosts seen UP |
@@ -363,6 +364,19 @@ comment text in the `IP` column; `csv.writer` quotes it like any other field, so
 Excel/Numbers import is unaffected. If logging is off (`-dl`), the command shows
 a notice and nothing is written. epinga.py recognizes these rows automatically
 (see below).
+
+`RESET LOGGING` / `L` opens a confirmation before doing anything - CLI: a message box
+waiting for a single keypress; Web GUI: a modal with three buttons (CLEAR LOGGING /
+NEW FILE / CANCEL) that also responds to the same keys while it's open, no typing
+needed either way. `Y`/`N` decide, `ESC`/`ENTER` cancel, any other key is ignored and
+the dialog/modal keeps waiting:
+- `Y` - deletes ALL entries from the current CSV log file and restarts logging into the
+  same file (the header row is rewritten, everything after it is gone) - keeps the
+  existing filename/timestamp, e.g. if something else already references it.
+- `N` - starts a fresh `eping-log_<timestamp>.csv` (same naming as at startup) and
+  switches logging to it; the old file is left exactly as it was.
+
+If logging is off (`-dl`), the command shows a notice and does nothing.
 
 ## Web GUI header
 

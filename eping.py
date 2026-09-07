@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '1.96'
+VERSION = '2.02'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -63,8 +63,11 @@ DOWN_SLICES_DEF    = 4        # DOWN hosts are spread over this many rounds (1 =
 # --- flapping, view filter and sort order ---
 # A host counts as flapping while its last state change lies inside this window. Only
 # the timestamp of the LAST change is kept per host, which is enough for 'recently
-# unstable' - it deliberately does not try to measure a change rate.
-FLAP_WINDOW_DEF    = 10       # minutes
+# unstable' - it deliberately does not try to measure a change rate. Default is the
+# allowed maximum (see -fw validation below) - flapping is opt-in via a shorter -fw,
+# not something that kicks in unasked.
+FLAP_WINDOW_MAX    = 72000     # minutes = 50 days - see -fw validation
+FLAP_WINDOW_DEF    = FLAP_WINDOW_MAX
 
 # [U] cycles through these views. Like before, the filter also shrinks what is pinged,
 # which is what makes UP-ONLY shorten the cycle. Hosts filtered away are not probed and
@@ -1381,6 +1384,28 @@ def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offse
         writer.writerow(logdata)
     return True
 
+def reset_logfile(logfile_file_name):
+    """(Re)write the CSV log with just its header row - used by RESET LOGGING / L,
+    both for clearing the current file and for creating a fresh one.
+
+    Same header as the initial file creation at startup. Returns True on success,
+    False if the file could not be (re)written (e.g. permission denied).
+    """
+    header = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT',
+              'NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP']
+    try:
+        with open(logfile_file_name, 'w', encoding='UTF8') as f:
+            writer = csv.writer(f)
+            writer.writerow(header)
+        return True
+    except OSError:
+        return False
+
+def new_logfile_name(tz_offset=0):
+    """Fresh 'eping-log_<timestamp>.csv' name, same format used at startup."""
+    now = datetime.datetime.now() + datetime.timedelta(hours=tz_offset)
+    return 'eping-log_' + now.strftime('%Y-%m-%d_%H:%M:%S') + '.csv'
+
 def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
                    interval_arg='', dns_ttl=DNS_CACHE_TTL,
                    down_hosts=None, down_retries=None, progress_cb=None,
@@ -1611,6 +1636,16 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .stats #scrollHint{margin-left:auto;white-space:nowrap}
   .banner{padding:6px 12px;background:#2a1414;color:var(--down);border-bottom:1px solid var(--line)}
 
+  /* ---- confirmation modal (RESET LOGGING) ---- */
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);
+                 display:flex;align-items:center;justify-content:center;z-index:50}
+  .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:5px;
+             padding:16px 20px;min-width:280px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .modal-box h3{margin:0 0 8px;font-size:14px;letter-spacing:.5px;color:var(--fg)}
+  .modal-box p{margin:0 0 14px;color:var(--dim);font-size:12px;line-height:1.5}
+  .modal-buttons{display:flex;gap:8px;flex-wrap:wrap}
+  .modal-buttons button{flex:1 1 auto;white-space:nowrap}
+
   /* ---- CLI style column grid ---- */
   #ctrls{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
   .ctrls-row{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
@@ -1648,6 +1683,18 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 <body>
 <div class="layout">
   <div id="banner" class="banner" style="display:none"></div>
+  <div id="resetLogModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <h3>RESET LOGGING</h3>
+      <p>Delete ALL entries in the current CSV log, or start a new file?<br>
+         Keys also work: <b>Y</b>=clear, <b>N</b>=new file, <b>ESC</b>/<b>ENTER</b>=cancel.</p>
+      <div class="modal-buttons">
+        <button id="modalBtnClearLog" class="danger">CLEAR LOGGING (Y)</button>
+        <button id="modalBtnNewLog">NEW FILE (N)</button>
+        <button id="modalBtnCancelLog">CANCEL (ESC)</button>
+      </div>
+    </div>
+  </div>
   <header>
     <div class="title">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -1691,6 +1738,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnPreferHost" title="skip a raw IP host when the same address is already covered by a hostname">PREFER HOST</button>
       <button id="btnIpOnly" title="resolve every hostname to its IP (v4/v6, whichever resolves) and ping/track it by address instead of by name">IP ONLY</button>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
+      <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
       <button id="btnExit" class="danger">EXIT</button>
      </span>
      <span class="fsbox">
@@ -1778,6 +1826,7 @@ var PENDING = {up_only:'switching view ...', sort:'sorting ...', add:'adding hos
                get_names:'resolving names ...',
                match_filter:'applying filter ...',
                add_comment:'logging comment ...',
+               reset_log:'resetting log ...',
                exit:'stopping eping ...'};
 var pending = false, lastMsgSeq = null;
 
@@ -1810,6 +1859,14 @@ document.getElementById('sortSel').onchange = function(){
   sortKey = null;                       // server order wins again after a mode change
   post('sort', this.value);
 };
+var resetLogModal = document.getElementById('resetLogModal');
+function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
+function openResetLog(){ resetLogModal.style.display = 'flex'; }
+function closeResetLog(){ resetLogModal.style.display = 'none'; }
+document.getElementById('btnResetLog').onclick = openResetLog;
+document.getElementById('modalBtnClearLog').onclick = function(){ closeResetLog(); post('reset_log', 'y'); };
+document.getElementById('modalBtnNewLog').onclick   = function(){ closeResetLog(); post('reset_log', 'new'); };
+document.getElementById('modalBtnCancelLog').onclick = function(){ closeResetLog(); };
 document.getElementById('btnExit').onclick = function(){
   if(confirm('Stop eping.py?')){ post('exit'); } };
 function send(cmd){
@@ -1886,13 +1943,20 @@ function cycleSortMode(){
 }
 
 /* Letter shortcuts mirror the CLI keys 1:1 where a direct action exists
-   (buttons are .click()'ed so confirm() dialogs on EXIT/CLEAR still fire);
+   (buttons are .click()'ed so confirm() on EXIT/CLEAR and the RESET LOGGING modal still fire);
    where the CLI opens an input dialog (ADD, DEL, MATCH FILTER, COMMENT) the
    matching field is focused instead, since the web field is persistent, not
    a one-shot dialog. R has no curses screen to redraw, so it forces an
    immediate status refresh. Disabled entirely while the page is read-only,
    and while a text field has focus, so normal typing and Ctrl+C keep working. */
 document.addEventListener('keydown', function(e){
+  if(resetLogOpen()){
+    var rk = e.key.toLowerCase();
+    if(rk === 'y'){ closeResetLog(); post('reset_log', 'y'); e.preventDefault(); }
+    else if(rk === 'n'){ closeResetLog(); post('reset_log', 'new'); e.preventDefault(); }
+    else if(rk === 'escape' || e.key === 'Enter'){ closeResetLog(); e.preventDefault(); }
+    return;   // any other key is ignored, the modal stays open
+  }
   if(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
   if(e.key === '+' || e.key === '='){ setFont(fontSize + 1); return; }
   if(e.key === '-' || e.key === '_'){ setFont(fontSize - 1); return; }
@@ -1914,6 +1978,7 @@ document.addEventListener('keydown', function(e){
     case 't': document.getElementById('commentInput').focus(); break;
     case 'c': document.getElementById('btnClear').click(); break;
     case 'r': poll(); break;
+    case 'l': document.getElementById('btnResetLog').click(); break;
     case 'e': document.getElementById('btnExit').click(); break;
     default: return;
   }
@@ -2212,7 +2277,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter', 'add_comment'):
+        if cmd not in ('up_only', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter', 'add_comment', 'reset_log'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -2474,6 +2539,27 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 else:
                     write_log_comment(args.disable_logging, logfile_file_name, value, tz_offset)
                     message = 'comment logged'
+            elif cmd == 'reset_log':
+                if not args.disable_logging:
+                    message = 'logging is off - nothing to reset'
+                else:
+                    choice = value.strip().lower()
+                    if choice == 'y':
+                        if reset_logfile(logfile_file_name):
+                            message = 'logging reset - ' + logfile_file_name + ' cleared'
+                        else:
+                            message = 'failed to reset log file'
+                    elif choice == 'new':
+                        new_name = new_logfile_name(tz_offset)
+                        if reset_logfile(new_name):
+                            logfile_file_name = new_name
+                            global _logfile_file_name
+                            _logfile_file_name = new_name   # keep _web_sigint() in sync
+                            message = 'new logfile: ' + logfile_file_name
+                        else:
+                            message = 'failed to create new logfile'
+                    else:
+                        message = 'reset cancelled'
             elif cmd == 'clear':
                 active_hosts_list   = []
                 original_hosts_list[:] = []
@@ -2653,7 +2739,7 @@ if __name__=='__main__':
     parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
     parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN (default: " + str(DOWN_RETRIES_DEF) + ", -1 = treat them like every other host)")
     parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per retry group plus dns/state/build/wait/draw")
-    parser.add_argument('-fw', '--flap_window', default=str(FLAP_WINDOW_DEF), dest='flap_window', help="minutes since the last state change for a host to count as flapping (default: " + str(FLAP_WINDOW_DEF) + ")")
+    parser.add_argument('-fw', '--flap_window', default=str(FLAP_WINDOW_DEF), dest='flap_window', help="minutes since the last state change for a host to count as flapping (default: " + str(FLAP_WINDOW_DEF) + " = 50 days, max)")
     parser.add_argument('-cf', '--confirm', default=str(CONFIRM_DEF), dest='confirm', help="consecutive DOWN observations before a host leaves UP (default: " + str(CONFIRM_DEF) + ", 1 = report every single observation)")
     parser.add_argument('-ds', '--down_slices', default=str(DOWN_SLICES_DEF), dest='down_slices', help="spread the known DOWN hosts over N rounds (default: " + str(DOWN_SLICES_DEF) + ", 1 = probe all of them every round)")
     parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries (default: " + str(FULL_SWEEP_DEF) + ", 0 = never)")
@@ -2796,10 +2882,10 @@ if __name__=='__main__':
     # flap window
     try:
         flap_window = int(args.flap_window)
-        if flap_window < 1 or flap_window > 1440:
-            error_handler("ERROR: --flap_window: must be between 1 and 1440 (minutes)")
+        if flap_window < 1 or flap_window > FLAP_WINDOW_MAX:
+            error_handler("ERROR: --flap_window: must be between 1 and " + str(FLAP_WINDOW_MAX) + " (minutes)")
     except ValueError:
-        error_handler("ERROR: --flap_window: must be between 1 and 1440 (minutes)")
+        error_handler("ERROR: --flap_window: must be between 1 and " + str(FLAP_WINDOW_MAX) + " (minutes)")
 
     # flap damping
     try:
@@ -2950,7 +3036,7 @@ if __name__=='__main__':
             print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
             if _remote_version and _remote_version > VERSION:
                 print_update_notice(_remote_version)
-            maybe_run_epinga(logfile_file_name, args.disable_logging)
+            maybe_run_epinga(_logfile_file_name, args.disable_logging)
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
             os._exit(0)
@@ -3108,6 +3194,54 @@ if __name__=='__main__':
             draw_screen()
             screen.refresh()
         return input_str.strip()
+
+    def key_confirm_dialog(title, lines, valid_keys):
+        """Show a message box and wait for a single keypress out of valid_keys
+        (lowercase chars). ESC or ENTER cancels (returns None); any other key is
+        ignored and the dialog keeps waiting. Pinging keeps running in the
+        background, same as input_dialog().
+        """
+        rows, cols = screen.getmaxyx()
+        dialog_w = min(70, max(20, cols - 4))
+        dialog_h = len(lines) + 4
+        dialog_y = max(0, rows // 2 - dialog_h // 2)
+        dialog_x = max(0, cols // 2 - dialog_w // 2)
+
+        screen.nodelay(False)
+        for dy in range(dialog_h):
+            screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
+        screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
+        screen_output(dialog_y + 1, dialog_x, '│' + title.center(dialog_w - 2) + '│', 1, 1)
+        screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+        for i, line in enumerate(lines):
+            screen_output(dialog_y + 3 + i, dialog_x,
+                          '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+        screen_output(dialog_y + dialog_h - 1, dialog_x, '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
+        screen.refresh()
+
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        result = None
+        try:
+            while True:
+                ch = screen.getch()
+                if ch in (27, 10, 13):             # ESC or ENTER = cancel
+                    break
+                if 0 <= ch < 256 and chr(ch).lower() in valid_keys:
+                    result = chr(ch).lower()
+                    break
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
+
+        screen.nodelay(True)
+        screen.clear()
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+        return result
 
     def notice(text, color=3, seconds=1.4):
         """Show a short message box in the middle of the screen."""
@@ -3315,16 +3449,16 @@ if __name__=='__main__':
         keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=MATCH FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ',
-                      ' [R]=SCREEN REFRESH ', ' [E]=EXIT ']
+                      ' [R]=SCREEN REFRESH ', ' [L]=RESET LOGGING ', ' [E]=EXIT ']
         keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
                       ' [O]=' + sm[1] + ' ', ' [T]=COMMENT ', ' [S]=SET REF ', ' [Z]=ZERO ',
                       ' [C]=CLEAR ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ',
-                      ' [R]=REFRESH ', ' [E]=EXIT ']
+                      ' [R]=REFRESH ', ' [L]=RESET LOG ', ' [E]=EXIT ']
         keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
                       ' [O]' + sm[1] + ' ', ' [T]CMT ', ' [S]REF ', ' [Z]ZERO ',
                       ' [C]CLR ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ',
-                      ' [R]RFR ', ' [E]EXIT ']
-        keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' I ', ' G ', ' R ', ' E ']
+                      ' [R]RFR ', ' [L]RSTLOG ', ' [E]EXIT ']
+        keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' I ', ' G ', ' R ', ' L ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
@@ -3455,6 +3589,8 @@ if __name__=='__main__':
                 cmd = 'CLEAR'
             elif k in (ord('r'), ord('R')):
                 cmd = 'SCREENREFRESH'
+            elif k in (ord('l'), ord('L')):
+                cmd = 'RESET_LOGGING'
             elif k in (ord('e'), ord('E')):
                 cmd = 'EXIT'
             elif k in (ord('t'), ord('T')):
@@ -3598,6 +3734,28 @@ if __name__=='__main__':
                     notice('COMMENT LOGGED', 2)
         elif cmd == 'SCREENREFRESH':
             screen.clear()
+        elif cmd == 'RESET_LOGGING':
+            if not args.disable_logging:
+                notice('LOGGING IS OFF - NOTHING TO RESET', 3)
+            else:
+                answer = key_confirm_dialog(' RESET LOGGING ',
+                    ['[Y] clear this file   [N] start a fresh file (old kept)',
+                     '[ESC]/[ENTER] cancel'], ('y', 'n'))
+                if answer == 'y':
+                    if reset_logfile(logfile_file_name):
+                        notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
+                    else:
+                        notice('FAILED TO RESET LOGFILE', 3)
+                elif answer == 'n':
+                    new_name = new_logfile_name(tz_offset)
+                    if reset_logfile(new_name):
+                        logfile_file_name  = new_name
+                        _logfile_file_name = new_name   # keep sigint_handler() in sync
+                        notice('NEW LOGFILE: ' + logfile_file_name, 2)
+                    else:
+                        notice('FAILED TO CREATE NEW LOGFILE', 3)
+                else:
+                    notice('RESET CANCELLED', 3)
         elif cmd == 'EXIT':
             curses.endwin()
             print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
