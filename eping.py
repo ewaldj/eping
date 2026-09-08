@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.19'
+VERSION = '2.20'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1343,7 +1343,18 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
     now_str = get_date_time()
     if down_streak is None:
         down_streak = {}
-    for entry in fping_result_data_sorted:
+    # process in real chronological order (not the IP/hostname sort order the caller
+    # uses for display) - a round's subgroups (full/reduced retry class, v4/v6) run
+    # concurrently and finish at different real times, so their result rows are not
+    # naturally time-ordered; processing them out of order would let a stale result
+    # overwrite a fresher host_state entry and would write the CSV log out of order
+    # (negative deltas -> negative downtime / >100% uptime in epinga.py's report).
+    def _row_ts_key(e):
+        try:
+            return datetime.datetime.strptime(e[2], "%d/%m/%Y %H:%M:%S")
+        except (ValueError, TypeError):
+            return datetime.datetime.min
+    for entry in sorted(fping_result_data_sorted, key=_row_ts_key):
         hostname  = entry[0]
         new_state = entry[1]
         timestamp = entry[2]
