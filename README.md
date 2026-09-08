@@ -1,4 +1,4 @@
-# eping.py 2.19
+# eping.py 2.20
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -235,7 +235,7 @@ is shown) and the previous view stays active.
 
 `ALWAYS-UP`/`ALWAYS-DOWN` mean "never left that state during this run" (`CH NO` / the
 change counter is still 0) - a live-session fact, not the full-log uptime% epinga.py's
-report computes from the CSV. `NO-DNS` counts as DOWN for `DOWN`/`ALWAYS-DOWN`/
+report computes from the CSV. `NO-DNS` counts as DOWN for `CURRENTLY-DOWN`/`ALWAYS-DOWN`/
 `DOWN+FLAPPING` (same convention used for sorting, see below), so it overlaps with the
 dedicated `NO-DNS` view by design - the views are meant to overlap where useful, the
 same way `UP+FLAPPING` and `FLAPPING-ONLY` already do.
