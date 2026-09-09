@@ -1,4 +1,4 @@
-# eping.py 2.20
+# eping.py 2.37
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -110,8 +110,10 @@ This only applies to the initial `-f` host file read at startup (including the d
 `F` / ADD FILE in the CLI and a web GUI upload only ever add hosts, an `opt:` line in
 one of those is left alone as ordinary (harmless) text.
 
-The generated default `eping-hosts.txt` ships with this section explained and a
-few `opt:` examples, commented out.
+The generated default `eping-hosts.txt` is laid out in three parts, in this order:
+the sample hosts, this section explained with a few `opt:` examples, and then every
+available CLI option as a commented-out `opt:` line with its default value (remove
+the leading `# ` to activate one).
 
 ## CLI mode
 
@@ -194,12 +196,14 @@ Serves a single self-contained page; no external resources are loaded.
 - Toolbar is fixed at two rows (wraps to more if the window is narrow, never
   fewer): row 1 - view select (9 views, picked directly from a dropdown - web
   gui only, see *Views and sort orders*; the CLI still cycles the original 3
-  with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, PREFER HOST, IP ONLY,
+  with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, the
+  address mode select (web gui only - see PREFER HOSTNAMES / IP ONLY below),
   GET NAMES, RESET LOG (reads `START LOG` while logging is off), EXIT, font size
   (right-aligned); row 2, in order and separated by `|`: the match filter field with
   SET / CLEAR, the host field with ADD / DELETE, the comment field with COMMENT, then
   ADD FILE on its own at the end. All work exactly as the matching CLI keys
-  (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`).
+  (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`), except the address mode
+  select, which is web gui only and has no single matching CLI key (see below).
   The host field feeds both ADD and DELETE — type a value and press the matching
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
@@ -225,7 +229,7 @@ how often a host has changed; `Z` resets it.
 
 `U` cycles the original three views (CLI, and as a web gui keyboard shortcut: ALL
 HOSTS → UP → UP+FLAPPING → ALL HOSTS). The web gui's view dropdown additionally
-offers 6 more views that only it can reach - the CLI has no way to select them and `U`
+offers 7 more views that only it can reach - the CLI has no way to select them and `U`
 skips over them (cycling in from one of them resets to ALL HOSTS first). Either way,
 the view also shrinks what is probed, which is what makes UP (and the other
 non-ALL views) shorten the round - hosts filtered away are not probed and cannot come
@@ -235,14 +239,18 @@ is shown) and the previous view stays active.
 
 `ALWAYS-UP`/`ALWAYS-DOWN` mean "never left that state during this run" (`CH NO` / the
 change counter is still 0) - a live-session fact, not the full-log uptime% epinga.py's
-report computes from the CSV. `NO-DNS` counts as DOWN for `CURRENTLY-DOWN`/`ALWAYS-DOWN`/
+report computes from the CSV. `EVER-UP` is a different, separately tracked fact: it
+stays true for the rest of the run once a host has been seen UP even once, no matter
+how many times it has changed state since - `CH NO` alone cannot express this, since a
+host that only ever toggled between DOWN and NO-DNS also has `CH NO` > 0 without ever
+having been UP. `NO-DNS` counts as DOWN for `CURRENTLY-DOWN`/`ALWAYS-DOWN`/
 `DOWN+FLAPPING` (same convention used for sorting, see below), so it overlaps with the
 dedicated `NO-DNS` view by design - the views are meant to overlap where useful, the
 same way `UP+FLAPPING` and `FLAPPING-ONLY` already do.
 
 The web gui dropdown lists the views in this order (independent of their internal
 index, which stays stable for scripting against `/api/status`'s `filter_mode`):
-ALL HOSTS, CURRENTLY-UP, ALWAYS-UP, UP+FLAPPING, FLAPPING-ONLY, ALWAYS-DOWN,
+ALL HOSTS, CURRENTLY-UP, ALWAYS-UP, EVER-UP, UP+FLAPPING, FLAPPING-ONLY, ALWAYS-DOWN,
 CURRENTLY-DOWN, DOWN+FLAPPING, NO-DNS.
 
 | View | Contains | Where |
@@ -250,6 +258,7 @@ CURRENTLY-DOWN, DOWN+FLAPPING, NO-DNS.
 | ALL HOSTS | everything in the reference list | CLI + web gui |
 | CURRENTLY-UP | hosts currently UP (shown as `UP` in the CLI/status text) | CLI + web gui |
 | ALWAYS-UP | hosts currently UP that have never changed state this run | web gui only |
+| EVER-UP | hosts that have been UP at least once this run, regardless of current state | web gui only |
 | UP+FLAPPING | hosts currently UP plus flapping hosts, even if they are DOWN now | CLI + web gui |
 | FLAPPING-ONLY | hosts currently flapping, regardless of UP/DOWN | web gui only |
 | ALWAYS-DOWN | hosts currently DOWN/NO-DNS that have never changed state this run | web gui only |
@@ -283,7 +292,7 @@ changes state moves to its new group right away.
 |---|---|---|---|
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan and phase info |
-| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|prefer_hostname\|ip_only\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
+| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
 There is no authentication. The default bind address is `0.0.0.0` — use
@@ -461,7 +470,12 @@ shown if logging is disabled or the logfile doesn't exist/is empty.
 pinged as soon as another entry in the list is a hostname resolving to that same
 address — the hostname is already being probed, so the bare IP would just be a
 duplicate. A raw IP with no hostname counterpart is always kept. Toggling back off
-restores the full list.
+restores the full list. The redundancy check (which hostname resolves to which
+address) is cached for `-dns` seconds, same as the DNS cache used for pinging - an
+earlier uncached, always-fresh lookup made repeated switching between
+`PREFER HOSTNAMES` and `PREFER IP ADDRESS` (web GUI) unreliable on any transient DNS
+hiccup, since a single failed lookup silently dropped that one host from the
+redundancy check for that switch only.
 
 `IP ONLY` / `I` (`-ipo` to start with it on) resolves every hostname entry to its
 address — v4 or v6, whichever resolve_name() returns (see `-4`/`-6` to prefer a
@@ -470,8 +484,24 @@ way, the other family is used if the preferred one has no record) — and
 renames it to that address in place, same rename-not-delete pattern as `GET NAMES`,
 so history and uptime carry over. From then on that host is pinged and tracked by
 IP, not by name. Toggling back off restores the original hostname for every entry
-that was renamed. A hostname that does not resolve, or whose address collides with
-another host already in the list, is left untouched.
+that was renamed. A hostname whose address collides with another host already in
+the list is dropped entirely and not restored on toggling off - that is the CLI's
+`I` key behaviour only. The web GUI's `SWITCH TO IP ONLY` mode never drops anything:
+a hostname that does not resolve at all (`NO-DNS`), or whose resolved address
+collides with another entry, is simply left alone (not renamed) and hidden from
+the list and not pinged while that mode stays active - `original_hosts_list` is
+untouched either way, so it reappears under its original name as soon as a
+different address mode is selected.
+
+The CLI only ever has these two independent toggles (`P`/`I`, each on or off on its
+own). The web GUI instead offers one address mode dropdown with four, mutually
+exclusive entries: `AS PROVIDED`, `PREFER HOSTNAME` (as above), `PREFER IP ADDRESS`
+(the mirror image - drops a hostname entry as soon as its resolved address is
+already covered by a raw-IP entry in the same list; non-destructive, exactly like
+`PREFER HOSTNAME`) and `SWITCH TO IP ONLY` (as above). Switching away from
+`SWITCH TO IP ONLY` to any other entry restores the renamed hostnames first, then
+applies the newly selected mode - so the dropdown never leaves the destructive
+IP-only rename half-applied underneath a display filter.
 
 `GET NAMES` / `G` (`-gn` to run it once at startup) reverse-DNS resolves every raw-IP
 host that has no hostname counterpart and, if a PTR record is found, renames it to that
@@ -507,9 +537,9 @@ that do not match are hidden from the table (and, in the CLI, the column layout
 shrinks to fit just the matches). Submitting an empty value turns the filter off
 again. In the CLI, an active filter replaces the version banner with
 `MATCH FILTER '<regex>' active (N of M hosts shown, all still pinged)`; the web GUI
-highlights the filter button the same way `PREFER HOSTNAMES`/`IP ONLY` do. An invalid
-regex is rejected with an error message and the previous filter (if any) is left
-unchanged.
+highlights the filter button the same way the address mode select does when it is
+not `AS PROVIDED`. An invalid regex is rejected with an error message and the
+previous filter (if any) is left unchanged.
 
 ## IPv6
 
@@ -519,8 +549,8 @@ if the preferred one has no record for that name; default: A record first). An
 IPv4-mapped IPv6 address (`::ffff:a.b.c.d`), which some resolvers synthesize for a
 v4-only name instead of failing the AAAA query, is not treated as a real AAAA record
 either — it is not a pingable native IPv6 destination — so that case falls back to
-plain IPv4 the same way. `PREFER HOSTNAMES` and `GET NAMES` consider every resolved
-address of a hostname, not just one. Internally, fping cannot ping v4 and v6 targets in the same invocation, so a
+plain IPv4 the same way. `PREFER HOSTNAMES`, `PREFER IP ADDRESS` (web gui only) and
+`GET NAMES` consider every resolved address of a hostname, not just one. Internally, fping cannot ping v4 and v6 targets in the same invocation, so a
 round with both families in play runs one fping process per family — this is
 transparent, `-dg` just shows an extra `full`/`reduced` group suffixed `/v6`. CIDR
 (`-n`) and IP-range (`-r`) expansion remain IPv4-only; a single IPv6 host can
