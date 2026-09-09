@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.20'
+VERSION = '2.37'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -91,7 +91,14 @@ WEB_VIEW_MODES = FILTER_MODES + [
     ('DOWN',           'DOWN',  'DWN'),
     ('DOWN+FLAPPING',  'DN+FL', 'D+F'),
     ('NO-DNS',         'NODNS', 'NDN'),
+    ('EVER-UP',        'E-UP',  'EUP'),
 ]
+
+# web gui only: unifies the previously independent PREFER HOSTNAME / IP ONLY
+# toggles into one mutually-exclusive dropdown (see the 'addr_mode' web command).
+# 0/1/2 are non-destructive display filters (recomputed from original_hosts_list
+# each time); 3 renames hosts to their address in place (apply_ip_only_on/off).
+ADDR_MODE_LABELS = ['as provided', 'prefer hostname', 'prefer ip address', 'ip only']
 
 # [O] cycles through these orders. A flapping host is also UP or DOWN right now, so the
 # FLAP group takes precedence over its current state; NO-DNS counts as DOWN. Inside the
@@ -987,14 +994,18 @@ def apply_match_filter(rows, pattern):
            if pattern.search(r[0]) or (len(r) > 8 and r[8] and pattern.search(r[8]))]
 
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
-                 flap_window=FLAP_WINDOW_DEF):
+                 flap_window=FLAP_WINDOW_DEF, up_seen=None):
     """Host list for the given view mode - a snapshot, taken when the view switches.
     Modes 0-2 (ALL/UP/UP+FLAPPING) are also used by the CLI's [U] key and its web
-    gui keyboard-shortcut equivalent; modes 3-8 are reachable only through the web
+    gui keyboard-shortcut equivalent; modes 3-9 are reachable only through the web
     gui's view dropdown (set_filter) - see WEB_VIEW_MODES.
     'changes' (entry[5], the CH NO column) is 0 while a host has never left the state
     it was first observed in this run - that is what ALWAYS-UP/ALWAYS-DOWN mean here;
-    it is a live-session fact, not the full-log uptime% epinga.py's report computes."""
+    it is a live-session fact, not the full-log uptime% epinga.py's report computes.
+    Mode 9 (EVER-UP) needs up_seen (the same set update_host_state() feeds and that
+    survives state changes for the whole run, unlike host_state's single-prior-state
+    'changes' counter) - a host can flip DOWN<->NO-DNS with changes>0 and still have
+    never been UP, so 'changes' alone cannot stand in for 'ever up'."""
     if mode <= 0:
         return list(original_hosts_list)
     now_ref = now_local(tz_offset)
@@ -1022,22 +1033,61 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
             out.append(h)
         elif mode == 8 and 'NO-DNS' in entry[1]:
             out.append(h)
+        elif mode == 9 and up_seen is not None and h in up_seen:
+            out.append(h)
     return out
+
+_addr_redundancy_cache = {}   # name -> (ips list, expires_at) - see _cached_all_ips()
+
+def _cached_all_ips(name, ttl):
+    """resolve_all_ips(), cached for ttl seconds (own cache, independent of
+    resolve_name()'s _dns_cache so GET NAMES / forget_names invalidation is not
+    affected). apply_prefer_hostname()/apply_prefer_ip() call this once per hostname
+    on every single address-mode switch (PREFER HOSTNAME <-> PREFER IP ADDRESS
+    switches back and forth without ever going through IP ONLY, so this runs on
+    every one of them); resolving live and uncached every time made the redundancy
+    check both slow (blocks the ping loop for the whole switch on a large host
+    list) and, on any transient DNS hiccup, inconsistent between switches - a
+    hostname that failed to resolve just that once was treated as having no
+    address at all, silently skipping the redundancy check that switch. ttl <= 0
+    disables caching (matches prepare_targets()'s convention elsewhere)."""
+    if ttl <= 0:
+        return resolve_all_ips(name)
+    now = time.time()
+    with _dns_lock:
+        entry = _addr_redundancy_cache.get(name)
+        if entry and entry[1] > now:
+            return entry[0]
+    ips = resolve_all_ips(name)
+    with _dns_lock:
+        _addr_redundancy_cache[name] = (ips, now + (ttl if ips else min(ttl, DNS_FAIL_TTL)))
+    return ips
 
 def apply_prefer_hostname(hosts_list, dns_ttl):
     """[P] toggle: drop raw-IP entries whose address is also covered by a hostname
     entry in the same list. The hostname gets pinged anyway, so pinging the bare IP a
     second time is redundant - a raw IP with no hostname counterpart is kept as-is.
     A hostname with several A-records (e.g. anycast siblings) covers all of them, not
-    just the one resolve_name() currently has cached - dns_ttl is unused now that this
-    always resolves fresh, kept for call-site compatibility.
-    """
+    just the one resolve_name() currently has cached. dns_ttl controls how long a
+    hostname's resolved addresses are cached for this check - see _cached_all_ips()."""
     hostname_ips = set()
     for h in hosts_list:
         if not is_ip_host(h):
-            hostname_ips.update(resolve_all_ips(h))
+            hostname_ips.update(_cached_all_ips(h, dns_ttl))
     return [h for h in hosts_list
             if not (is_ip_host(h) and h in hostname_ips)]
+
+def apply_prefer_ip(hosts_list, dns_ttl):
+    """Web-gui-only mirror of apply_prefer_hostname: drop a hostname entry when its
+    resolved address is already covered by a raw-IP entry in the same list (the
+    opposite redundancy check - IP wins, hostname is dropped). dns_ttl controls how
+    long a hostname's resolved addresses are cached for this check - see
+    _cached_all_ips()."""
+    raw_ips = set(h for h in hosts_list if is_ip_host(h))
+    if not raw_ips:
+        return list(hosts_list)
+    return [h for h in hosts_list
+            if is_ip_host(h) or not raw_ips.intersection(_cached_all_ips(h, dns_ttl))]
 
 def apply_ip_only_on(original_hosts_list, active_hosts_list, host_state, up_seen,
                      down_streak, dns_ttl):
@@ -1095,6 +1145,41 @@ def apply_ip_only_off(ip_map, original_hosts_list, active_hosts_list, host_state
                                   host_state, up_seen, down_streak)
             restored += 1
     return 'ip only: off, ' + str(restored) + ' restored'
+
+def apply_ip_only_on_web(original_hosts_list, active_hosts_list, host_state,
+                         up_seen, down_streak, dns_ttl):
+    """Web-gui-only variant of apply_ip_only_on: never permanently drops a host.
+    A hostname whose resolved address collides with another entry already in the
+    list (a raw IP, or another hostname already claimed earlier in this same call)
+    is left untouched instead of removed - exactly like an unresolved (NO-DNS)
+    hostname, it simply stays out of what is shown/pinged while IP ONLY is active
+    (see the is_ip_host() filter after this call in run_web_mode), and reappears
+    under its original name as soon as a different address mode is selected, since
+    original_hosts_list/host_state are never touched for it. The CLI's [I] key still
+    uses apply_ip_only_on above and keeps the old drop-on-collision behaviour."""
+    existing = set(h.lower() for h in original_hosts_list)
+    ip_map, unresolved, skipped = {}, 0, 0
+    for h in list(original_hosts_list):
+        if is_ip_host(h):
+            continue
+        ip = resolve_name(h, dns_ttl)
+        if not ip:
+            unresolved += 1
+            continue
+        if ip in ip_map or ip.lower() in existing:
+            skipped += 1
+            continue
+        _rename_host_in_place(h, ip, original_hosts_list, active_hosts_list,
+                              host_state, up_seen, down_streak)
+        ip_map[ip] = h
+        existing.add(ip.lower())
+
+    parts = [str(len(ip_map)) + ' resolved']
+    if unresolved:
+        parts.append(str(unresolved) + ' unresolved')
+    if skipped:
+        parts.append(str(skipped) + ' skipped (duplicate address)')
+    return ip_map, 'ip only: on, ' + ', '.join(parts)
 
 def check_python_version(mrv):
     current_version = sys.version_info
@@ -1403,8 +1488,14 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
 
         host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd, resolved_ip]
 
-        # learning phase tracking
-        if not learning_done and 'UP' in new_state:
+        # up_seen tracks "seen UP at least once" for the whole run (used by the
+        # web gui's EVER-UP view, see filter_hosts()) - not gated on learning_done:
+        # with the default -up 0, learning_done is True from run 1, so gating this
+        # on it would leave up_seen permanently empty and EVER-UP would never match
+        # anything. The one-time learning-phase seeding read (active_hosts_list =
+        # sorted(up_seen, ...) below) only happens while up_check_runs > 0 and
+        # fires once, so up_seen continuing to grow afterward does not affect it.
+        if 'UP' in new_state:
             up_seen.add(hostname)
 
         # logging
@@ -1622,8 +1713,7 @@ web_state = {
     'logfile'          : '',
     'filter_mode'      : 0,
     'filter_label'     : FILTER_MODES[0][0],
-    'prefer_hostname'  : False,
-    'ip_only_mode'     : False,
+    'addr_mode'        : 0,
     'sort_mode'        : 0,
     'readonly'         : False,
     'learning_phase'   : True,
@@ -1783,10 +1873,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
    <span id="ctrls">
     <span class="ctrls-row">
      <span id="ctrlsMain">
-      <select id="selFilter" title="choose which hosts are shown">
+      <select id="selFilter" title="choose which hosts are shown and pinged - a host outside the current view is not checked until a view including it is selected again">
         <option value="0">ALL HOSTS</option>
         <option value="1">CURRENTLY-UP</option>
         <option value="3">ALWAYS-UP</option>
+        <option value="9">EVER-UP</option>
         <option value="2">UP+FLAPPING</option>
         <option value="4">FLAPPING-ONLY</option>
         <option value="5">ALWAYS-DOWN</option>
@@ -1803,12 +1894,16 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </select>
       <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
-      <button id="btnClear" class="danger">CLEAR ALL</button>
-      <button id="btnPreferHost" title="skip a raw IP host when the same address is already covered by a hostname">PREFER HOST</button>
-      <button id="btnIpOnly" title="resolve every hostname to its IP (v4/v6, whichever resolves) and ping/track it by address instead of by name">IP ONLY</button>
+      <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
+      <select id="selAddrMode" title="prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
+        <option value="0">AS PROVIDED</option>
+        <option value="1">PREFER HOSTNAME</option>
+        <option value="2">PREFER IP ADDRESS</option>
+        <option value="3">SWITCH TO IP ONLY</option>
+      </select>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
-      <button id="btnExit" class="danger">EXIT</button>
+      <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
      </span>
      <span class="fsbox">
        FONT
@@ -1820,14 +1915,14 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     </span>
     <span class="ctrls-row" id="ctrlsHosts">
      <span class="grp">
-      <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="match filter: regex on host/IP, blank = off">
-      <button id="btnMatchFilter">SET</button>
-      <button id="btnClearFilter" title="disable the match filter">CLEAR</button>
+      <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="Display filter: regex">
+      <button id="btnMatchFilter" title="apply display filter">SET</button>
+      <button id="btnClearFilter" title="clear display filter">CLEAR</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
      <span class="grp">
       <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
-      <button id="btnAdd">ADD</button>
+      <button id="btnAdd" title="add the given host(s) to the list - same input as DELETE">ADD</button>
       <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
@@ -1899,14 +1994,14 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
 var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
                del:'removing host(s) ...', set_ref:'setting reference ...',
                clear:'clearing all hosts ...', zero:'resetting change counters ...',
-               prefer_hostname:'toggling prefer hostnames ...',
-               ip_only:'toggling ip only ...',
+               addr_mode:'switching address mode ...',
                get_names:'resolving names ...',
                match_filter:'applying filter ...',
                add_comment:'logging comment ...',
                reset_log:'resetting log ...',
                exit:'stopping eping ...'};
 var pending = false, lastMsgSeq = null;
+var pendingAddrMode = null;   // see selAddrMode onchange / poll() below
 
 function note(text, isPending){
   var m = document.getElementById('msg');
@@ -1920,8 +2015,15 @@ function post(cmd, value){
     body: JSON.stringify({cmd:cmd, value:value||''})}).then(function(r){return r.json();});
 }
 document.getElementById('selFilter').onchange = function(){ post('set_filter', this.value); };
-document.getElementById('btnPreferHost').onclick = function(){ post('prefer_hostname'); };
-document.getElementById('btnIpOnly').onclick = function(){ post('ip_only'); };
+document.getElementById('selAddrMode').onchange = function(){
+  var picked = this.value;
+  pendingAddrMode = picked;
+  // safety net: if the server never echoes this value back (e.g. the command
+  // got lost), stop overriding the poll after a while instead of freezing the
+  // dropdown on a value that will never be confirmed
+  setTimeout(function(){ if(pendingAddrMode === picked) pendingAddrMode = null; }, 10000);
+  post('addr_mode', picked);
+};
 document.getElementById('btnGetNames').onclick = function(){ post('get_names'); };
 document.getElementById('btnMatchFilter').onclick = function(){
   post('match_filter', document.getElementById('matchInput').value.trim());
@@ -2046,8 +2148,10 @@ document.addEventListener('keydown', function(e){
   if(document.activeElement && document.activeElement.tagName === 'INPUT') return;
   switch(e.key.toLowerCase()){
     case 'u': post('up_only'); break;   // cycle ALL/UP/UP+FLAP, dropdown stays in sync via render()
-    case 'p': document.getElementById('btnPreferHost').click(); break;
-    case 'i': document.getElementById('btnIpOnly').click(); break;
+    case 'p': { var pv = (document.getElementById('selAddrMode').value === '1') ? '0' : '1';
+                pendingAddrMode = pv; post('addr_mode', pv); } break;
+    case 'i': { var iv = (document.getElementById('selAddrMode').value === '3') ? '0' : '3';
+                pendingAddrMode = iv; post('addr_mode', iv); } break;
     case 'g': document.getElementById('btnGetNames').click(); break;
     case 'm': document.getElementById('matchInput').focus();
               document.getElementById('matchInput').select(); break;
@@ -2236,10 +2340,27 @@ function poll(){
       ? 'Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel'
       : 'start logging right away, no confirmation needed';
     document.getElementById('selFilter').value = s.filter_mode;
-    var bp = document.getElementById('btnPreferHost');
-    bp.className   = s.prefer_hostname ? 'on' : '';
-    var bi = document.getElementById('btnIpOnly');
-    bi.className   = s.ip_only_mode ? 'on' : '';
+    var sa = document.getElementById('selAddrMode');
+    // two separate problems, two guards: (1) while the select is focused - which
+    // stays true for as long as its native dropdown popup is open, in every
+    // browser - never touch .value at all; setting it out from under an open
+    // native popup is what made Firefox silently drop the user's click (no
+    // 'change' event ever fired, so nothing was even sent to the server). (2)
+    // once focus is gone, a status poll can still land between the click and the
+    // server actually applying it (DNS resolution takes real time) - pendingAddrMode
+    // keeps the picked value showing until the server echoes it back.
+    // nothing about this element is touched while it's focused - not just .value:
+    // Firefox's native dropdown popup stays open for as long as the select has
+    // focus, and any DOM write to the select while that popup is open (even a
+    // className change) can make Firefox drop the click that was about to commit,
+    // with no 'change' event firing at all and nothing sent to the server.
+    if(document.activeElement !== sa){
+      if(pendingAddrMode !== null && String(s.addr_mode) === String(pendingAddrMode)){
+        pendingAddrMode = null;
+      }
+      if(pendingAddrMode === null) sa.value = s.addr_mode || 0;
+      sa.className = s.addr_mode ? 'on' : '';
+    }
     var bm = document.getElementById('btnMatchFilter');
     bm.className   = s.match_filter ? 'on' : '';
     var mi = document.getElementById('matchInput');
@@ -2363,7 +2484,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'prefer_hostname', 'ip_only', 'get_names', 'match_filter', 'add_comment', 'reset_log'):
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -2412,7 +2533,7 @@ def web_rows(display_list):
 def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
-                scan_info='', sort_mode=0, prefer_hostname=False, ip_only_mode=0,
+                scan_info='', sort_mode=0, addr_mode=0,
                 match_filter=''):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
@@ -2429,8 +2550,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'logfile'         : logfile_file_name if logging_enabled else '',
             'filter_mode'     : filter_mode,
             'filter_label'    : WEB_VIEW_MODES[filter_mode][0],
-            'prefer_hostname' : prefer_hostname,
-            'ip_only_mode'    : ip_only_mode,
+            'addr_mode'       : addr_mode,
             'sort_mode'       : sort_mode,
             'learning_phase'  : learning_phase,
             'learning_run'    : learning_run,
@@ -2467,8 +2587,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     tz_offset         = int(args.time_zone_adjust)
     active_hosts_list = list(original_hosts_list)
     filter_mode       = 0
-    prefer_hostname   = bool(args.prefer_hostname)
-    ip_only_mode      = False
+    # web gui only: one mutually-exclusive address mode replaces the separate
+    # PREFER HOSTNAME / IP ONLY toggles - see ADDR_MODE_LABELS above.
+    addr_mode         = 0
     ip_only_map       = {}
     sort_mode         = 0
     down_streak       = {}
@@ -2482,16 +2603,29 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     match_filter_re   = None   # [M] display-only regex filter - active_hosts_list unaffected
     match_filter_text = ''
 
-    # -gn / -ph: applied once, before the first ping round
+    def apply_addr_mode(lst):
+        if addr_mode == 1:
+            return apply_prefer_hostname(lst, int(args.dns_ttl))
+        if addr_mode == 2:
+            return apply_prefer_ip(lst, int(args.dns_ttl))
+        return lst
+
+    # -gn / -ph / -ipo: applied once, before the first ping round
     if args.get_names:
         apply_get_names(original_hosts_list, active_hosts_list, host_state,
                         up_seen, down_streak, int(args.dns_ttl))
     if args.ip_only:
-        ip_only_map, _ = apply_ip_only_on(original_hosts_list, active_hosts_list,
-                                          host_state, up_seen, down_streak, int(args.dns_ttl))
-        ip_only_mode = True
-    active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
-                         if prefer_hostname else active_hosts_list)
+        ip_only_map, _ = apply_ip_only_on_web(original_hosts_list, active_hosts_list,
+                                             host_state, up_seen, down_streak, int(args.dns_ttl))
+        # everything apply_ip_only_on_web could resolve is now a raw IP in the list -
+        # what is still a hostname here failed to resolve (NO-DNS); drop it from
+        # what gets shown/pinged while IP ONLY stays active (original_hosts_list is
+        # untouched, so it reappears when switching to a different address mode)
+        active_hosts_list = [h for h in active_hosts_list if is_ip_host(h)]
+        addr_mode = 3
+    elif args.prefer_hostname:
+        addr_mode = 1
+    active_hosts_list = apply_addr_mode(active_hosts_list)
 
     while True:
         # --- [G] background PTR lookup: apply results once the thread is done ---
@@ -2513,11 +2647,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # the dropdown) resets to ALL HOSTS first, then continues cycling
                 next_mode = (filter_mode + 1) % len(FILTER_MODES) if filter_mode < len(FILTER_MODES) else 0
                 next_list = filter_hosts(next_mode, original_hosts_list, host_state,
-                                         tz_offset, flap_window)
+                                         tz_offset, flap_window, up_seen)
                 if next_list or next_mode == 0:
                     filter_mode       = next_mode
-                    active_hosts_list = (apply_prefer_hostname(next_list, int(args.dns_ttl))
-                                         if prefer_hostname else next_list)
+                    active_hosts_list = apply_addr_mode(next_list)
                     message = 'view: ' + FILTER_MODES[filter_mode][0]
                 else:
                     message = 'no hosts match ' + FILTER_MODES[next_mode][0]
@@ -2530,34 +2663,43 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     target_mode = filter_mode
                 if 0 <= target_mode < len(WEB_VIEW_MODES) and target_mode != filter_mode:
                     target_list = filter_hosts(target_mode, original_hosts_list, host_state,
-                                               tz_offset, flap_window)
+                                               tz_offset, flap_window, up_seen)
                     if target_list or target_mode == 0:
                         filter_mode       = target_mode
-                        active_hosts_list = (apply_prefer_hostname(target_list, int(args.dns_ttl))
-                                             if prefer_hostname else target_list)
+                        active_hosts_list = apply_addr_mode(target_list)
                         message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
                     else:
                         message = 'no hosts match ' + WEB_VIEW_MODES[target_mode][0]
-            elif cmd == 'prefer_hostname':
-                prefer_hostname = not prefer_hostname
-                base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
-                                         tz_offset, flap_window)
-                active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
-                                     if prefer_hostname else base_list)
-                message = 'prefer hostnames: ' + ('on' if prefer_hostname else 'off')
-            elif cmd == 'ip_only':
-                if not ip_only_mode:
-                    ip_only_map, io_msg = apply_ip_only_on(
-                        original_hosts_list, active_hosts_list, host_state,
-                        up_seen, down_streak, int(args.dns_ttl))
-                    ip_only_mode = True
-                else:
-                    io_msg = apply_ip_only_off(ip_only_map, original_hosts_list,
-                                               active_hosts_list, host_state,
-                                               up_seen, down_streak)
-                    ip_only_map = {}
-                    ip_only_mode = False
-                message = io_msg
+            elif cmd == 'addr_mode':
+                # web-gui-only dropdown: off / prefer hostname / prefer ip / ip only
+                # - mutually exclusive, replaces the old separate prefer_hostname
+                # and ip_only toggles (see ADDR_MODE_LABELS)
+                try:
+                    target_mode = int(value)
+                except (TypeError, ValueError):
+                    target_mode = -1
+                if not (0 <= target_mode < len(ADDR_MODE_LABELS)):
+                    message = 'invalid address mode'
+                elif target_mode != addr_mode:
+                    if addr_mode == 3:
+                        # leaving IP ONLY: restore the renamed hostnames first
+                        apply_ip_only_off(ip_only_map, original_hosts_list,
+                                          active_hosts_list, host_state,
+                                          up_seen, down_streak)
+                        ip_only_map = {}
+                    addr_mode = target_mode
+                    if addr_mode == 3:
+                        ip_only_map, message = apply_ip_only_on_web(
+                            original_hosts_list, active_hosts_list, host_state,
+                            up_seen, down_streak, int(args.dns_ttl))
+                        # drop unresolved (NO-DNS) hostnames from view/ping while
+                        # IP ONLY is active - see the startup (-ipo) path above
+                        active_hosts_list = [h for h in active_hosts_list if is_ip_host(h)]
+                    else:
+                        base_list = filter_hosts(filter_mode, original_hosts_list,
+                                                 host_state, tz_offset, flap_window, up_seen)
+                        active_hosts_list = apply_addr_mode(base_list)
+                        message = 'address mode: ' + ADDR_MODE_LABELS[addr_mode]
             elif cmd == 'get_names':
                 if gn_thread is not None and gn_thread.is_alive():
                     message = 'get names: already running'
@@ -2682,6 +2824,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 up_seen.clear()
                 down_streak.clear()
                 _dns_cache.clear()
+                _addr_redundancy_cache.clear()
                 filter_mode = 0
                 message = 'all hosts cleared'
             elif cmd == 'exit':
@@ -2715,8 +2858,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['hosts_down']   = len(quick) - quick_up
                 web_state['filter_mode']  = filter_mode
                 web_state['filter_label'] = WEB_VIEW_MODES[filter_mode][0]
-                web_state['prefer_hostname'] = prefer_hostname
-                web_state['ip_only_mode'] = ip_only_mode
+                web_state['addr_mode'] = addr_mode
                 web_state['sort_mode']    = sort_mode
                 web_state['match_filter'] = match_filter_text
                 # logging state can flip live (START LOG) - keep the quick path in sync too
@@ -2731,8 +2873,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 learning_done = True
                 active_hosts_list = sorted(up_seen, key=lambda h: (
                     int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')))
-                active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
-                                     if prefer_hostname else active_hosts_list)
+                active_hosts_list = apply_addr_mode(active_hosts_list)
                 if args.set_reference:
                     # -setref: same as the 'set_ref' web command, once learning ends
                     original_hosts_list = list(active_hosts_list)
@@ -2806,7 +2947,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     filter_mode,
                     learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available,
-                    tz_offset, message, scan_info, sort_mode, prefer_hostname, ip_only_mode,
+                    tz_offset, message, scan_info, sort_mode, addr_mode,
                     match_filter_text)
 
         run_counter += 1
@@ -3058,21 +3199,61 @@ if __name__=='__main__':
 
     # create sample file if not exists and no special file is given
     if not args.disable_hostfile and (args.hostfile == default_hostfile):
-        data = ["# eping hosts - IPs, hostnames and CIDR networks, '#' starts a comment\n",
+        data = [
+                # --- hosts -----------------------------------------------------------
+                "127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222\n", "208.67.220.220\n",
+                "www.heise.de 193.99.144.85\n", "www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n",
+                "ö3.at www.orf.at\n", "::1\n", "ipv4.jeitler.cc\n", "ipv6.jeitler.cc\n",
+                "www.jeitler.cc\n", "2603:c020:8016:1313::10\n",
+                "\n",
+                # --- description -------------------------------------------------------
+                "# eping hosts - IPs, hostnames and CIDR networks, '#' starts a comment\n",
                 "# a network is expanded to every address in it, e.g.: 192.168.99.0/29 2603:c020:8016:1313::10 2603:c020:8016:1313::10/128\n",
                 "#\n",
                 "# a line starting with exactly 'opt:' or 'OPT:' carries CLI options that are\n",
                 "# applied as if typed on the command line (several such lines are allowed and\n",
                 "# are joined in file order; a real CLI option always wins over one from here).\n",
-                "# examples (commented out - remove the leading '# ' to activate):\n",
-                "# opt: -ph -du -w 2\n",
-                "# opt: -web -port 9000\n",
-                "# opt: -up 5 -setref\n",
                 "\n",
-                "127.0.0.1\n", "no-dns.test 1.1.1.1 1.0.0.1 208.67.222.222\n", "208.67.220.220\n",
-                "www.heise.de 193.99.144.85\n", "www.google.com\n", "localhost 8.8.8.8 8.8.4.4\n",
-                "ö3.at www.orf.at\n", "::1\n", "ipv4.jeitler.cc\n", "ipv6.jeitler.cc\n",
-                "www.jeitler.cc\n", "2603:c020:8016:1313::10\n" ]
+                # --- options -----------------------------------------------------------
+                "# every available CLI option, commented out below with its default value -\n",
+                "# remove the leading '# ' on a line (keep the 'opt: ') to activate it.\n",
+                "#\n",
+                "# opt: -f eping-hosts.txt          # hosts filename(s), comma/space separated\n",
+                "# opt: -df                          # disable hostsfile\n",
+                "# opt: -n 192.168.0.0/24            # CIDR network(s), comma separated\n",
+                "# opt: -r 10.10.10.1-11.12          # IP range(s), comma separated\n",
+                "# opt: -B 1.5                       # exponential backoff factor\n",
+                "# opt: -t 250                       # initial per-target timeout (ms)\n",
+                "# opt: -re 3                        # retries per host\n",
+                "# opt: -i                           # interval between pings (ms), overrides -ra\n",
+                "# opt: -o                           # logging filename\n",
+                "# opt: -dl                          # disable logging\n",
+                "# opt: -cl                          # delete all 'eping-l*' files\n",
+                "# opt: -up 0                        # check only hosts UP for x runs\n",
+                "# opt: -setref                      # after -up learning: UP hosts become the reference list\n",
+                "# opt: -p auto                      # fping processes per retry group\n",
+                "# opt: -tz 0                        # timezone adjust, -24..24\n",
+                "# opt: -w 0.5                       # wait time between rounds\n",
+                "# opt: -du                          # disable online versioncheck\n",
+                "# opt: -ra 1000                     # ICMP packets per second\n",
+                "# opt: -dns 300                     # seconds a resolved hostname is cached\n",
+                "# opt: -4                           # prefer IPv4\n",
+                "# opt: -6                           # prefer IPv6\n",
+                "# opt: -ph                          # start with PREFER HOSTNAMES active\n",
+                "# opt: -ipo                         # start with IP ONLY active\n",
+                "# opt: -gn                          # reverse-DNS raw IPs to hostnames once at startup\n",
+                "# opt: -dr 1                        # retries for hosts already known DOWN\n",
+                "# opt: -dg                          # show per-phase cycle time diagnostics\n",
+                "# opt: -fw 72000                    # flapping window, minutes\n",
+                "# opt: -cf 2                        # consecutive DOWN observations before UP -> DOWN\n",
+                "# opt: -ds 4                        # spread known DOWN hosts over N rounds\n",
+                "# opt: -fs 10                       # every Nth run: full retries for everyone (0 = never)\n",
+                "# opt: -ncs                         # do not pass --check-source to fping\n",
+                "# opt: -web                         # start the web gui instead of the CLI\n",
+                "# opt: -wv                          # CLI mode plus a read-only web view\n",
+                "# opt: -port 8080                   # http port for -web / -wv\n",
+                "# opt: -bind 0.0.0.0                # bind address for -web / -wv\n",
+                ]
         try:
             create_file_if_not_exists(default_hostfile,data)
         except TypeError as error_msg:
@@ -3444,7 +3625,8 @@ if __name__=='__main__':
         web_publish(display_list, run_counter, run_time, hosts_count_up, hosts_count_down,
                     filter_mode, learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available_cli,
-                    tz_offset, msg, used_scan, sort_mode, prefer_hostname, ip_only_mode,
+                    tz_offset, msg, used_scan, sort_mode,
+                    (3 if ip_only_mode else (1 if prefer_hostname else 0)),
                     match_filter_text)
 
 
@@ -3739,12 +3921,13 @@ if __name__=='__main__':
             up_seen.clear()
             down_streak.clear()
             _dns_cache.clear()
+            _addr_redundancy_cache.clear()
             filter_mode = 0
             screen.clear()
         elif cmd == 'UP_ONLY':
             next_mode = (filter_mode + 1) % len(FILTER_MODES)
             next_list = filter_hosts(next_mode, original_hosts_list, host_state,
-                                     tz_offset, flap_window)
+                                     tz_offset, flap_window, up_seen)
             if next_list or next_mode == 0:
                 filter_mode       = next_mode
                 active_hosts_list = (apply_prefer_hostname(next_list, int(args.dns_ttl))
@@ -3755,7 +3938,7 @@ if __name__=='__main__':
         elif cmd == 'PREFER_HOSTNAME':
             prefer_hostname = not prefer_hostname
             base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
-                                     tz_offset, flap_window)
+                                     tz_offset, flap_window, up_seen)
             active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
                                  if prefer_hostname else base_list)
             notice('PREFER HOSTNAME: ' + ('ON' if prefer_hostname else 'OFF'), 2)
