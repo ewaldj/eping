@@ -1,4 +1,4 @@
-# eping.py 2.37
+# eping.py 2.41
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -194,16 +194,22 @@ Serves a single self-contained page; no external resources are loaded.
   display preference, not a control over eping.py itself.
 - Column headers sort the whole list (IPv4-aware).
 - Toolbar is fixed at two rows (wraps to more if the window is narrow, never
-  fewer): row 1 - view select (9 views, picked directly from a dropdown - web
+  fewer): row 1 - view select (10 views, picked directly from a dropdown - web
   gui only, see *Views and sort orders*; the CLI still cycles the original 3
   with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, the
   address mode select (web gui only - see PREFER HOSTNAMES / IP ONLY below),
-  GET NAMES, RESET LOG (reads `START LOG` while logging is off), EXIT, font size
-  (right-aligned); row 2, in order and separated by `|`: the match filter field with
-  SET / CLEAR, the host field with ADD / DELETE, the comment field with COMMENT, then
-  ADD FILE on its own at the end. All work exactly as the matching CLI keys
-  (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`), except the address mode
-  select, which is web gui only and has no single matching CLI key (see below).
+  GET NAMES, RESET LOG (reads `START LOG` while logging is off), the DOWNLOAD
+  select (web gui only - three targets: ALL HOSTS saves the full reference list;
+  SHOWN HOSTS saves only what the table currently shows (view, address mode and
+  display filter all apply, same as the table); both are plain text, same format
+  ADD FILE/upload accept. LOGFILE saves the active CSV log, disabled while logging
+  is off), EXIT, font size (right-aligned); row 2,
+  in order and separated by `|`: the match filter field with SET / CLEAR, the
+  host field with ADD / DELETE, the comment field with COMMENT, then ADD FILE on
+  its own at the end. All work exactly as the matching CLI keys (`U`, `P`, `I`,
+  `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`), except the address mode select and
+  DOWNLOAD, which are web gui only and have no matching CLI key (see below for
+  the address mode select).
   The host field feeds both ADD and DELETE — type a value and press the matching
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
@@ -292,6 +298,9 @@ changes state moves to its new group right away.
 |---|---|---|---|
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan and phase info |
+| GET | `/api/download/hosts_all` | — | the full reference list as a `.txt` download (DOWNLOAD > ALL HOSTS) |
+| GET | `/api/download/hosts_shown` | — | the currently displayed hosts as a `.txt` download (DOWNLOAD > SHOWN HOSTS) |
+| GET | `/api/download/logfile` | — | the active CSV log as a download (DOWNLOAD > LOGFILE); `404` while logging is off |
 | POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
