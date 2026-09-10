@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.37'
+VERSION = '2.41'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1704,6 +1704,8 @@ web_state = {
     'update_available' : False,
     'datetime'         : '',
     'rows'             : [],
+    'host_list_shown'  : [],   # DOWNLOAD > SHOWN HOSTS - currently displayed hosts
+    'host_list_all'    : [],   # DOWNLOAD > ALL HOSTS - the full reference list
     'hosts'            : 0,
     'hosts_up'         : 0,
     'hosts_down'       : 0,
@@ -1903,6 +1905,12 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </select>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
+      <select id="selDownload" title="download the full reference list, only the currently shown hosts, or the active logfile">
+        <option value="" selected>DOWNLOAD</option>
+        <option value="hosts_all">ALL HOSTS</option>
+        <option value="hosts_shown">SHOWN HOSTS</option>
+        <option value="logfile">LOGFILE</option>
+      </select>
       <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
      </span>
      <span class="fsbox">
@@ -2106,6 +2114,28 @@ fileInput.addEventListener('change', function(){
   };
   rd.readAsText(f);
 });
+document.getElementById('selDownload').onchange = function(){
+  var what  = this.value;
+  var label = this.options[this.selectedIndex].text;
+  this.value = '';                              // reset - a select, not a toggle
+  if(!what) return;
+  note('downloading ' + label + ' ...', true);
+  fetch('api/download/' + what).then(function(r){
+    if(!r.ok){
+      return r.text().then(function(t){ note(label + ': ' + (t || 'download failed'), false); });
+    }
+    var cd = r.headers.get('Content-Disposition') || '';
+    var m  = /filename="([^"]+)"/.exec(cd);
+    var filename = m ? m[1] : (what + '.txt');
+    return r.blob().then(function(b){
+      var url = URL.createObjectURL(b);
+      var a   = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+  }).catch(function(){ note(label + ': download failed', false); });
+};
 /* drag & drop a host file anywhere on the page */
 document.addEventListener('dragover', function(e){ e.preventDefault(); });
 document.addEventListener('drop', function(e){
@@ -2415,7 +2445,10 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass  # keep the console quiet
 
-    def _respond(self, code, ctype, body):
+    def _respond(self, code, ctype, body, filename=None):
+        # filename set: send as a download (DOWNLOAD dropdown - HOST LIST/LOGFILE)
+        # instead of an inline body, so window.location-style navigation would not
+        # replace the running gui page.
         if isinstance(body, str):
             body = body.encode('utf-8')
         try:
@@ -2423,6 +2456,9 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Type', ctype)
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
+            if filename:
+                self.send_header('Content-Disposition',
+                                 'attachment; filename="' + filename + '"')
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
@@ -2436,6 +2472,33 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             with web_lock:
                 body = json.dumps(web_state)
             self._respond(200, 'application/json; charset=utf-8', body)
+        elif path in ('/api/download/hosts_shown', 'api/download/hosts_shown',
+                      '/api/download/hosts_all', 'api/download/hosts_all'):
+            # DOWNLOAD > SHOWN HOSTS / ALL HOSTS - one host per line, same
+            # plain-text format ADD FILE/upload accept.
+            key = 'host_list_shown' if 'hosts_shown' in path else 'host_list_all'
+            with web_lock:
+                hosts = list(web_state.get(key) or [])
+            body = ''.join(h + chr(10) for h in hosts)
+            tag   = 'shown' if key == 'host_list_shown' else 'all'
+            fname = ('eping-hosts_' + tag + '_'
+                    + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S') + '.txt')
+            self._respond(200, 'text/plain; charset=utf-8', body, fname)
+        elif path in ('/api/download/logfile', 'api/download/logfile'):
+            # DOWNLOAD > LOGFILE - the currently active CSV log, read fresh from
+            # disk (not cached) so the download always reflects the latest rows.
+            with web_lock:
+                logpath = web_state.get('logfile') or ''
+            if not logpath or not os.path.exists(logpath):
+                self._respond(404, 'text/plain; charset=utf-8', 'no active logfile')
+                return
+            try:
+                with open(logpath, 'rb') as f:
+                    body = f.read()
+            except OSError:
+                self._respond(404, 'text/plain; charset=utf-8', 'logfile not readable')
+                return
+            self._respond(200, 'text/csv; charset=utf-8', body, os.path.basename(logpath))
         else:
             self._respond(404, 'text/plain; charset=utf-8', 'not found')
 
@@ -2534,7 +2597,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
                 scan_info='', sort_mode=0, addr_mode=0,
-                match_filter=''):
+                match_filter='', original_hosts_list=None):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
     with web_lock:
@@ -2542,6 +2605,11 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'datetime'        : now.strftime("%d/%m/%Y %H:%M:%S"),
             'rows'            : rows,
             'hosts'           : len(rows),
+            # DOWNLOAD - SHOWN HOSTS: only what's currently displayed (view, address
+            # mode and display filter already applied via display_list/rows above);
+            # ALL HOSTS: the full reference list, unfiltered.
+            'host_list_shown' : [r['host'] for r in rows],
+            'host_list_all'   : list(original_hosts_list) if original_hosts_list is not None else [],
             'hosts_up'        : hosts_up,
             'hosts_down'      : hosts_down,
             'run_counter'     : run_counter,
@@ -2852,7 +2920,11 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
             with web_lock:
                 web_state['message']      = message
                 web_state['msg_seq']      = web_state.get('msg_seq', 0) + 1
-                web_state['rows']         = web_rows(quick)
+                quick_rows                = web_rows(quick)
+                web_state['rows']         = quick_rows
+                # DOWNLOAD - SHOWN/ALL HOSTS, see web_publish()
+                web_state['host_list_shown'] = [r['host'] for r in quick_rows]
+                web_state['host_list_all']   = list(original_hosts_list)
                 web_state['hosts']        = len(quick)
                 web_state['hosts_up']     = quick_up
                 web_state['hosts_down']   = len(quick) - quick_up
@@ -2948,7 +3020,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available,
                     tz_offset, message, scan_info, sort_mode, addr_mode,
-                    match_filter_text)
+                    match_filter_text, original_hosts_list)
 
         run_counter += 1
 
@@ -3627,7 +3699,7 @@ if __name__=='__main__':
                     args.disable_logging, logfile_file_name, update_available_cli,
                     tz_offset, msg, used_scan, sort_mode,
                     (3 if ip_only_mode else (1 if prefer_hostname else 0)),
-                    match_filter_text)
+                    match_filter_text, original_hosts_list)
 
 
     def rebuild_display():
