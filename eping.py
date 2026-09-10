@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.42'
+VERSION = '2.50'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -98,7 +98,7 @@ WEB_VIEW_MODES = FILTER_MODES + [
 # toggles into one mutually-exclusive dropdown (see the 'addr_mode' web command).
 # 0/1/2 are non-destructive display filters (recomputed from original_hosts_list
 # each time); 3 renames hosts to their address in place (apply_ip_only_on/off).
-ADDR_MODE_LABELS = ['as provided', 'prefer hostname', 'prefer ip address', 'ip only']
+ADDR_MODE_LABELS = ['provided ip/name', 'prefer hostname', 'prefer ip address', 'ip only']
 
 # [O] cycles through these orders. A flapping host is also UP or DOWN right now, so the
 # FLAP group takes precedence over its current state; NO-DNS counts as DOWN. Inside the
@@ -1732,6 +1732,7 @@ web_state = {
     'hosts'            : 0,
     'hosts_up'         : 0,
     'hosts_down'       : 0,
+    'hosts_shown'      : 0,   # after the [M] display filter narrows the view
     'run_counter'      : 0,
     'run_time'         : '0.00',
     'logging'          : False,
@@ -1921,7 +1922,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
       <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
       <select id="selAddrMode" title="prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
-        <option value="0">AS PROVIDED</option>
+        <option value="0">PROVIDED IP/NAME</option>
         <option value="1">PREFER HOSTNAME</option>
         <option value="2">PREFER IP ADDRESS</option>
         <option value="3">SWITCH TO IP ONLY</option>
@@ -1974,6 +1975,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <span>RUNS: <b id="sRuns">0</b></span>
     <span class="u">HOSTS-UP: <b id="sUp">0</b></span>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
+    <span title="hosts matching the display filter, out of the totals above"
+          id="sShownWrap">HOSTS-SHOWN: <b id="sShown">0</b></span>
     <span id="sLog"></span>
     <span class="msg" id="msg"></span>
     <span id="scrollHint"></span>
@@ -2032,7 +2035,9 @@ var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', so
                reset_log:'resetting log ...',
                exit:'stopping eping ...'};
 var pending = false, lastMsgSeq = null;
-var pendingAddrMode = null;   // see selAddrMode onchange / poll() below
+var pendingAddrMode   = null;   // see selAddrMode onchange / poll() below
+var pendingFilterMode = null;   // same problem/fix as pendingAddrMode, for selFilter
+var pendingSortMode   = null;   // same problem/fix as pendingAddrMode, for sortSel
 
 function note(text, isPending){
   var m = document.getElementById('msg');
@@ -2045,7 +2050,13 @@ function post(cmd, value){
   return fetch('api/command', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({cmd:cmd, value:value||''})}).then(function(r){return r.json();});
 }
-document.getElementById('selFilter').onchange = function(){ post('set_filter', this.value); };
+document.getElementById('selFilter').onchange = function(){
+  var picked = this.value;
+  pendingFilterMode = picked;
+  // safety net: stop overriding the poll if the server never echoes this back
+  setTimeout(function(){ if(pendingFilterMode === picked) pendingFilterMode = null; }, 10000);
+  post('set_filter', picked);
+};
 document.getElementById('selAddrMode').onchange = function(){
   var picked = this.value;
   pendingAddrMode = picked;
@@ -2068,7 +2079,11 @@ document.getElementById('matchInput').addEventListener('keydown', function(e){
 });
 document.getElementById('sortSel').onchange = function(){
   sortKey = null;                       // server order wins again after a mode change
-  post('sort', this.value);
+  var picked = this.value;
+  pendingSortMode = picked;
+  // safety net: stop overriding the poll if the server never echoes this back
+  setTimeout(function(){ if(pendingSortMode === picked) pendingSortMode = null; }, 10000);
+  post('sort', picked);
 };
 var resetLogModal = document.getElementById('resetLogModal');
 var loggingOn = false;   // kept in sync from every status poll, see render()
@@ -2200,7 +2215,14 @@ document.addEventListener('keydown', function(e){
   if(isReadOnly) return;
   if(document.activeElement && document.activeElement.tagName === 'INPUT') return;
   switch(e.key.toLowerCase()){
-    case 'u': post('up_only'); break;   // cycle ALL/UP/UP+FLAP, dropdown stays in sync via render()
+    case 'u': {
+      var curFm = parseInt(document.getElementById('selFilter').value, 10) || 0;
+      var nextFm = (curFm < 3) ? (curFm + 1) % 3 : 0;   // mirrors FILTER_MODES cycling server-side
+      pendingFilterMode = String(nextFm);
+      setTimeout(function(){ if(pendingFilterMode === String(nextFm)) pendingFilterMode = null; }, 10000);
+      post('up_only');
+      break;   // dropdown stays in sync via poll(), pendingFilterMode guards against flicker
+    }
     case 'p': { var pv = (document.getElementById('selAddrMode').value === '1') ? '0' : '1';
                 pendingAddrMode = pv; post('addr_mode', pv); } break;
     case 'i': { var iv = (document.getElementById('selAddrMode').value === '3') ? '0' : '3';
@@ -2368,9 +2390,15 @@ window.addEventListener('resize', function(){
   clearTimeout(rz); rz = setTimeout(function(){ render(lastRows); }, 80); });
 
 /* ---------------- polling ---------------- */
+var pollSeq = 0, lastAppliedSeq = 0;
 function poll(){
   if(stopped) return;
+  var mySeq = ++pollSeq;
   fetch('api/status').then(function(r){return r.json();}).then(function(s){
+    // overlapping polls can resolve out of order - drop a response older than
+    // the newest one already applied, instead of letting it flash stale state
+    if(mySeq < lastAppliedSeq) return;
+    lastAppliedSeq = mySeq;
     document.getElementById('ver').textContent   = 'v'+s.version;
     if(s.readonly){
       document.getElementById('ctrlsMain').style.display = 'none';
@@ -2384,6 +2412,9 @@ function poll(){
     document.getElementById('sRuns').textContent    = s.run_counter;
     document.getElementById('sUp').textContent      = s.hosts_up;
     document.getElementById('sDown').textContent    = s.hosts_down;
+    var swrap = document.getElementById('sShownWrap');
+    swrap.style.display = s.match_filter ? '' : 'none';
+    document.getElementById('sShown').textContent   = s.hosts_shown;
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
@@ -2392,7 +2423,13 @@ function poll(){
     brl.title = loggingOn
       ? 'Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel'
       : 'start logging right away, no confirmation needed';
-    document.getElementById('selFilter').value = s.filter_mode;
+    var sf = document.getElementById('selFilter');
+    if(document.activeElement !== sf){
+      if(pendingFilterMode !== null && String(s.filter_mode) === String(pendingFilterMode)){
+        pendingFilterMode = null;
+      }
+      if(pendingFilterMode === null) sf.value = s.filter_mode;
+    }
     var sa = document.getElementById('selAddrMode');
     // two separate problems, two guards: (1) while the select is focused - which
     // stays true for as long as its native dropdown popup is open, in every
@@ -2419,8 +2456,13 @@ function poll(){
     var mi = document.getElementById('matchInput');
     if(document.activeElement !== mi) mi.value = s.match_filter || '';
     var ss = document.getElementById('sortSel');
-    if(document.activeElement !== ss) ss.value = String(s.sort_mode || 0);
-    ss.className = s.sort_mode ? 'on' : '';
+    if(document.activeElement !== ss){
+      if(pendingSortMode !== null && String(s.sort_mode || 0) === String(pendingSortMode)){
+        pendingSortMode = null;
+      }
+      if(pendingSortMode === null) ss.value = String(s.sort_mode || 0);
+      ss.className = s.sort_mode ? 'on' : '';
+    }
     // keep the local 'working ...' note until the server actually answers something new
     // msg_seq (not text) drives this: two commands in a row can produce the exact
     // same message text ("comment logged" twice) - comparing text alone would miss
@@ -2620,7 +2662,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
                 scan_info='', sort_mode=0, addr_mode=0,
-                match_filter='', original_hosts_list=None):
+                match_filter='', original_hosts_list=None, hosts_shown=None):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
     with web_lock:
@@ -2635,6 +2677,11 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'host_list_all'   : list(original_hosts_list) if original_hosts_list is not None else [],
             'hosts_up'        : hosts_up,
             'hosts_down'      : hosts_down,
+            # hosts actually visible with the [M] display filter applied - hosts_up/
+            # hosts_down above stay the totals for the whole current view regardless
+            # of that filter, so HOSTS/HOSTS-UP/HOSTS-DOWN don't collapse to whatever
+            # the filter matches; without a filter this just equals 'hosts'.
+            'hosts_shown'     : hosts_shown if hosts_shown is not None else len(rows),
             'run_counter'     : run_counter,
             'run_time'        : run_time,
             'logging'         : bool(logging_enabled),
@@ -2811,7 +2858,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     try:
                         match_filter_re   = re.compile(value, re.IGNORECASE)
                         match_filter_text = value
-                        message = 'match filter: on'
+                        message = 'display filter enabled'
                     except re.error as e:
                         message = 'match filter: invalid regex - ' + str(e)
             elif cmd == 'sort':
@@ -2939,9 +2986,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
             # letting the browser wait for the running round, same as the CLI does
             quick    = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
+            quick_up = sum(1 for e in quick if 'UP' in e[1])
+            quick_total = len(quick)
             if match_filter_re is not None:
                 quick = apply_match_filter(quick, match_filter_re)
-            quick_up = sum(1 for e in quick if 'UP' in e[1])
             with web_lock:
                 web_state['message']      = message
                 web_state['msg_seq']      = web_state.get('msg_seq', 0) + 1
@@ -2952,7 +3000,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['host_list_all']   = list(original_hosts_list)
                 web_state['hosts']        = len(quick)
                 web_state['hosts_up']     = quick_up
-                web_state['hosts_down']   = len(quick) - quick_up
+                web_state['hosts_down']   = quick_total - quick_up
+                web_state['hosts_shown']  = len(quick)
                 web_state['filter_mode']  = filter_mode
                 web_state['filter_label'] = WEB_VIEW_MODES[filter_mode][0]
                 web_state['addr_mode'] = addr_mode
@@ -3011,10 +3060,15 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         _t = time.time()
         display_list = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
-        if match_filter_re is not None:
-            display_list = apply_match_filter(display_list, match_filter_re)
+        # HOSTS/HOSTS-UP/HOSTS-DOWN are the totals for the whole current view - a
+        # [M] display filter narrows what's SHOWN, not what's actually being pinged,
+        # so it must not make these look like only 2 hosts exist. hosts_count_shown
+        # is the post-filter count, reported separately (HOSTS-SHOWN in the web GUI).
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
+        if match_filter_re is not None:
+            display_list = apply_match_filter(display_list, match_filter_re)
+        hosts_count_shown = len(display_list)
         phase['build'] = time.time() - _t
 
         # --- wait ---
@@ -3047,7 +3101,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available,
                     tz_offset, message, scan_info, sort_mode, addr_mode,
-                    match_filter_text, original_hosts_list)
+                    match_filter_text, original_hosts_list, hosts_shown=hosts_count_shown)
 
         run_counter += 1
 
@@ -3721,12 +3775,19 @@ if __name__=='__main__':
     def web_sync(msg=''):
         if not args.web_view:
             return
-        web_publish(display_list, run_counter, run_time, hosts_count_up, hosts_count_down,
+        # mirror the same fix as run_web_mode(): HOSTS-UP/DOWN in the web view should
+        # be the totals for the current view, not narrowed by the [M] display filter
+        # the way the curses screen's own hosts_count_up/down are (left untouched here).
+        total_list = build_display(active_hosts_list, host_state, sort_mode,
+                                   tz_offset, flap_window)
+        total_up   = sum(1 for e in total_list if 'UP' in e[1])
+        total_down = len(total_list) - total_up
+        web_publish(display_list, run_counter, run_time, total_up, total_down,
                     filter_mode, learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available_cli,
                     tz_offset, msg, used_scan, sort_mode,
                     (3 if ip_only_mode else (1 if prefer_hostname else 0)),
-                    match_filter_text, original_hosts_list)
+                    match_filter_text, original_hosts_list, hosts_shown=len(display_list))
 
 
     def rebuild_display():
