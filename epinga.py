@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.96'
+version = '1.98'
 
 import re
 import os
@@ -746,6 +746,9 @@ tr.hidden {{ display: none; }}
                    flex: 1; user-select: none; }}
 .bucket-chevron {{ color: var(--dim); transition: transform .2s; display: inline-block; }}
 .bucket.collapsed .bucket-chevron {{ transform: rotate(-90deg); }}
+.sort-btn {{ color: var(--dim); font-size: 11px; cursor: pointer; user-select: none;
+             letter-spacing: 0; }}
+.sort-btn:hover {{ color: var(--text); }}
 .bucket.collapsed .bucket-body {{ display: none; }}
 .bucket-actions {{ display: flex; align-items: center; gap: 10px; }}
 .dl-btn {{
@@ -1377,6 +1380,17 @@ function copyBucketList(list, btn) {{
 }}
 
 let BUCKET_LISTS = {{}};
+// per-bucket sort direction ('asc'/'desc'), keyed by suffix - survives re-renders
+// (showIp toggle, dedup change, collapse) since it lives outside renderBuckets().
+let BUCKET_SORT = {{}};
+function bucketSortDir(suffix) {{
+  return BUCKET_SORT[suffix] || (suffix === 'flap' ? 'desc' : 'asc');
+}}
+function toggleBucketSort(suffix, evt) {{
+  if (evt) evt.stopPropagation();   // don't also collapse the bucket
+  BUCKET_SORT[suffix] = bucketSortDir(suffix) === 'asc' ? 'desc' : 'asc';
+  renderBuckets();
+}}
 function downloadBucket(suffix) {{
   downloadBucketList(BUCKET_LISTS[suffix] || [], suffix);
 }}
@@ -1385,12 +1399,26 @@ function copyBucket(suffix, btn) {{
 }}
 
 function renderBuckets() {{
-  const pool  = RAW.hosts.filter(h => !isDeduped(h));
-  const up    = pool.filter(h => h.changes === 0 && h.state === 'UP');
-  const flap  = [...pool.filter(h => h.changes > 0)]
-                  .sort((a,b) => b.changes - a.changes);
-  const down  = pool.filter(h => h.changes === 0 && h.state === 'DOWN');
-  const nodns = pool.filter(h => h.changes === 0 && h.state === 'NO-DNS');
+  const pool = RAW.hosts.filter(h => !isDeduped(h));
+
+  // 'up'/'down'/'nodns' sort alphabetically by the currently shown label;
+  // 'flap' sorts by change count (most flappy first by default) - same criterion
+  // as before, just reversible now.
+  function byName(lst, suffix) {{
+    const dir = bucketSortDir(suffix);
+    const s   = [...lst].sort((a, b) => hostLabel(a).localeCompare(hostLabel(b)));
+    return dir === 'desc' ? s.reverse() : s;
+  }}
+  function byChanges(lst, suffix) {{
+    const dir = bucketSortDir(suffix);
+    const s   = [...lst].sort((a, b) => a.changes - b.changes);
+    return dir === 'desc' ? s.reverse() : s;
+  }}
+
+  const up    = byName(pool.filter(h => h.changes === 0 && h.state === 'UP'), 'up');
+  const flap  = byChanges(pool.filter(h => h.changes > 0), 'flap');
+  const down  = byName(pool.filter(h => h.changes === 0 && h.state === 'DOWN'), 'down');
+  const nodns = byName(pool.filter(h => h.changes === 0 && h.state === 'NO-DNS'), 'nodns');
 
   function tags(lst, cls, labelFn) {{
     if (!lst.length) return '<span style="color:var(--dim)">–</span>';
@@ -1420,6 +1448,8 @@ function renderBuckets() {{
       <h3>
         <span class="bucket-toggle" onclick="toggleBucket('${{b.suffix}}')">
           <span class="bucket-chevron">&#9662;</span><span>${{b.title}}</span>
+          <span class="sort-btn" onclick="toggleBucketSort('${{b.suffix}}', event)"
+                title="click to reverse sort order">${{bucketSortDir(b.suffix) === 'asc' ? '&#9650;' : '&#9660;'}}</span>
         </span>
         <span class="bucket-actions"><span>${{b.list.length}}</span>
         <button class="dl-btn" onclick="downloadBucket('${{b.suffix}}')"
