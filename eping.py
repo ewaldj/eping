@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.41'
+VERSION = '2.42'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -539,7 +539,14 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
                           host_state, up_seen, down_streak):
     """Rename one host list entry everywhere it is tracked - both host lists,
     host_state, up_seen, down_streak - preserving history/uptime. A rename, not a
-    delete+re-add. Shared by GET NAMES (IP -> hostname) and IP ONLY (hostname -> IP)."""
+    delete+re-add. Shared by GET NAMES (IP -> hostname) and IP ONLY (hostname -> IP).
+
+    If 'new' already has a host_state entry - e.g. an orphaned identity left behind
+    by SET REFERENCE dropping this host earlier, with the host then reappearing
+    under 'old' via a fresh scan before GET NAMES caught up - the two are merged:
+    live ping fields come from 'old' (the more recent observation), but the change
+    counter/timestamp (the actual monitoring history) is kept from whichever side
+    has more of it, instead of being silently reset to 0."""
     for lst in (original_hosts_list, active_hosts_list):
         for i, h in enumerate(lst):
             if h == old:
@@ -547,6 +554,10 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
     if old in host_state:
         entry    = host_state.pop(old)
         entry[0] = new
+        existing = host_state.get(new)
+        if existing and existing[5] >= entry[5]:
+            entry[5] = existing[5]   # changes
+            entry[6] = existing[6]   # change_ts
         host_state[new] = entry
     if old in up_seen:
         up_seen.discard(old)
@@ -1365,6 +1376,18 @@ def remove_hosts_from(targets, active_list, original_list, host_state):
     for h in tset:
         host_state.pop(h, None)
     return removed
+
+def prune_dropped_hosts(dropped, host_state, up_seen, down_streak):
+    """Purge host_state/up_seen/down_streak for hosts no longer in the reference
+    list. Used by SET REFERENCE, which narrows original_hosts_list/active_hosts_list
+    but - unlike CLEAR or DEL HOST - used to leave this state behind: a dropped host
+    then reappearing later (e.g. a rescan of the same IP-only source) got tracked
+    under a fresh identity while its real history sat orphaned in these dicts, which
+    is how logging ended up showing it as a brand-new host with no history."""
+    for h in dropped:
+        host_state.pop(h, None)
+        up_seen.discard(h)
+        down_streak.pop(h, None)
 
 def parse_host_input(value, stats=None):
     """Parse a user supplied string (IP, FQDN, CIDR or 'ip1-ip2') into a host list.
@@ -2839,6 +2862,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message += (', %d ignored (mask)' % len(up_stats['skipped']))
             elif cmd == 'set_ref':
                 # what is displayed right now becomes the new reference list
+                dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
+                prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
                 original_hosts_list[:] = list(active_hosts_list)
                 filter_mode = 0
                 message = 'reference set to the ' + str(len(active_hosts_list)) + ' host(s) shown'
@@ -2948,6 +2973,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 active_hosts_list = apply_addr_mode(active_hosts_list)
                 if args.set_reference:
                     # -setref: same as the 'set_ref' web command, once learning ends
+                    prune_dropped_hosts([h for h in original_hosts_list if h not in set(active_hosts_list)],
+                                        host_state, up_seen, down_streak)
                     original_hosts_list = list(active_hosts_list)
                 learning_phase = True
         else:
@@ -3983,6 +4010,8 @@ if __name__=='__main__':
                 cmd = 'ADD_COMMENT'
         if cmd == 'SET_REFERENCE':
             # the currently displayed host list becomes the new reference list
+            dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
+            prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
             original_hosts_list = list(active_hosts_list)
             filter_mode = 0            # active == reference, so no filter is active
             screen.clear()
@@ -4189,6 +4218,8 @@ if __name__=='__main__':
                                      if prefer_hostname else active_hosts_list)
                 if args.set_reference:
                     # -setref: same as pressing [S]/SET REFERENCE once learning ends
+                    prune_dropped_hosts([h for h in original_hosts_list if h not in set(active_hosts_list)],
+                                        host_state, up_seen, down_streak)
                     original_hosts_list = list(active_hosts_list)
                 screen.clear()
                 filter_mode = 1        # the learning phase leaves an UP-only view
