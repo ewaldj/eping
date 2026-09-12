@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.50'
+VERSION = '2.68'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -25,7 +25,7 @@ FPING_STDIN_THRESH = 5000     # feed targets via stdin above this count (avoids 
 # So the packet rate is the knob, and -i is derived from it and the process count.
 DEFAULT_RATE_PPS   = 1000     # aggregate ICMP packets per second over all fping processes
 MIN_RATE_PPS       = 10
-MAX_RATE_PPS       = 100000
+MAX_RATE_PPS       = 25000
 # One fping process per retry group - and no more. Every raw ICMP socket receives a
 # copy of every incoming ICMP packet and has to filter by id, so N concurrent fping
 # processes give each of them N times the receive load. Measured on a /20 with 4109
@@ -33,7 +33,19 @@ MAX_RATE_PPS       = 100000
 # 70% of the reachable hosts were lost as false DOWN. Extra processes buy nothing
 # either, because a scan round takes hosts/rate seconds no matter how it is split.
 PROCS_PER_GROUP    = 1        # fping processes per retry group (accuracy over speed)
-INTERVAL_MAX_MS    = 100      # upper bound for -i (fping accepts more, we stay sane)
+INTERVAL_MAX_MS    = 100      # upper bound for the auto-computed pacing interval (not -i itself, see -i validation)
+
+# --- -B/-t/-re/-i/-w hard bounds (CLI validation and ADV OPTIONS, both use these) ---
+BACKOFF_MIN        = 1.0      # fping -B exponential backoff factor; <1 would make retries faster, not slower
+BACKOFF_MAX        = 2.0
+TIMEOUT_MIN_MS     = 10       # fping -t initial per-target timeout
+TIMEOUT_MAX_MS     = 5000
+RETRIES_MAX        = 5        # fping -re retries per host
+INTERVAL_ARG_MAX   = 250      # -i upper bound; -1 = auto (unset, use --rate), 0 = no pacing
+WAITTIME_MAX       = 600      # -w upper bound (seconds)
+DOWN_SLICES_MAX    = 20
+FULL_SWEEP_MAX     = 50       # 0 = disabled (never sweep)
+DNS_TTL_MAX        = 3600
 DNS_CACHE_TTL      = 300      # seconds a resolved hostname stays valid (0 = no caching)
 DNS_FAIL_TTL       = 30       # negative cache: retry unresolvable names sooner
 DNS_RESOLVERS      = 16       # parallel name lookups
@@ -1245,6 +1257,14 @@ def screen_print_horizonta_line (message,color_pair,line):
         screen_output(line, 0, linestring,color_pair,1 )
 
 def sigint_handler(signal, frame):
+    # tell a --web_view browser mirror right away, BEFORE maybe_run_epinga() below
+    # can block on its "[y/N]" input() prompt for as long as the user takes to
+    # answer it - same notice the web GUI's own EXIT button already gives.
+    with web_lock:
+        web_state['stopped'] = True
+        web_state['message'] = 'stopped'
+    time.sleep(1.5)   # guarantee the browser's next poll sees it even if
+                       # maybe_run_epinga() below has nothing to prompt for
     screen=curses.initscr()
     curses.endwin()
     print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
@@ -1820,6 +1840,23 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box p{margin:0 0 14px;color:var(--dim);font-size:12px;line-height:1.5}
   .modal-buttons{display:flex;gap:8px;flex-wrap:wrap}
   .modal-buttons button{flex:1 1 auto;white-space:nowrap}
+  .modal-box.wide{width:640px;max-width:92vw;max-height:82vh;overflow-y:auto}
+  .adv-row{display:flex;flex-direction:column;gap:3px;margin:0 0 12px}
+  .adv-row label{font-size:11px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
+  .adv-row label .adv-desc{color:var(--dim);font-weight:400;letter-spacing:normal}
+  .adv-row .adv-input-line{display:flex;align-items:center;gap:6px}
+  .adv-row input[type=range]{flex:1 1 auto;width:100%;min-width:0}
+  .adv-row button.advStep{flex:0 0 auto;width:22px;height:22px;padding:0;line-height:1;font-size:13px}
+  /* overrides the global input[type=text]{min-width:200px} - that floor was
+     keeping this box wide no matter what width the inline style asked for.
+     Fixed width (not per-row) so every box lines up - 7ch fits the widest
+     value in play, '72000'/'25000', with a space either side. Extra left
+     margin separates it from the + button instead of crowding it. */
+  .adv-row input.advText{flex:0 0 auto;width:7ch;min-width:0;margin-left:6px;
+                         font-size:12px;padding:2px 4px;text-align:center}
+  /* flashed briefly when the server rejects a value - see advCheckApplied() */
+  .adv-row.adv-rejected input.advText{border-color:var(--down);color:var(--down);
+                                      transition:border-color .1s,color .1s}
 
   /* ---- CLI style column grid ---- */
   #ctrls{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
@@ -1867,6 +1904,27 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <button id="modalBtnClearLog" class="danger">CLEAR LOGGING (Y)</button>
         <button id="modalBtnNewLog">NEW FILE (N)</button>
         <button id="modalBtnCancelLog">CANCEL (ESC)</button>
+      </div>
+    </div>
+  </div>
+  <div id="stoppedModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <h3 style="color:var(--down)">EPING.PY STOPPED</h3>
+      <p id="stoppedMsg">The process is no longer running.</p>
+      <div class="modal-buttons">
+        <button id="modalBtnReload">RELOAD PAGE</button>
+        <button id="modalBtnCloseStopped">CLOSE</button>
+      </div>
+    </div>
+  </div>
+  <div id="advOptionsModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>ADV OPTIONS</h3>
+      <p>Runtime settings for timers, fping and timezone.</p>
+      <div id="advOptionsRows"></div>
+      <div class="modal-buttons">
+        <button id="modalBtnAdvReset" class="danger">RESET TO DEFAULT</button>
+        <button id="modalBtnAdvClose">CLOSE</button>
       </div>
     </div>
   </div>
@@ -1928,6 +1986,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="3">SWITCH TO IP ONLY</option>
       </select>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
+      <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
       <select id="selDownload" title="download the full reference list, only the currently shown hosts, or the active logfile">
         <option value="" selected>DOWNLOAD</option>
@@ -2033,11 +2092,14 @@ var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', so
                match_filter:'applying filter ...',
                add_comment:'logging comment ...',
                reset_log:'resetting log ...',
+               set_option:'applying option ...',
+               reset_options:'resetting options ...',
                exit:'stopping eping ...'};
 var pending = false, lastMsgSeq = null;
 var pendingAddrMode   = null;   // see selAddrMode onchange / poll() below
 var pendingFilterMode = null;   // same problem/fix as pendingAddrMode, for selFilter
 var pendingSortMode   = null;   // same problem/fix as pendingAddrMode, for sortSel
+var lastOptions       = {};    // ADV OPTIONS - latest snapshot from the server, see poll()
 
 function note(text, isPending){
   var m = document.getElementById('msg');
@@ -2046,7 +2108,11 @@ function note(text, isPending){
   pending       = !!isPending;
 }
 function post(cmd, value){
-  note(PENDING[cmd] || 'working ...', true);   // instant feedback, no waiting
+  // ADV OPTIONS deliberately never touches the footer - feedback is inline in
+  // the modal itself (revert + flash on rejection, see advCheckApplied())
+  if(cmd !== 'set_option' && cmd !== 'reset_options'){
+    note(PENDING[cmd] || 'working ...', true);   // instant feedback, no waiting
+  }
   return fetch('api/command', {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({cmd:cmd, value:value||''})}).then(function(r){return r.json();});
 }
@@ -2067,6 +2133,13 @@ document.getElementById('selAddrMode').onchange = function(){
   post('addr_mode', picked);
 };
 document.getElementById('btnGetNames').onclick = function(){ post('get_names'); };
+document.getElementById('btnAdvOptions').onclick = openAdvOptions;
+document.getElementById('modalBtnAdvClose').onclick = closeAdvOptions;
+document.getElementById('modalBtnAdvReset').onclick = function(){
+  post('reset_options', '').then(function(){
+    setTimeout(function(){ populateAdvOptions(lastOptions); }, 1200);
+  });
+};
 document.getElementById('btnMatchFilter').onclick = function(){
   post('match_filter', document.getElementById('matchInput').value.trim());
 };
@@ -2090,6 +2163,174 @@ var loggingOn = false;   // kept in sync from every status poll, see render()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
 function openResetLog(){ resetLogModal.style.display = 'flex'; }
 function closeResetLog(){ resetLogModal.style.display = 'none'; }
+
+// key, label, unit, sliderMin, sliderMax, step, longDesc (full mouseover tooltip),
+// shortDesc (few words, shown inline next to the label).
+// Same order and same hard bounds as ADV_OPTIONS server-side (BACKOFF_MIN etc.) -
+// one set of limits, enforced on both ends; apply_adv_option() re-validates every
+// value anyway, this is just what the slider itself can be dragged to.
+// The (unit) shown after the label always names the unit, never a sentinel note
+// (0=off, -1=auto etc.) - those live in longDesc/shortDesc instead.
+var ADV_OPTIONS_UI = [
+  ['backoff',        'BACKOFF',        '×',    1,   2,    0.1,
+    'Exponential backoff factor: fping multiplies TIMEOUT by this after every failed retry, so the wait time grows the longer a host stays unreachable',
+    'retry timeout multiplier'],
+  ['timeout',        'TIMEOUT',        'ms',  10,  5000, 10,
+    'Initial per-target timeout: how long fping waits for a reply to the first probe before retrying',
+    'initial per-host timeout'],
+  ['retries',        'RETRIES',        'tries', 0,   5,    1,
+    'Number of retries per host before it is reported DOWN (hosts already confirmed DOWN use DOWN RETRIES instead)',
+    'retries before DOWN'],
+  ['down_retries',   'DOWN RETRIES',   'tries', 0,   5,    1,
+    'Retries for hosts already known to be DOWN - fewer retries here shortens the round since DOWN hosts dominate its length. 0 = disabled, every host gets the full RETRIES budget',
+    'retries once already DOWN'],
+  ['interval',       'INTERVAL',       'ms',  -1,  250,  1,
+    'Fixed interval between individual pings in ms, overrides RATE. -1 = auto (unset, use RATE instead). 0 = no pacing at all, needs the privileges fping was installed with',
+    'fixed ping spacing'],
+  ['num_of_threads', 'THREADS',        'procs', 0,   32,   1,
+    'fping processes run in parallel per retry group. 0 = auto (one process). Higher values finish a round faster but cost measurement accuracy - see the README',
+    'fping processes per group'],
+  ['waittime',       'WAIT TIME',      's',   0,   600,  0.5,
+    'Pause between the end of one ping round and the start of the next',
+    'pause between rounds'],
+  ['confirm',        'CONFIRM',        'obs', 1,   10,   1,
+    'Consecutive DOWN observations required before a host leaves the UP state. 1 = report every single observation, higher values damp flapping at the cost of slower DOWN detection',
+    'DOWN confirmations needed'],
+  ['rate_pps',       'RATE',           'pps', 10,  25000,10,
+    'Target aggregate ICMP packets per second across all fping processes combined',
+    'packets per second'],
+  ['flap_window',    'FLAP WINDOW',    'min', 1,   72000,10,
+    'Minutes since a host\'s last state change for it to still count as flapping',
+    'flapping detection window'],
+  ['down_slices',    'DOWN SLICES',    'rounds', 1,   20,   1,
+    'Spreads known-DOWN hosts over N rounds instead of probing all of them every round, shortening the cycle for UP hosts. 1 = probe every DOWN host every round',
+    'DOWN hosts spread over N rounds'],
+  ['full_sweep',     'FULL SWEEP',     'rounds', 0,   50,   1,
+    'Every Nth round probes every host with the full retry budget, ignoring DOWN RETRIES/DOWN SLICES for that round. 0 = disabled, never',
+    'full-retry sweep interval'],
+  ['dns_ttl',        'DNS TTL',        's',   0,   3600, 10,
+    'Seconds a resolved hostname stays cached before being looked up again. 0 = let fping resolve it fresh every round',
+    'hostname cache lifetime'],
+  ['tz_offset',      'TIMEZONE',       'h',   -24, 24,   1,
+    'Hour offset applied to every timestamp shown in the web gui and written to the CSV log',
+    'timestamp offset']
+];
+var advOptionsModal = document.getElementById('advOptionsModal');
+var advRowsBuilt     = false;
+
+// ADV OPTIONS has no footer feedback (see post()) - this is the whole feedback
+// path instead: after a value is posted, wait for it to round-trip through a
+// poll (lastOptions, updated in poll() below), then check whether the server
+// actually took it. A rejected/out-of-range value leaves the server's value
+// unchanged, so a mismatch here means 'rejected' - revert the field to what the
+// server actually has and flash it red briefly, no text needed.
+function advCheckApplied(row, sl, tx, key, sentVal){
+  setTimeout(function(){
+    var actual = lastOptions[key];
+    if(actual === undefined) return;
+    var a = parseFloat(actual), e = parseFloat(sentVal);
+    var same = (!isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(sentVal));
+    if(same) return;
+    if(sl && !isNaN(a)) sl.value = actual;
+    if(tx) tx.value = actual;
+    row.classList.add('adv-rejected');
+    setTimeout(function(){ row.classList.remove('adv-rejected'); }, 1600);
+  }, 1300);
+}
+function buildAdvRows(){
+  if(advRowsBuilt) return;
+  var c = document.getElementById('advOptionsRows');
+  ADV_OPTIONS_UI.forEach(function(o){
+    var key = o[0], label = o[1], unit = o[2], lo = o[3], hi = o[4], step = o[5];
+    var desc = o[6] || '', shortDesc = o[7] || '';
+    var row = document.createElement('div');
+    row.className = 'adv-row';
+    row.title = desc;
+    // textbox width is fixed (same for every row) via .adv-row input.advText -
+    // see that CSS rule for why. Label line: 'NAME (unit) | short description',
+    // full description is the mouseover tooltip on the whole row
+    row.innerHTML = '<label title="' + esc(desc) + '">' + esc(label)
+      + (unit ? ' (' + esc(unit) + ')' : '')
+      + (shortDesc ? ' <span class="adv-desc">| ' + esc(shortDesc) + '</span>' : '')
+      + '</label>'
+      + '<div class="adv-input-line">'
+      + '<button type="button" class="advStep advMinus" data-key="' + key + '" title="decrease">&minus;</button>'
+      + '<input type="range" class="advSlider" data-key="' + key + '" min="' + lo + '" max="' + hi + '" step="' + step + '" title="' + esc(desc) + '">'
+      + '<button type="button" class="advStep advPlus" data-key="' + key + '" title="increase">+</button>'
+      + '<input type="text" class="advText" data-key="' + key + '" inputmode="decimal" title="' + esc(desc) + '">'
+      + '</div>';
+    c.appendChild(row);
+    var sl = row.querySelector('.advSlider');
+    var tx = row.querySelector('.advText');
+    var mi = row.querySelector('.advMinus');
+    var pl = row.querySelector('.advPlus');
+    function sendOption(val){
+      post('set_option', key + '=' + val);
+      advCheckApplied(row, sl, tx, key, val);
+    }
+    sl.addEventListener('input',  function(){ tx.value = sl.value; });
+    sl.addEventListener('change', function(){ sendOption(sl.value); });
+    function commitText(){
+      var v = parseFloat(tx.value.trim());
+      if(isNaN(v)) v = lo;
+      if(v < lo) v = lo;
+      if(v > hi) v = hi;
+      v = Math.round(v * 1000) / 1000;   // avoid float drift (0.1 steps)
+      sl.value = v; tx.value = v;
+      sendOption(v);
+    }
+    tx.addEventListener('change', commitText);
+    tx.addEventListener('keydown', function(e){ if(e.key === 'Enter') tx.blur(); });
+    function step_by(dir){
+      var cur = parseFloat(sl.value);
+      if(isNaN(cur)) cur = lo;
+      var next = Math.round((cur + dir * step) * 1000) / 1000;   // avoid float drift (0.1 steps)
+      if(next < lo) next = lo;
+      if(next > hi) next = hi;
+      sl.value = next; tx.value = next;
+      sendOption(next);
+    }
+    mi.addEventListener('click', function(){ step_by(-1); });
+    pl.addEventListener('click', function(){ step_by(1); });
+  });
+  advRowsBuilt = true;
+}
+function populateAdvOptions(opts){
+  ADV_OPTIONS_UI.forEach(function(o){
+    var key = o[0], val = opts[key];
+    if(val === undefined) return;
+    var sl = document.querySelector('#advOptionsRows .advSlider[data-key="' + key + '"]');
+    var tx = document.querySelector('#advOptionsRows .advText[data-key="' + key + '"]');
+    if(tx) tx.value = val;
+    // a range input silently ignores a non-numeric .value assignment (stays
+    // wherever it was) - guard against that instead of a mismatched thumb
+    if(sl && val !== '' && !isNaN(parseFloat(val))) sl.value = val;
+  });
+}
+function openAdvOptions(){
+  buildAdvRows();
+  populateAdvOptions(lastOptions);
+  advOptionsModal.style.display = 'flex';
+}
+function closeAdvOptions(){ advOptionsModal.style.display = 'none'; }
+
+var stoppedModal    = document.getElementById('stoppedModal');
+var stoppedMsg       = document.getElementById('stoppedMsg');
+var stoppedDismissed = false;   // user closed it - don't keep popping it back up
+function openStoppedModal(text){
+  if(stoppedDismissed) return;
+  stoppedMsg.textContent = text;
+  stoppedModal.style.display = 'flex';
+}
+document.getElementById('modalBtnReload').onclick = function(){ location.reload(); };
+document.getElementById('modalBtnCloseStopped').onclick = function(){
+  // browsers only allow script to close a tab it opened itself (window.open()) -
+  // a normally navigated-to tab silently ignores window.close(), with no way to
+  // detect that it was ignored, so this is a best-effort attempt, not a guarantee.
+  window.close();
+  stoppedDismissed = true;
+  stoppedModal.style.display = 'none';
+};
 document.getElementById('btnResetLog').onclick = function(){
   if(loggingOn){ openResetLog(); }
   else{ post('reset_log'); }   // logging is off - start it right away, no confirmation
@@ -2415,6 +2656,7 @@ function poll(){
     var swrap = document.getElementById('sShownWrap');
     swrap.style.display = s.match_filter ? '' : 'none';
     document.getElementById('sShown').textContent   = s.hosts_shown;
+    lastOptions = s.options || {};
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
@@ -2485,12 +2727,17 @@ function poll(){
     if(s.run_counter > 0) firstRunDone = true;
     render(s.rows);
 
+    document.body.classList.remove('off');   // reachable again - undo a previous catch()
     if(s.stopped){ stopped = true;
-      setFoot('eping.py stopped - THX for using eping.py');
       document.body.classList.add('off');
+      openStoppedModal('eping.py stopped - THX for using eping.py');
     }
   }).catch(function(){
-    setFoot('no connection to eping.py ...');
+    // covers every way the process can go away without telling us first (kill -9,
+    // a crash, the terminal closing) - the graceful exits (Ctrl+C, [E], EXIT button)
+    // already set s.stopped above before the socket disappears, this is the backstop
+    document.body.classList.add('off');
+    openStoppedModal('eping.py is not reachable - the process stopped or the connection was lost.');
   });
 }
 
@@ -2612,7 +2859,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log'):
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         with web_lock:
@@ -2662,7 +2909,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
                 scan_info='', sort_mode=0, addr_mode=0,
-                match_filter='', original_hosts_list=None, hosts_shown=None):
+                match_filter='', original_hosts_list=None, hosts_shown=None, options=None):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
     with web_lock:
@@ -2697,7 +2944,127 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'message'         : message,
             'scan_info'       : scan_info,
             'match_filter'    : match_filter,
+            'options'         : options if options is not None else web_state.get('options', {}),
         })
+
+
+# --- ADV OPTIONS: runtime-adjustable timer/fping settings (web gui only) ---
+# (key, kind, lo, hi, step, unit, auto_sentinel) - order matches the web gui modal.
+# These are the SAME hard bounds the CLI parser validates (see BACKOFF_MIN etc. and
+# the -B/-t/-re/-i/-p/-w/... validation block) - one set of limits, enforced twice.
+# auto_sentinel: the value the slider/textbox sends for "auto"/"disabled"/"unset" -
+# translated to the field's real off-value (''/'auto'/None) in apply_adv_option().
+ADV_OPTIONS = [
+    ('backoff',         'float', BACKOFF_MIN, BACKOFF_MAX,       0.1, '',    None),
+    ('timeout',         'int',   TIMEOUT_MIN_MS, TIMEOUT_MAX_MS, 10,  'ms',  None),
+    ('retries',         'int',   0,   RETRIES_MAX,               1,   '',    None),
+    ('down_retries',    'int',   0,   RETRIES_MAX,               1,   '',    0),    # 0 = disabled
+    ('interval',        'int',   -1,  INTERVAL_ARG_MAX,          1,   'ms',  -1),   # -1 = auto (unset, use --rate)
+    ('num_of_threads',  'int',   0,   THREADS_MANUAL_MAX,        1,   '',    0),    # 0 = auto
+    ('waittime',        'float', 0,   WAITTIME_MAX,              0.1, 's',   None),
+    ('confirm',         'int',   1,   10,                        1,   '',    None),
+    ('rate_pps',        'int',   MIN_RATE_PPS, MAX_RATE_PPS,     10,  'pps', None),
+    ('flap_window',     'int',   1,   FLAP_WINDOW_MAX,           10,  'min', None),
+    ('down_slices',     'int',   1,   DOWN_SLICES_MAX,           1,   '',    None),
+    ('full_sweep',      'int',   0,   FULL_SWEEP_MAX,            1,   '',    None),  # 0 = disabled
+    ('dns_ttl',         'int',   0,   DNS_TTL_MAX,               10,  's',   None),
+    ('tz_offset',       'int',   -24, 24,                        1,   'h',   None),
+]
+ADV_OPTION_KEYS = set(o[0] for o in ADV_OPTIONS)
+
+# keys kept as local variables inside run_web_mode() (not read from args each
+# round) - the caller applies the returned value itself, see run_web_mode()
+ADV_OPTION_LOCAL_KEYS = set(['down_retries', 'flap_window', 'confirm',
+                             'down_slices', 'full_sweep', 'tz_offset'])
+
+
+def apply_adv_option(key, raw, args):
+    """Validate one ADV OPTIONS change and apply it where possible.
+
+    args-backed keys (waittime/interval/rate_pps/num_of_threads/dns_ttl) are
+    written straight into args, since run_web_mode() re-reads args.X live each
+    round. backoff/timeout/retries are true module globals (see build_fping_cmd()).
+    The ADV_OPTION_LOCAL_KEYS are local variables in run_web_mode() - this
+    function only validates/parses them, the caller assigns the returned value.
+
+    Returns (ok, value, message).
+    """
+    global backoff, timeout, retries
+    spec = next((o for o in ADV_OPTIONS if o[0] == key), None)
+    if spec is None:
+        return False, None, 'unknown option: ' + str(key)
+    _, kind, lo, hi, _step, _unit, auto_sentinel = spec
+    raw = str(raw).strip()
+    try:
+        if key == 'num_of_threads' and raw.lower() == 'auto':
+            val = 'auto'
+        elif key == 'interval' and raw == '':
+            val = ''
+        else:
+            num = float(raw) if kind == 'float' else int(raw)
+            if auto_sentinel is not None and num == auto_sentinel:
+                # 'auto'/'off' sentinel, per field: interval (-1) -> '' (unset,
+                # use --rate), num_of_threads (0) -> 'auto', down_retries (0) -> None
+                if key == 'interval':
+                    val = ''
+                elif key == 'num_of_threads':
+                    val = 'auto'
+                else:
+                    val = None
+            elif num < lo or num > hi:
+                return False, None, key + ': must be between ' + str(lo) + ' and ' + str(hi)
+            else:
+                val = round(num, 2) if kind == 'float' else int(num)
+    except ValueError:
+        return False, None, key + ': invalid value'
+
+    if key == 'down_retries' and val is not None and val > int(retries):
+        return False, None, 'down_retries must not be larger than retries (' + str(retries) + ')'
+
+    if key == 'waittime':
+        args.waittime = str(val)
+    elif key == 'interval':
+        args.interval = '' if val in ('', None) else str(int(val))
+    elif key == 'rate_pps':
+        args.rate_pps = str(int(val))
+    elif key == 'num_of_threads':
+        args.num_of_threads = 'auto' if val == 'auto' else str(int(val))
+    elif key == 'dns_ttl':
+        args.dns_ttl = str(int(val))
+    elif key == 'retries':
+        retries = str(int(val))
+    elif key == 'backoff':
+        backoff = str(val)
+    elif key == 'timeout':
+        timeout = str(int(val))
+    # else: ADV_OPTION_LOCAL_KEYS - caller applies 'val' to its own local var
+    return True, val, key + ' set to ' + str(val)
+
+
+def adv_option_values(args, down_retries, flap_window, confirm, down_slices,
+                      full_sweep, tz_offset):
+    """Snapshot of all ADV OPTIONS current values, as raw strings the client/
+    apply_adv_option() round-trip understands. Used for the web gui's options
+    modal and for the -reset to default- snapshot taken at run_web_mode() start."""
+    return {
+        'waittime':       args.waittime,
+        'interval':       args.interval if args.interval != '' else '-1',
+        'rate_pps':       args.rate_pps,
+        # 0, not the word 'auto' - a <input type=range> silently ignores a
+        # non-numeric .value assignment (stays wherever it was); down_retries
+        # is int-backed already so it never hits this problem
+        'num_of_threads': '0' if args.num_of_threads == 'auto' else str(args.num_of_threads),
+        'dns_ttl':        args.dns_ttl,
+        'down_retries':   str(down_retries) if down_retries is not None else '0',
+        'flap_window':    str(flap_window),
+        'confirm':        str(confirm),
+        'down_slices':    str(down_slices),
+        'full_sweep':     str(full_sweep),
+        'tz_offset':      str(tz_offset),
+        'backoff':        str(backoff),
+        'timeout':        str(timeout),
+        'retries':        str(retries),
+    }
 
 
 def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
@@ -2705,6 +3072,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                  confirm=1, down_slices=1, flap_window=FLAP_WINDOW_DEF):
     """Headless main loop - same logic as the CLI loop, output goes to the web gui."""
     global _logfile_file_name   # kept in sync with logfile_file_name - see _web_sigint()
+    global backoff, timeout, retries   # ADV OPTIONS - mutated by apply_adv_option()
     bind_addr = args.web_bind
     port      = int(args.web_port)
     start_web_server(bind_addr, port)
@@ -2723,6 +3091,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         web_state['wait_time'] = float(args.waittime)
 
     tz_offset         = int(args.time_zone_adjust)
+    # ADV OPTIONS: snapshot of every startup value, for RESET TO DEFAULT
+    start_option_values = adv_option_values(args, down_retries, flap_window,
+                                            confirm, down_slices, full_sweep, tz_offset)
     active_hosts_list = list(original_hosts_list)
     filter_mode       = 0
     # web gui only: one mutually-exclusive address mode replaces the separate
@@ -2957,6 +3328,42 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message = 'failed to create new logfile'
                     else:
                         message = 'reset cancelled'
+            elif cmd == 'set_option':
+                # ADV OPTIONS feedback is inline in the modal (revert + flash on
+                # rejection, see advCheckApplied() client-side), not the footer -
+                # 'message'/msg_seq deliberately untouched here, see reset_options
+                key, _, raw = str(value).partition('=')
+                ok, val, _opt_msg = apply_adv_option(key, raw, args)
+                if ok and key in ADV_OPTION_LOCAL_KEYS:
+                    if key == 'down_retries':
+                        down_retries = val
+                    elif key == 'flap_window':
+                        flap_window = val
+                    elif key == 'confirm':
+                        confirm = val
+                    elif key == 'down_slices':
+                        down_slices = val
+                    elif key == 'full_sweep':
+                        full_sweep = val
+                    elif key == 'tz_offset':
+                        tz_offset = val
+            elif cmd == 'reset_options':
+                # same as set_option above: no footer message on purpose
+                for _key, _raw in start_option_values.items():
+                    _ok, _val, _ = apply_adv_option(_key, _raw, args)
+                    if _ok and _key in ADV_OPTION_LOCAL_KEYS:
+                        if _key == 'down_retries':
+                            down_retries = _val
+                        elif _key == 'flap_window':
+                            flap_window = _val
+                        elif _key == 'confirm':
+                            confirm = _val
+                        elif _key == 'down_slices':
+                            down_slices = _val
+                        elif _key == 'full_sweep':
+                            full_sweep = _val
+                        elif _key == 'tz_offset':
+                            tz_offset = _val
             elif cmd == 'clear':
                 active_hosts_list   = []
                 original_hosts_list[:] = []
@@ -3010,6 +3417,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # logging state can flip live (START LOG) - keep the quick path in sync too
                 web_state['logging']      = bool(args.disable_logging)
                 web_state['logfile']      = logfile_file_name if args.disable_logging else ''
+                web_state['options']      = adv_option_values(args, down_retries, flap_window,
+                                                              confirm, down_slices, full_sweep, tz_offset)
 
         # --- learning phase ---
         if not learning_done:
@@ -3101,7 +3510,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available,
                     tz_offset, message, scan_info, sort_mode, addr_mode,
-                    match_filter_text, original_hosts_list, hosts_shown=hosts_count_shown)
+                    match_filter_text, original_hosts_list, hosts_shown=hosts_count_shown,
+                    options=adv_option_values(args, down_retries, flap_window, confirm,
+                                              down_slices, full_sweep, tz_offset))
 
         run_counter += 1
 
@@ -3128,33 +3539,33 @@ if __name__=='__main__':
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
-    parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5)" )
-    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms)") 
-    parser.add_argument('-re', '--retries', default='3', dest='retries', help="number of retries per host (default: 3)")
-    parser.add_argument('-i', '--interval', default='', dest='interval', help="interval between sending pings in ms; overrides --rate. 0 = no pacing at all (fastest, needs the privileges fping was installed with, sends one hard burst)")
+    parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5, range: 1-2)" )
+    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms, range: 10-5000)") 
+    parser.add_argument('-re', '--retries', default='3', dest='retries', help="number of retries per host (default: 3, range: 0-5)")
+    parser.add_argument('-i', '--interval', default='', dest='interval', help="interval between sending pings in ms, range 0-250; overrides --rate. -1 = auto (unset, same as omitting this flag). 0 = no pacing at all (fastest, needs the privileges fping was installed with, sends one hard burst)")
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-setref', '--set_reference', action="store_true", dest='set_reference', help="with -up: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing [S]/SET REFERENCE)" )
-    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="fping processes per retry group (default: auto = " + str(PROCS_PER_GROUP) + "; higher values cost accuracy)" )
+    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="fping processes per retry group, range 0-" + str(THREADS_MANUAL_MAX) + " (default: auto = " + str(PROCS_PER_GROUP) + "; 0 is an alias for auto; higher values cost accuracy)" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
-    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time" )   
+    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time between rounds in seconds, range 0-" + str(WAITTIME_MAX) )   
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
-    parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
-    parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
+    parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
+    parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
     family_group = parser.add_mutually_exclusive_group()
     family_group.add_argument('-4', '--force_ipv4', action="store_true", dest='force_ipv4', help="prefer IPv4 (A records); falls back to IPv6 if a name has no A record (default preference)")
     family_group.add_argument('-6', '--force_ipv6', action="store_true", dest='force_ipv6', help="prefer IPv6 (AAAA records); falls back to IPv4 if a name has no AAAA record")
     parser.add_argument('-ph', '--prefer_hostname', action="store_true", dest='prefer_hostname', help="start with PREFER HOSTNAMES active - skip a raw IP host when the same address is already covered by a hostname entry (toggle later with [P] / the web button)")
     parser.add_argument('-ipo', '--ip_only', action="store_true", dest='ip_only', help="start with IP ONLY active - resolve every hostname to its address (v4 or v6, whichever resolves - not distinguished) and ping/track it by IP instead of by name (toggle later with [I] / the web button)")
     parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
-    parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN (default: " + str(DOWN_RETRIES_DEF) + ", -1 = treat them like every other host)")
+    parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN, range 0-" + str(RETRIES_MAX) + " (default: " + str(DOWN_RETRIES_DEF) + ", 0 = disabled - treat them like every other host)")
     parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per retry group plus dns/state/build/wait/draw")
     parser.add_argument('-fw', '--flap_window', default=str(FLAP_WINDOW_DEF), dest='flap_window', help="minutes since the last state change for a host to count as flapping (default: " + str(FLAP_WINDOW_DEF) + " = 50 days, max)")
     parser.add_argument('-cf', '--confirm', default=str(CONFIRM_DEF), dest='confirm', help="consecutive DOWN observations before a host leaves UP (default: " + str(CONFIRM_DEF) + ", 1 = report every single observation)")
-    parser.add_argument('-ds', '--down_slices', default=str(DOWN_SLICES_DEF), dest='down_slices', help="spread the known DOWN hosts over N rounds (default: " + str(DOWN_SLICES_DEF) + ", 1 = probe all of them every round)")
-    parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries (default: " + str(FULL_SWEEP_DEF) + ", 0 = never)")
+    parser.add_argument('-ds', '--down_slices', default=str(DOWN_SLICES_DEF), dest='down_slices', help="spread the known DOWN hosts over N rounds, range 1-" + str(DOWN_SLICES_MAX) + " (default: " + str(DOWN_SLICES_DEF) + ", 1 = probe all of them every round)")
+    parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries, range 0-" + str(FULL_SWEEP_MAX) + " (default: " + str(FULL_SWEEP_DEF) + ", 0 = disabled/never)")
     parser.add_argument('-ncs', '--no_check_source', action="store_true", dest='no_check_source', help="do not pass --check-source to fping (only needed for hosts replying from a different address)")
     parser.add_argument('-web', '--web', action="store_true", dest='web', help="start the web gui instead of the terminal (CLI) output")
     parser.add_argument('-wv', '--web_view', action="store_true", dest='web_view', help="CLI mode plus a read-only web view on --port (browser shows the same data, no controls)")
@@ -3237,41 +3648,65 @@ if __name__=='__main__':
     except ValueError:
             error_handler("ERROR: -tz: must be between -24 and 24")
 
-    # -p: fping processes per retry group, 'auto' = PROCS_PER_GROUP
-    if args.num_of_threads == 'auto':
+    # -B: fping exponential backoff factor
+    try:
+        bo = float(args.backoff)
+        if bo < BACKOFF_MIN or bo > BACKOFF_MAX:
+            error_handler("ERROR: -B: must be between " + str(BACKOFF_MIN) + " and " + str(BACKOFF_MAX))
+    except ValueError:
+        error_handler("ERROR: -B: must be between " + str(BACKOFF_MIN) + " and " + str(BACKOFF_MAX))
+
+    # -t: fping initial per-target timeout (ms)
+    try:
+        to = int(args.timeout)
+        if to < TIMEOUT_MIN_MS or to > TIMEOUT_MAX_MS:
+            error_handler("ERROR: -t: must be between " + str(TIMEOUT_MIN_MS) + " and " + str(TIMEOUT_MAX_MS) + " (ms)")
+    except ValueError:
+        error_handler("ERROR: -t: must be between " + str(TIMEOUT_MIN_MS) + " and " + str(TIMEOUT_MAX_MS) + " (ms)")
+
+    # -re: retries per host
+    try:
+        r = int(args.retries)
+        if r < 0 or r > RETRIES_MAX:
+            error_handler("ERROR: -re: must be between 0 and " + str(RETRIES_MAX))
+    except ValueError:
+        error_handler("ERROR: -re: must be between 0 and " + str(RETRIES_MAX))
+
+    # -p: fping processes per retry group. 0 is an alias for 'auto' (PROCS_PER_GROUP),
+    # same sentinel convention as ADV OPTIONS' THREADS slider
+    if args.num_of_threads in ('auto', '0'):
+        args.num_of_threads = 'auto'
         _threads_auto = True
     else:
         _threads_auto = False
         try:
             threads = int(args.num_of_threads)
             if threads < 1 or threads > THREADS_MANUAL_MAX:
-                error_handler("ERROR: -p: must be between 1 and " + str(THREADS_MANUAL_MAX))
+                error_handler("ERROR: -p: must be between 0 (auto) and " + str(THREADS_MANUAL_MAX))
         except ValueError:
-                error_handler("ERROR: -p: must be between 1 and " + str(THREADS_MANUAL_MAX))
-    # waittime 
+                error_handler("ERROR: -p: must be between 0 (auto) and " + str(THREADS_MANUAL_MAX))
+
+    # -w: wait time between rounds (seconds)
     try:
         wait_time = float(args.waittime)
-        if wait_time < 0 or wait_time > 3600:
-            error_handler("ERROR: -w must be between 0 and 3600 e.g 0.2 ")
+        if wait_time < 0 or wait_time > WAITTIME_MAX:
+            error_handler("ERROR: -w: must be between 0 and " + str(WAITTIME_MAX))
     except ValueError:
-        error_handler("ERROR: -w must be between 0 and 3600 e.g 0.2 ")
+        error_handler("ERROR: -w: must be between 0 and " + str(WAITTIME_MAX))
 
-    # retries 0 to 5 check
-    try:
-        r = int(args.retries)
-        if r < 0 or r > 5:
-            error_handler("ERROR: -re: must be between 0 and 5")
-    except ValueError:
-        error_handler("ERROR: -re: must be between 0 and 5")
-
-    # interval check (ms) - if set, must be 0-100 (0 = no pacing, needs privileges)
+    # -i: interval (ms) between individual pings. -1 = auto (unset, use --rate instead) -
+    # normalized to '' right away so every other reader only ever sees '' or a real
+    # non-negative interval. 0 is a distinct, valid value: no pacing at all.
+    if args.interval == '-1':
+        args.interval = ''
     if args.interval:
         try:
             iv = int(args.interval)
-            if iv < 0 or iv > 100:
-                error_handler("ERROR: -i: must be between 0 and 100 (ms)")
+            if iv < 0 or iv > INTERVAL_ARG_MAX:
+                error_handler("ERROR: -i: must be between 0 and " + str(INTERVAL_ARG_MAX) + " (ms), or -1 for auto")
         except ValueError:
-            error_handler("ERROR: -i: must be between 0 and 100 (ms)")
+            error_handler("ERROR: -i: must be between 0 and " + str(INTERVAL_ARG_MAX) + " (ms), or -1 for auto")
+    interval = args.interval   # re-sync the legacy module-level alias, see its capture above
 
     # packet rate budget
     try:
@@ -3281,16 +3716,17 @@ if __name__=='__main__':
     except ValueError:
         error_handler("ERROR: --rate: must be between " + str(MIN_RATE_PPS) + " and " + str(MAX_RATE_PPS))
 
-    # retries for hosts already known to be down (-1 disables the retry classes)
+    # retries for hosts already known to be down. 0 disables the retry classes -
+    # every host gets the full --retries budget (same sentinel convention as -p above)
     try:
         down_retries = int(args.down_retries)
-        if down_retries < -1 or down_retries > 5:
-            error_handler("ERROR: --down_retries: must be between -1 and 5")
+        if down_retries < 0 or down_retries > RETRIES_MAX:
+            error_handler("ERROR: --down_retries: must be between 0 and " + str(RETRIES_MAX))
         if down_retries > int(args.retries):
             error_handler("ERROR: --down_retries must not be larger than --retries")
     except ValueError:
-        error_handler("ERROR: --down_retries: must be between -1 and 5")
-    if down_retries < 0:
+        error_handler("ERROR: --down_retries: must be between 0 and " + str(RETRIES_MAX))
+    if down_retries == 0:
         down_retries = None          # disabled - every host gets the full budget
 
     # flap window
@@ -3312,26 +3748,26 @@ if __name__=='__main__':
     # down slices
     try:
         down_slices = int(args.down_slices)
-        if down_slices < 1 or down_slices > 100:
-            error_handler("ERROR: --down_slices: must be between 1 and 100")
+        if down_slices < 1 or down_slices > DOWN_SLICES_MAX:
+            error_handler("ERROR: --down_slices: must be between 1 and " + str(DOWN_SLICES_MAX))
     except ValueError:
-        error_handler("ERROR: --down_slices: must be between 1 and 100")
+        error_handler("ERROR: --down_slices: must be between 1 and " + str(DOWN_SLICES_MAX))
 
-    # full sweep interval
+    # full sweep interval - 0 = disabled (never sweep)
     try:
         full_sweep = int(args.full_sweep)
-        if full_sweep < 0 or full_sweep > 100000:
-            error_handler("ERROR: --full_sweep: must be between 0 and 100000")
+        if full_sweep < 0 or full_sweep > FULL_SWEEP_MAX:
+            error_handler("ERROR: --full_sweep: must be between 0 and " + str(FULL_SWEEP_MAX))
     except ValueError:
-        error_handler("ERROR: --full_sweep: must be between 0 and 100000")
+        error_handler("ERROR: --full_sweep: must be between 0 and " + str(FULL_SWEEP_MAX))
 
     # dns cache ttl
     try:
         dns_ttl = int(args.dns_ttl)
-        if dns_ttl < 0 or dns_ttl > 86400:
-            error_handler("ERROR: --dns_ttl: must be between 0 and 86400")
+        if dns_ttl < 0 or dns_ttl > DNS_TTL_MAX:
+            error_handler("ERROR: --dns_ttl: must be between 0 and " + str(DNS_TTL_MAX))
     except ValueError:
-        error_handler("ERROR: --dns_ttl: must be between 0 and 86400")
+        error_handler("ERROR: --dns_ttl: must be between 0 and " + str(DNS_TTL_MAX))
 
     # -setref only makes sense together with a learning phase
     try:
@@ -3496,6 +3932,13 @@ if __name__=='__main__':
         with web_lock:
             web_state['version'] = version
         def _web_sigint(sig, frame):
+            # same as the web GUI's own EXIT button - tell the browser right away,
+            # BEFORE maybe_run_epinga() below can block on its "[y/N]" prompt.
+            with web_lock:
+                web_state['stopped'] = True
+                web_state['message'] = 'stopped'
+            time.sleep(1.5)   # guarantee the browser's next poll sees it even if
+                               # maybe_run_epinga() below has nothing to prompt for
             print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
             if _remote_version and _remote_version > VERSION:
                 print_update_notice(_remote_version)
@@ -4243,6 +4686,14 @@ if __name__=='__main__':
                 else:
                     notice('RESET CANCELLED', 3)
         elif cmd == 'EXIT':
+            # same as the web GUI's own EXIT button - tell a --web_view browser
+            # mirror right away, BEFORE maybe_run_epinga() below can block on its
+            # "[y/N]" prompt for as long as the user takes to answer it.
+            with web_lock:
+                web_state['stopped'] = True
+                web_state['message'] = 'stopped'
+            time.sleep(1.5)   # guarantee the browser's next poll sees it even if
+                               # maybe_run_epinga() below has nothing to prompt for
             curses.endwin()
             print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
             if remote_version and remote_version > version:
