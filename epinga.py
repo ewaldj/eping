@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.98'
+version = '1.99'
 
 import re
 import os
@@ -1605,6 +1605,8 @@ def build_parser():
                    help='Open HTML report automatically without asking')
     p.add_argument('-q', '--quiet',    dest='quiet', action='store_true',
                    help='Suppress progress bar')
+    p.add_argument('--no-version-check', dest='no_version_check', action='store_true',
+                   help='Skip the online update check (e.g. for headless/scripted runs)')
     p.add_argument('--version',        action='version', version=f'epinga.py {version}')
     return p
 
@@ -1700,10 +1702,13 @@ def main():
     generate_html(report_data, html_path)
 
     # ── version check ──
-    url    = 'https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions'
-    remote = check_version_online(url, 'epinga.py')
-    if remote and remote > version:
-        print(col(f'  !! Update available (v{remote}) – https://www.jeitler.cc !!', CRED))
+    if not args.no_version_check:
+        url    = 'https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions'
+        remote = check_version_online(url, 'epinga.py')
+        if remote and remote > version:
+            print(col(f'  !! Update available (v{remote}) – https://www.jeitler.cc !!', CRED))
+        else:
+            print(f'  THX for using epinga.py v{version}  –  www.jeitler.cc')
     else:
         print(f'  THX for using epinga.py v{version}  –  www.jeitler.cc')
 
