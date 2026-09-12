@@ -1,4 +1,4 @@
-# eping.py 2.42
+# eping.py 2.60
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -198,7 +198,8 @@ Serves a single self-contained page; no external resources are loaded.
   gui only, see *Views and sort orders*; the CLI still cycles the original 3
   with `U`), sort order select, SET REFERENCE, ZERO CHANGES, CLEAR ALL, the
   address mode select (web gui only - see PREFER HOSTNAMES / IP ONLY below),
-  GET NAMES, RESET LOG (reads `START LOG` while logging is off), the DOWNLOAD
+  GET NAMES, ADV OPTIONS (web gui only - see *ADV OPTIONS* below), RESET LOG
+  (reads `START LOG` while logging is off), the DOWNLOAD
   select (web gui only - three targets: ALL HOSTS saves the full reference list;
   SHOWN HOSTS saves only what the table currently shows (view, address mode and
   display filter all apply, same as the table); both are plain text, same format
@@ -292,6 +293,33 @@ default. Both are pure display operations and take effect immediately, without w
 for the running scan round. The order is re-evaluated every round, so a host that
 changes state moves to its new group right away.
 
+### ADV OPTIONS
+
+Web gui only. Opens a modal with every timer/fping/timezone option as a slider plus a
+synced text field, applied live (no restart) while eping.py keeps running. RESET TO
+DEFAULT restores the values the process was started with; APPLY re-sends every field's
+current value as a catch-all in case a single change event was missed.
+
+| Option | Range | 0/-1 means |
+|---|---|---|
+| BACKOFF | 1 – 2 | — |
+| TIMEOUT | 10 – 5000 ms | — |
+| RETRIES | 0 – 5 | — |
+| DOWN RETRIES | 0 – 5 | `0` = disabled, every host gets full RETRIES |
+| INTERVAL | -1 – 250 ms | `-1` = auto (unset, use RATE instead), `0` = no pacing |
+| THREADS | 0 – 32 | `0` = auto |
+| WAIT TIME | 0 – 600 s | — |
+| CONFIRM | 1 – 10 | — |
+| RATE | 10 – 25000 pps | — |
+| FLAP WINDOW | 1 – 72000 min | — |
+| DOWN SLICES | 1 – 20 | — |
+| FULL SWEEP | 0 – 50 | `0` = disabled, never sweeps |
+| DNS TTL | 0 – 3600 s | — |
+| TIMEZONE | -24 – +24 h | — |
+
+These are the same bounds enforced at CLI startup for the matching flags (see
+*Probing*/*Output* above) - one set of limits, hard-enforced on both ends.
+
 ### HTTP API
 
 | Method | Path | Body | Purpose |
@@ -301,7 +329,7 @@ changes state moves to its new group right away.
 | GET | `/api/download/hosts_all` | — | the full reference list as a `.txt` download (DOWNLOAD > ALL HOSTS) |
 | GET | `/api/download/hosts_shown` | — | the currently displayed hosts as a `.txt` download (DOWNLOAD > SHOWN HOSTS) |
 | GET | `/api/download/logfile` | — | the active CSV log as a download (DOWNLOAD > LOGFILE); `404` while logging is off |
-| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|exit","value":"..."}` | control |
+| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*) |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
 There is no authentication. The default bind address is `0.0.0.0` — use
@@ -351,42 +379,46 @@ sends one hard burst.
 `-f` hostfile(s), comma and/or space separated (e.g. `-f hosts1.txt,hosts2.txt` or `-f "hosts1.txt hosts2.txt"`) · `-df` disable hostfile · `-n` CIDR (comma separated) · `-r` IP range (comma separated, shortened end)
 
 ### Probing
-| Option | Default | Meaning |
-|---|---|---|
-| `-t` | 250 | initial per-target timeout in ms |
-| `-B` | 1.5 | backoff factor applied to `-t` on each retry |
-| `-re` | 3 | retries for UP and unknown hosts |
-| `-dr` | 1 | retries for confirmed DOWN hosts (`-1` = same as everything else) |
-| `-ds` | 4 | spread DOWN hosts over N rounds (`1` = all every round) |
-| `-fs` | 10 | every Nth round probes everything fully (`0` = never) |
-| `-cf` | 2 | consecutive DOWN observations before leaving UP (`1` = off) |
-| `-ra` | 1000 | ICMP packets per second |
-| `-i` | auto | fixed send interval in ms, overrides `-ra`; `0` = unpaced |
-| `-p` | auto | fping processes per group (auto = 1, max 32) |
-| `-dns` | 300 | hostname cache TTL in seconds (`0` = off) |
-| `-4` / `-6` | auto | prefer IPv4 (`-4`) or IPv6 (`-6`); if the preferred family has no record for a name, the other family is used instead of failing. Mutually exclusive. |
-| `-ph` | off | start with PREFER HOSTNAMES active (see `P` key) |
-| `-ipo` | off | start with IP ONLY active (see `I` key) |
-| `-gn` | off | run GET NAMES once before the first ping round (see `G` key) |
-| `-fw` | 72000 (max, 50 days) | minutes since the last state change for a host to count as flapping |
-| `-ncs` | off | do not pass `--check-source` to fping |
-| `-w` | 0.5 | pause between rounds in seconds |
-| `-up` | 0 | learning phase: after N rounds keep only hosts seen UP |
-| `-setref` | off | with `-up`: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing `S`/SET REFERENCE); requires `-up N` with N > 0 |
+| Option | Range | Default | Meaning |
+|---|---|---|---|
+| `-B` | 1 – 2 | 1.5 | backoff factor applied to `-t` on each retry |
+| `-t` | 10 – 5000 | 250 | initial per-target timeout in ms |
+| `-re` | 0 – 5 | 3 | retries for UP and unknown hosts |
+| `-dr` | 0 – 5 | 1 | retries for confirmed DOWN hosts (`0` = same as everything else) |
+| `-i` | -1 – 250 | auto | fixed send interval in ms, overrides `-ra`; `-1` = auto (unset), `0` = unpaced |
+| `-p` | 0 – 32 | auto | fping processes per group (`0`/`auto` = 1) |
+| `-w` | 0 – 600 | 0.5 | pause between rounds in seconds |
+| `-cf` | 1 – 10 | 2 | consecutive DOWN observations before leaving UP (`1` = off) |
+| `-ra` | 10 – 25000 | 1000 | ICMP packets per second |
+| `-fw` | 1 – 72000 | 72000 (max, 50 days) | minutes since the last state change for a host to count as flapping |
+| `-ds` | 1 – 20 | 4 | spread DOWN hosts over N rounds (`1` = all every round) |
+| `-fs` | 0 – 50 | 10 | every Nth round probes everything fully (`0` = never) |
+| `-dns` | 0 – 3600 | 300 | hostname cache TTL in seconds (`0` = off) |
+| `-4` / `-6` | — | auto | prefer IPv4 (`-4`) or IPv6 (`-6`); if the preferred family has no record for a name, the other family is used instead of failing. Mutually exclusive. |
+| `-ph` | — | off | start with PREFER HOSTNAMES active (see `P` key) |
+| `-ipo` | — | off | start with IP ONLY active (see `I` key) |
+| `-gn` | — | off | run GET NAMES once before the first ping round (see `G` key) |
+| `-ncs` | — | off | do not pass `--check-source` to fping |
+| `-up` | — | 0 | learning phase: after N rounds keep only hosts seen UP |
+| `-setref` | — | off | with `-up`: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing `S`/SET REFERENCE); requires `-up N` with N > 0 |
+
+All ranges above are hard-enforced both at CLI startup and, in `-web` mode, live via the
+ADV OPTIONS button in the web GUI - same bounds either way. See
+[ADV OPTIONS](#adv-options) below.
 
 ### Output
-| Option | Default | Meaning |
-|---|---|---|
-| `-o` | auto | CSV log file name |
-| `-dl` | — | disable logging |
-| `-cl` | — | delete all `eping-*` files and exit |
-| `-tz` | 0 | timezone offset in hours (−24 … 24) |
-| `-dg` | off | show cycle time breakdown per phase and retry group |
-| `-du` | — | disable the online version check |
-| `-web` | off | web GUI instead of CLI |
-| `-wv` | off | CLI plus a read-only web view |
-| `-port` | 8080 | http port for `-web` and `-wv` |
-| `-bind` | 0.0.0.0 | bind address for `-web` and `-wv` |
+| Option | Range | Default | Meaning |
+|---|---|---|---|
+| `-o` | — | auto | CSV log file name |
+| `-dl` | — | — | disable logging |
+| `-cl` | — | — | delete all `eping-*` files and exit |
+| `-tz` | -24 – +24 | 0 | timezone offset in hours |
+| `-dg` | — | off | show cycle time breakdown per phase and retry group |
+| `-du` | — | — | disable the online version check |
+| `-web` | — | off | web GUI instead of CLI |
+| `-wv` | — | off | CLI plus a read-only web view |
+| `-port` | — | 8080 | http port for `-web` and `-wv` |
+| `-bind` | — | 0.0.0.0 | bind address for `-web` and `-wv` |
 
 ## Logging
 
@@ -586,7 +618,7 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
 
-# epinga.py 1.95
+# epinga.py 1.98
 
 Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
 HTML report (no server, no external assets) with per-host detail, state-change
