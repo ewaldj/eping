@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.72'
+VERSION = '2.73'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2337,6 +2337,7 @@ function openAdvOptions(){
   advOptionsModal.style.display = 'flex';
 }
 function closeAdvOptions(){ advOptionsModal.style.display = 'none'; }
+function advOptionsOpen(){ return advOptionsModal.style.display !== 'none'; }
 
 var stoppedModal    = document.getElementById('stoppedModal');
 var stoppedMsg       = document.getElementById('stoppedMsg');
@@ -2499,6 +2500,13 @@ document.addEventListener('keydown', function(e){
     else if(rk === 'n'){ closeResetLog(); post('reset_log', 'new'); e.preventDefault(); }
     else if(rk === 'escape' || e.key === 'Enter'){ closeResetLog(); e.preventDefault(); }
     return;   // any other key is ignored, the modal stays open
+  }
+  if(advOptionsOpen()){
+    if(e.key === 'Escape'){ closeAdvOptions(); e.preventDefault(); }
+    else if(e.key.toLowerCase() === 'r' && document.activeElement.tagName !== 'INPUT'){
+      document.getElementById('modalBtnAdvReset').click(); e.preventDefault();
+    }
+    return;   // any other key (e.g. typing in a slider's text field) passes through untouched
   }
   if(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
   if(e.key === '+' || e.key === '='){ setFont(fontSize + 1); return; }
