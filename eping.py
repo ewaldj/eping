@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.80'
+VERSION = '2.83'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1440,8 +1440,12 @@ def parse_host_input(value, stats=None):
             if stats is not None:
                 stats['error'] = ('mask must be /%d../%d: %s'
                                   % (CIDR_MIN_MASK, CIDR_MAX_MASK, value))
-    # IP range  e.g. "10.0.0.1-10.0.0.20"
-    elif '-' in value and value.count('-') == 1:
+    # IP range  e.g. "10.0.0.1-10.0.0.20" - both sides must already look like
+    # full IPv4 addresses, or a hyphenated hostname (e.g. "01-markus.jeitler.cc")
+    # would be misread as a broken range instead of falling through to the
+    # hostname/fqdn check below
+    elif ('-' in value and value.count('-') == 1
+          and all(match_re(p.strip(), ip_re) for p in value.split('-'))):
         parts = value.split('-')
         try:
             new_hosts = get_ipv4_from_range(parts[0].strip(), parts[1].strip(),
@@ -1844,7 +1848,6 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   button.danger:hover{border-color:var(--down);color:var(--down)}
   .fsbox{display:flex;align-items:center;gap:4px;margin-left:auto;color:var(--dim)}
   .fsbox button{padding:4px 9px}
-  .fsbox #fsVal{min-width:5ch;text-align:right;color:var(--fg)}
   input[type=text]{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
                    padding:4px 8px;font:inherit;border-radius:3px;min-width:200px}
   select{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
@@ -2039,11 +2042,9 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
      </span>
      <span class="fsbox">
-       FONT
        <button id="fsMinus" title="smaller (-)">A&minus;</button>
        <input type="range" id="fsRange" min="6" max="28" step="1">
        <button id="fsPlus" title="bigger (+)">A+</button>
-       <span id="fsVal"></span>
      </span>
     </span>
     <span class="ctrls-row" id="ctrlsHosts">
@@ -2117,7 +2118,6 @@ function load(k){ try{ return localStorage.getItem(k); }catch(e){ return null; }
 function setFont(px, save){
   fontSize = Math.max(FS_MIN, Math.min(FS_MAX, px|0));
   document.documentElement.style.setProperty('--fs', fontSize + 'px');
-  document.getElementById('fsVal').textContent   = fontSize + 'px';
   document.getElementById('fsRange').value       = fontSize;
   if(save !== false) store('eping_fs', fontSize);
   render(lastRows);
@@ -2570,11 +2570,15 @@ document.addEventListener('keydown', function(e){
     }
     return;   // any other key (e.g. typing in a slider's text field) passes through untouched
   }
+  // typing into any text field (host/filter/comment input, etc.) must never be
+  // hijacked by a global shortcut - this used to sit only in front of the
+  // switch below, so '-' typed into a field (e.g. a hyphenated hostname) still
+  // hit the FONT SIZE shortcut instead of being typed
+  if(document.activeElement && document.activeElement.tagName === 'INPUT') return;
   if(e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
   if(e.key === '+' || e.key === '='){ setFont(fontSize + 1); return; }
   if(e.key === '-' || e.key === '_'){ setFont(fontSize - 1); return; }
   if(isReadOnly) return;
-  if(document.activeElement && document.activeElement.tagName === 'INPUT') return;
   switch(e.key.toLowerCase()){
     case 'u': {
       var curFm = parseInt(document.getElementById('selFilter').value, 10) || 0;
@@ -3426,7 +3430,8 @@ def host_spec_cli(action, value):
     v = value.strip()
     if match_re(v, cidr_ipv4_re):
         spec = '-n ' + v
-    elif '-' in v and v.count('-') == 1 and not is_ip_host(v):
+    elif ('-' in v and v.count('-') == 1
+          and all(match_re(p.strip(), ip_re) for p in v.split('-'))):
         spec = '-r ' + v
     elif ip_version_str(v) == '6':
         spec = '-n ' + v + '/128'
@@ -3823,7 +3828,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     write_log_info(args.disable_logging, logfile_file_name,
                                    format_option_cli(_key, _val), tz_offset)
                 pending_info.clear()
-                maybe_run_epinga(logfile_file_name, args.disable_logging)
+                # no maybe_run_epinga() prompt in web mode - GENERATE REPORT in the
+                # web GUI already covers on-demand analysis, and a terminal [y/N]
+                # prompt makes no sense for a headless/background web server
                 sys.stdout.flush()
                 # os._exit(), not sys.exit(): see sigint_handler() for why - a
                 # running [G] GET NAMES lookup must not delay shutdown.
@@ -4391,17 +4398,15 @@ if __name__=='__main__':
         with web_lock:
             web_state['version'] = version
         def _web_sigint(sig, frame):
-            # same as the web GUI's own EXIT button - tell the browser right away,
-            # BEFORE maybe_run_epinga() below can block on its "[y/N]" prompt.
+            # same as the web GUI's own EXIT button - tell the browser right away
             with web_lock:
                 web_state['stopped'] = True
                 web_state['message'] = 'stopped'
-            time.sleep(1.5)   # guarantee the browser's next poll sees it even if
-                               # maybe_run_epinga() below has nothing to prompt for
+            time.sleep(1.5)   # guarantee the browser's next poll sees the status
             print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
             if _remote_version and _remote_version > VERSION:
                 print_update_notice(_remote_version)
-            maybe_run_epinga(_logfile_file_name, args.disable_logging)
+            # no maybe_run_epinga() prompt in web mode - see the 'exit' cmd handler
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
             os._exit(0)
