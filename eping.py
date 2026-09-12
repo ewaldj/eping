@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.79'
+VERSION = '2.80'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2493,15 +2493,21 @@ document.getElementById('selDownload').onchange = function(){
   this.value = '';                              // reset - a select, not a toggle
   if(!what) return;
   if(what === 'logfile'){
-    // plain navigation, not fetch+blob (see below) - the log can be large and
-    // fetch+blob buffers the whole response in JS before the <a> download even
-    // starts, so the browser shows no transfer/progress at all until it's fully
-    // in memory. A direct <a href> download is handled natively by the browser
-    // (progress in its downloads bar) - the server already sends the filename
-    // via Content-Disposition.
-    var a = document.createElement('a');
-    a.href = 'api/download/logfile';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    // hidden iframe, not fetch+blob and not a real <a> click - the log can be
+    // large, and fetch+blob buffers the whole response in JS before the
+    // download even starts (no visible transfer/progress until it's fully in
+    // memory); a real <a> click, even to an 'attachment' response, is a
+    // navigation attempt from the browser's point of view, and some browsers
+    // abort other in-flight requests (like poll()'s api/status) while they
+    // decide it isn't one, which showed a spurious 'eping.py stopped' - a
+    // hidden iframe download never touches top-level navigation, so poll()
+    // is unaffected either way; the server sends the filename via
+    // Content-Disposition, browser handles it as a native download.
+    var f = document.createElement('iframe');
+    f.style.display = 'none';
+    f.src = 'api/download/logfile';
+    document.body.appendChild(f);
+    setTimeout(function(){ if(f.parentNode) document.body.removeChild(f); }, 60000);
     note('downloading ' + label + ' ...', true);
     return;
   }
