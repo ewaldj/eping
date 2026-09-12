@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.83'
+VERSION = '2.87'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1867,6 +1867,25 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .stats #scrollHint{margin-left:auto;white-space:nowrap}
   .banner{padding:6px 12px;background:#2a1414;color:var(--down);border-bottom:1px solid var(--line)}
 
+  /* ---- compact toolbar for narrow windows (e.g. an 11" tablet) ----
+     applied via body.compact, toggled by JS measuring an actual wrap (see
+     fitToolbar()) instead of a guessed pixel breakpoint - label widths vary
+     with font/zoom, so a fixed media-query threshold reliably breaks somewhere
+     else than the one width it was picked for. Keeps the .bar's two rows
+     (#ctrlsMain / #ctrlsHosts) each on one line instead of wrapping into a
+     third/fourth row: tighter controls, and the font-size A-/A+ buttons +
+     slider (a rarely-touched control) shrink out of the way since they cost
+     the most horizontal space for the least use. */
+  /* stage 1 - cheapest to give up: the font-size A-/A+ buttons + slider (a
+     rarely-touched control) shrink first, everything else untouched */
+  body.compact-slider .fsbox{gap:2px}
+  body.compact-slider #fsMinus, body.compact-slider #fsPlus{display:none}
+  body.compact-slider #fsRange{width:60px}
+  /* stage 2 - only reached if stage 1 still isn't enough: shrink the actual
+     controls too (also implies stage 1, added by JS alongside this class) */
+  body.compact .bar{gap:4px;padding:5px 10px}
+  body.compact .bar button, body.compact .bar select{padding:3px 6px;font-size:12px}
+
   /* ---- confirmation modal (RESET LOGGING) ---- */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);
                  display:flex;align-items:center;justify-content:center;z-index:50}
@@ -2000,7 +2019,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 
   <div class="bar">
    <span id="ctrls">
-    <span class="ctrls-row">
+    <span class="ctrls-row" id="ctrlsRow1">
      <span id="ctrlsMain">
       <select id="selFilter" title="choose which hosts are shown and pinged - a host outside the current view is not checked until a view including it is selected again">
         <option value="0">ALL HOSTS</option>
@@ -2125,6 +2144,66 @@ function setFont(px, save){
 document.getElementById('fsMinus').onclick = function(){ setFont(fontSize - 1); };
 document.getElementById('fsPlus').onclick  = function(){ setFont(fontSize + 1); };
 document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.value,10)); };
+
+/* ---------------- responsive toolbar (staged compact mode) ----------------
+   shrinks #ctrlsRow1 (the ALL HOSTS...EXIT button row + the font-size slider)
+   in stages, each one MEASURED against an actual line wrap instead of a
+   guessed pixel breakpoint - label widths depend on font rendering and
+   OS/zoom, so a fixed width threshold reliably breaks at some other width
+   than the one it was tuned for. Stops at the first stage that fits, so a
+   window with room to spare keeps full-size buttons - only the font-size
+   slider (cheapest to give up, rarely touched) shrinks first; buttons/selects
+   only shrink too if that alone isn't enough. */
+var COMPACT_LABELS = [
+  {sel:'#selAddrMode option[value="0"]', full:'PROVIDED IP/NAME', short:'IP/NAME MODE'},
+  {sel:'#btnGenReport',                  full:'GENERATE REPORT',  short:'REPORT'}
+];
+// stage 3 only - the least-used labels, shortened further once stage 2 alone
+// still isn't enough (very small window)
+var MICRO_LABELS = [
+  {sel:'#btnSetRef',      full:'SET REFERENCE',  short:'SET'},
+  {sel:'#btnZero',        full:'ZERO CHANGES',   short:'ZERO'},
+  {sel:'#btnClear',       full:'CLEAR ALL',      short:'CLEAR'},
+  {sel:'#btnAdvOptions',  full:'ADV OPTIONS',    short:'ADV'},
+  {sel:'#btnResetLog',    full:'RESET LOG',      short:'REST'}
+];
+function applyLabelSet(labels, compact){
+  labels.forEach(function(l){
+    var el = document.querySelector(l.sel);
+    if(el) el.textContent = compact ? l.short : l.full;
+  });
+}
+function rowWrapped(el){
+  var kids = el.children, top0 = null;
+  for(var i = 0; i < kids.length; i++){
+    if(kids[i].offsetParent === null) continue;   // skip hidden (display:none) children
+    if(top0 === null){ top0 = kids[i].offsetTop; continue; }
+    if(kids[i].offsetTop !== top0) return true;
+  }
+  return false;
+}
+function fitToolbar(){
+  var row = document.getElementById('ctrlsRow1'), body = document.body;
+  if(!row) return;
+  // always start from full size - shrinking can only free up space, never
+  // require more, so re-measuring from scratch each time never oscillates
+  body.classList.remove('compact', 'compact-slider', 'compact-micro');
+  applyLabelSet(COMPACT_LABELS, false);
+  applyLabelSet(MICRO_LABELS, false);
+  if(!rowWrapped(row)) return;                  // stage 0: full size fits
+  body.classList.add('compact-slider');
+  if(!rowWrapped(row)) return;                  // stage 1: slider-only shrink fits
+  body.classList.add('compact');
+  applyLabelSet(COMPACT_LABELS, true);
+  if(!rowWrapped(row)) return;                  // stage 2: shrink buttons + labels too
+  body.classList.add('compact-micro');
+  applyLabelSet(MICRO_LABELS, true);            // stage 3: shorten the least-used labels too
+}
+fitToolbar();
+var fitRz;
+window.addEventListener('resize', function(){
+  clearTimeout(fitRz); fitRz = setTimeout(fitToolbar, 80);
+});
 
 /* ---------------- commands ---------------- */
 var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
