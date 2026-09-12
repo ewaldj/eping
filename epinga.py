@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '2.20'
+version = '2.21'
 
 import re
 import os
@@ -673,6 +673,7 @@ a {{ color: var(--cyan); text-decoration: none; }}
         padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }}
 .hdr-left {{ display: flex; flex-direction: column; }}
 .hdr h1 {{ font-size: 18px; color: var(--text); letter-spacing: .5px; }}
+.hdr h1 .ver {{ font-size: 10px; font-weight: 400; color: var(--dim); letter-spacing: normal; margin-left: 6px; }}
 .hdr .meta {{ color: var(--dim); font-size: 11px; margin-top: 4px; }}
 
 /* ── stat cards ── */
@@ -868,7 +869,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
       <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
       <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
       <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
-    </svg>epinga &nbsp;·&nbsp; Analysis Report</h1>
+    </svg>epinga &nbsp;·&nbsp; Analysis Report<small class="ver">v{version}</small></h1>
     <div class="meta">
       File: <strong>{data['filename']}</strong> &nbsp;|&nbsp;
       Generated: {data['generated']} &nbsp;|&nbsp;
