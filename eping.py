@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.73'
+VERSION = '2.75'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1851,7 +1851,16 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box p{margin:0 0 14px;color:var(--dim);font-size:12px;line-height:1.5}
   .modal-buttons{display:flex;gap:8px;flex-wrap:wrap}
   .modal-buttons button{flex:1 1 auto;white-space:nowrap}
-  .modal-box.wide{width:640px;max-width:92vw;max-height:82vh;overflow-y:auto}
+  .modal-box.wide{width:640px;max-width:92vw;max-height:82vh;overflow-y:scroll;
+    /* always show the scrollbar, not just while hovering/scrolling - the OS
+       default (overlay scrollbars, e.g. macOS) otherwise hides it completely,
+       leaving no hint that RESET TO DEFAULT / CLOSE are below the fold on a
+       small window. scrollbar-width/-color force it in Firefox; any
+       ::-webkit-scrollbar rule opts Chrome/Safari out of overlay mode too. */
+    scrollbar-width:auto;scrollbar-color:var(--ctrl-line) var(--panel)}
+  .modal-box.wide::-webkit-scrollbar{width:12px}
+  .modal-box.wide::-webkit-scrollbar-track{background:var(--panel)}
+  .modal-box.wide::-webkit-scrollbar-thumb{background:var(--ctrl-line);border-radius:6px}
   .adv-row{display:flex;flex-direction:column;gap:3px;margin:0 0 12px}
   .adv-row label{font-size:11px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
   .adv-row label .adv-desc{color:var(--dim);font-weight:400;letter-spacing:normal}
@@ -2239,26 +2248,39 @@ var advRowsBuilt     = false;
 // unchanged, so a mismatch here means 'rejected' - revert the field to what the
 // server actually has and flash it red briefly, no text needed.
 //
-// advSendSeq tracks the latest send per key - a second edit made before the
-// first one's check has fired must not let that first, now-superseded check
-// compare its old sentVal against a lastOptions that has already moved on to
-// the second edit: it would see a 'mismatch' and wrongly revert+flash a value
-// that was in fact accepted. Only the check matching the most recent send for
-// that key is allowed to act; older ones are silently dropped.
-var advSendSeq = {};
-function advCheckApplied(row, sl, tx, key, sentVal, seq){
-  setTimeout(function(){
-    if(advSendSeq[key] !== seq) return;   // superseded by a newer edit - ignore
+// advPending tracks (at most) one outstanding check per key - a newer edit to
+// the same key simply overwrites the older pending entry, so there is never a
+// stale check left comparing against a value that has already moved on.
+//
+// A queued option change is only actually applied server-side the next time
+// run_web_mode() drains web_commands, at the top of its loop - it can sit
+// queued for as long as the CURRENT fping round takes (many hosts, or a high
+// TIMEOUT/RETRIES/BACKOFF itself, easily exceed a couple of seconds). So this
+// is checked on every poll() tick (see below) against a generous timeout,
+// instead of a single fixed-delay check - a slow round is not the same as the
+// server rejecting the value, and treating it as one was causing the field to
+// flash red and jump back even though the change would have landed fine.
+var advPending = {};              // key -> {row, sl, tx, sentVal, deadline}
+var ADV_CHECK_TIMEOUT_MS = 20000; // generous - covers even a slow round on a big host list
+function advCheckApplied(row, sl, tx, key, sentVal){
+  advPending[key] = {row: row, sl: sl, tx: tx, sentVal: sentVal,
+                     deadline: Date.now() + ADV_CHECK_TIMEOUT_MS};
+}
+function advPollCheck(){
+  for(var key in advPending){
+    var p = advPending[key];
     var actual = lastOptions[key];
-    if(actual === undefined) return;
-    var a = parseFloat(actual), e = parseFloat(sentVal);
-    var same = (!isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(sentVal));
-    if(same) return;
-    if(sl && !isNaN(a)) sl.value = actual;
-    if(tx) tx.value = actual;
-    row.classList.add('adv-rejected');
-    setTimeout(function(){ row.classList.remove('adv-rejected'); }, 1600);
-  }, 1300);
+    if(actual === undefined) continue;   // no options snapshot yet
+    var a = parseFloat(actual), e = parseFloat(p.sentVal);
+    var same = (!isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(p.sentVal));
+    if(same){ delete advPending[key]; continue; }
+    if(Date.now() < p.deadline) continue;   // still might land - keep waiting
+    if(p.sl && !isNaN(a)) p.sl.value = actual;
+    if(p.tx) p.tx.value = actual;
+    p.row.classList.add('adv-rejected');
+    (function(rw){ setTimeout(function(){ rw.classList.remove('adv-rejected'); }, 1600); })(p.row);
+    delete advPending[key];
+  }
 }
 function buildAdvRows(){
   if(advRowsBuilt) return;
@@ -2289,8 +2311,7 @@ function buildAdvRows(){
     var pl = row.querySelector('.advPlus');
     function sendOption(val){
       post('set_option', key + '=' + val);
-      var seq = (advSendSeq[key] = (advSendSeq[key] || 0) + 1);
-      advCheckApplied(row, sl, tx, key, val, seq);
+      advCheckApplied(row, sl, tx, key, val);
     }
     sl.addEventListener('input',  function(){ tx.value = sl.value; });
     sl.addEventListener('change', function(){ sendOption(sl.value); });
@@ -2715,6 +2736,7 @@ function poll(){
     swrap.style.display = s.match_filter ? '' : 'none';
     document.getElementById('sShown').textContent   = s.hosts_shown;
     lastOptions = s.options || {};
+    advPollCheck();
     var rep = s.report || {};
     if(rep.status === 'ready' && reportWindow){
       if(!reportWindow.closed) reportWindow.location = 'api/report';
