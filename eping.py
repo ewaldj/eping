@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.68'
+VERSION = '2.69'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2799,18 +2799,32 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         elif path in ('/api/download/logfile', 'api/download/logfile'):
             # DOWNLOAD > LOGFILE - the currently active CSV log, read fresh from
             # disk (not cached) so the download always reflects the latest rows.
+            # Streamed in chunks (not read() into one big bytes object) - the log
+            # can grow into the GB range and a single in-memory read/write nearly
+            # doubles peak RSS and can fail or stall on large files.
             with web_lock:
                 logpath = web_state.get('logfile') or ''
             if not logpath or not os.path.exists(logpath):
                 self._respond(404, 'text/plain; charset=utf-8', 'no active logfile')
                 return
             try:
-                with open(logpath, 'rb') as f:
-                    body = f.read()
+                size = os.path.getsize(logpath)
+                f = open(logpath, 'rb')
             except OSError:
                 self._respond(404, 'text/plain; charset=utf-8', 'logfile not readable')
                 return
-            self._respond(200, 'text/csv; charset=utf-8', body, os.path.basename(logpath))
+            try:
+                with f:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/csv; charset=utf-8')
+                    self.send_header('Content-Length', str(size))
+                    self.send_header('Cache-Control', 'no-store')
+                    self.send_header('Content-Disposition',
+                                     'attachment; filename="' + os.path.basename(logpath) + '"')
+                    self.end_headers()
+                    shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
         else:
             self._respond(404, 'text/plain; charset=utf-8', 'not found')
 
