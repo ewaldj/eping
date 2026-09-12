@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.69'
+VERSION = '2.72'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -222,6 +222,16 @@ def print_update_notice(remote_ver):
 
 _epinga_prompt_active = False
 
+def find_epinga_path():
+    """Resolve epinga.py: prefer the copy next to eping.py, fall back to PATH.
+
+    Returns the path, or None if not found either way.
+    """
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'epinga.py')
+    if os.path.exists(local_path):
+        return local_path
+    return shutil.which('epinga.py')
+
 def maybe_run_epinga(logfile_file_name, logging_enabled):
     """Offer to analyse the just-written logfile with epinga.py, on exit.
 
@@ -255,9 +265,9 @@ def maybe_run_epinga(logfile_file_name, logging_enabled):
         _epinga_prompt_active = False
     if answer != 'y':
         return
-    epinga_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'epinga.py')
-    if not os.path.exists(epinga_path):
-        print(f'  epinga.py not found next to eping.py ({epinga_path}) - skipping.')
+    epinga_path = find_epinga_path()
+    if not epinga_path:
+        print('  epinga.py not found next to eping.py or in PATH - skipping.')
         return
     try:
         subprocess.call([sys.executable, epinga_path, '-f', logfile_file_name])
@@ -1772,6 +1782,7 @@ web_state = {
     'scan_info'        : '',
     'phase_info'       : '',
     'scanning'         : 0.0,
+    'report'           : {'status': 'idle', 'error': ''},  # GENERATE REPORT - see run_epinga_report()
 }
 
 WEB_INDEX_HTML = r"""<!DOCTYPE html>
@@ -2024,6 +2035,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
      <span class="sep">&nbsp;|&nbsp;</span>
      <button id="btnUpload" title="load hosts from a text/CSV file">ADD FILE</button>
      <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
+     <button id="btnGenReport" title="analyse the active logfile with epinga.py and open the report in a new tab">GENERATE REPORT</button>
     </span>
    </span>
   </div>
@@ -2094,6 +2106,7 @@ var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', so
                reset_log:'resetting log ...',
                set_option:'applying option ...',
                reset_options:'resetting options ...',
+               run_report:'generating report ...',
                exit:'stopping eping ...'};
 var pending = false, lastMsgSeq = null;
 var pendingAddrMode   = null;   // see selAddrMode onchange / poll() below
@@ -2160,6 +2173,7 @@ document.getElementById('sortSel').onchange = function(){
 };
 var resetLogModal = document.getElementById('resetLogModal');
 var loggingOn = false;   // kept in sync from every status poll, see render()
+var reportWindow = null; // blank tab opened by GENERATE REPORT, filled in once ready - see poll()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
 function openResetLog(){ resetLogModal.style.display = 'flex'; }
 function closeResetLog(){ resetLogModal.style.display = 'none'; }
@@ -2224,8 +2238,17 @@ var advRowsBuilt     = false;
 // actually took it. A rejected/out-of-range value leaves the server's value
 // unchanged, so a mismatch here means 'rejected' - revert the field to what the
 // server actually has and flash it red briefly, no text needed.
-function advCheckApplied(row, sl, tx, key, sentVal){
+//
+// advSendSeq tracks the latest send per key - a second edit made before the
+// first one's check has fired must not let that first, now-superseded check
+// compare its old sentVal against a lastOptions that has already moved on to
+// the second edit: it would see a 'mismatch' and wrongly revert+flash a value
+// that was in fact accepted. Only the check matching the most recent send for
+// that key is allowed to act; older ones are silently dropped.
+var advSendSeq = {};
+function advCheckApplied(row, sl, tx, key, sentVal, seq){
   setTimeout(function(){
+    if(advSendSeq[key] !== seq) return;   // superseded by a newer edit - ignore
     var actual = lastOptions[key];
     if(actual === undefined) return;
     var a = parseFloat(actual), e = parseFloat(sentVal);
@@ -2266,7 +2289,8 @@ function buildAdvRows(){
     var pl = row.querySelector('.advPlus');
     function sendOption(val){
       post('set_option', key + '=' + val);
-      advCheckApplied(row, sl, tx, key, val);
+      var seq = (advSendSeq[key] = (advSendSeq[key] || 0) + 1);
+      advCheckApplied(row, sl, tx, key, val, seq);
     }
     sl.addEventListener('input',  function(){ tx.value = sl.value; });
     sl.addEventListener('change', function(){ sendOption(sl.value); });
@@ -2393,6 +2417,32 @@ fileInput.addEventListener('change', function(){
   };
   rd.readAsText(f);
 });
+// GENERATE REPORT's holding page, written into the blank tab right away (see
+// below) so the user sees a wait message instead of a blank window while
+// epinga.py runs - same colors as the main page, no dependency on it (a
+// popup window has no access to this page's stylesheet).
+var REPORT_WAIT_HTML = '<!doctype html><html><head><meta charset="UTF-8">'
+  + '<title>epinga report</title><style>'
+  + 'body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
+  + 'background:#0b0f0b;color:#c8d6c8;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'
+  + '"DejaVu Sans Mono",monospace;font-size:15px}'
+  + '.wrap{text-align:center;animation:pulse 1.4s ease-in-out infinite}'
+  + '@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}'
+  + '</style></head><body><div class="wrap">'
+  + 'Generating report with epinga.py &hellip;<br>'
+  + '<small style="color:#5d6b5d">please wait - this tab will update automatically</small>'
+  + '</div></body></html>';
+document.getElementById('btnGenReport').onclick = function(){
+  // window.open() must happen synchronously in the click handler or browsers
+  // treat it as a popup and block it - open a blank tab now, fill it in once
+  // poll() sees the report become ready (or close it again on error).
+  reportWindow = window.open('', '_blank');
+  if(reportWindow){
+    reportWindow.document.write(REPORT_WAIT_HTML);
+    reportWindow.document.close();
+  }
+  post('run_report', '');
+};
 document.getElementById('selDownload').onchange = function(){
   var what  = this.value;
   var label = this.options[this.selectedIndex].text;
@@ -2657,6 +2707,16 @@ function poll(){
     swrap.style.display = s.match_filter ? '' : 'none';
     document.getElementById('sShown').textContent   = s.hosts_shown;
     lastOptions = s.options || {};
+    var rep = s.report || {};
+    if(rep.status === 'ready' && reportWindow){
+      if(!reportWindow.closed) reportWindow.location = 'api/report';
+      reportWindow = null;
+      note('report ready', false);
+    } else if(rep.status === 'error' && reportWindow){
+      if(!reportWindow.closed) reportWindow.close();
+      reportWindow = null;
+      note('report failed: ' + (rep.error || ''), false);
+    }
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
@@ -2750,6 +2810,49 @@ setInterval(poll, 1000);
 """
 
 
+_report_lock = threading.Lock()   # guards _report_file_path (separate from web_lock,
+                                   # held only briefly - never nested inside web_lock)
+_report_file_path = None          # last successfully generated report HTML, or None
+_report_running   = False         # guards against overlapping GENERATE REPORT runs
+
+def run_epinga_report():
+    """GENERATE REPORT (web gui): analyse the active logfile with epinga.py and
+    make the resulting HTML available at /api/report.
+
+    Runs in its own thread - epinga.py can take a while on large logfiles, and
+    must never block run_web_mode()'s fping loop or the HTTP request thread.
+    """
+    global _report_file_path, _report_running
+    with web_lock:
+        logpath = web_state.get('logfile') or ''
+    try:
+        if not logpath or not os.path.exists(logpath) or os.path.getsize(logpath) == 0:
+            raise RuntimeError('no active logfile with data yet')
+        epinga_path = find_epinga_path()
+        if not epinga_path:
+            raise RuntimeError('epinga.py not found next to eping.py or in PATH')
+        report_path = os.path.splitext(logpath)[0] + '_report.html'
+        # stdin=DEVNULL: epinga.py's end-of-run "open in browser?" prompt then
+        # fails fast with EOFError instead of blocking - harmless, the report
+        # is already written to disk by that point. --no-version-check avoids
+        # an unnecessary network call from a headless/background run.
+        subprocess.run([sys.executable, epinga_path, '-f', logpath, '-q',
+                        '--html', report_path, '--no-version-check'],
+                       stdin=subprocess.DEVNULL,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if not os.path.exists(report_path) or os.path.getsize(report_path) == 0:
+            raise RuntimeError('epinga.py did not produce a report')
+        with _report_lock:
+            _report_file_path = report_path
+        with web_lock:
+            web_state['report'] = {'status': 'ready', 'error': ''}
+    except Exception as e:
+        with web_lock:
+            web_state['report'] = {'status': 'error', 'error': str(e)}
+    finally:
+        _report_running = False
+
+
 class EpingWebHandler(http.server.BaseHTTPRequestHandler):
     server_version  = 'eping/' + VERSION
     protocol_version = 'HTTP/1.1'
@@ -2825,6 +2928,22 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
+        elif path in ('/api/report', 'api/report'):
+            # GENERATE REPORT result - the epinga.py HTML report from the last
+            # completed run_epinga_report(), served inline (not as a download)
+            # so the GENERATE REPORT button's new tab renders it directly.
+            with _report_lock:
+                report_path = _report_file_path
+            if not report_path or not os.path.exists(report_path):
+                self._respond(404, 'text/plain; charset=utf-8', 'no report generated yet')
+                return
+            try:
+                with open(report_path, 'rb') as f:
+                    body = f.read()
+            except OSError:
+                self._respond(404, 'text/plain; charset=utf-8', 'report not readable')
+                return
+            self._respond(200, 'text/html; charset=utf-8', body)
         else:
             self._respond(404, 'text/plain; charset=utf-8', 'not found')
 
@@ -2873,8 +2992,22 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options'):
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
+            return
+        if cmd == 'run_report':
+            # GENERATE REPORT - runs in its own background thread (epinga.py can
+            # take a while on a large logfile), not via web_commands/run_web_mode -
+            # it needs no access to that loop's locals, only web_state['logfile'].
+            global _report_running
+            with web_lock:
+                already_running = _report_running
+                if not already_running:
+                    _report_running = True
+                    web_state['report'] = {'status': 'running', 'error': ''}
+            if not already_running:
+                threading.Thread(target=run_epinga_report, daemon=True).start()
+            self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
         with web_lock:
             web_commands.append((cmd, value))
@@ -3361,6 +3494,15 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         full_sweep = val
                     elif key == 'tz_offset':
                         tz_offset = val
+                # Publish the new value right away, not at the end of this fping
+                # round - a round can easily take longer than advCheckApplied()'s
+                # check delay (especially right after raising backoff/timeout/
+                # retries, which lengthens the round itself), which was making the
+                # client see a stale value and wrongly revert+flash a just-accepted
+                # change as rejected.
+                with web_lock:
+                    web_state['options'] = adv_option_values(args, down_retries, flap_window,
+                                                             confirm, down_slices, full_sweep, tz_offset)
             elif cmd == 'reset_options':
                 # same as set_option above: no footer message on purpose
                 for _key, _raw in start_option_values.items():
@@ -3378,6 +3520,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             full_sweep = _val
                         elif _key == 'tz_offset':
                             tz_offset = _val
+                # same immediate-publish reasoning as set_option above
+                with web_lock:
+                    web_state['options'] = adv_option_values(args, down_retries, flap_window,
+                                                             confirm, down_slices, full_sweep, tz_offset)
             elif cmd == 'clear':
                 active_hosts_list   = []
                 original_hosts_list[:] = []

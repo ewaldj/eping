@@ -1,4 +1,4 @@
-# eping.py 2.60
+# eping.py 2.70
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -206,11 +206,11 @@ Serves a single self-contained page; no external resources are loaded.
   ADD FILE/upload accept. LOGFILE saves the active CSV log, disabled while logging
   is off), EXIT, font size (right-aligned); row 2,
   in order and separated by `|`: the match filter field with SET / CLEAR, the
-  host field with ADD / DELETE, the comment field with COMMENT, then ADD FILE on
-  its own at the end. All work exactly as the matching CLI keys (`U`, `P`, `I`,
-  `G`, `O`, `T`, `A`, `D`, `F`, `L`, `E`), except the address mode select and
-  DOWNLOAD, which are web gui only and have no matching CLI key (see below for
-  the address mode select).
+  host field with ADD / DELETE, the comment field with COMMENT, then ADD FILE and
+  GENERATE REPORT (web gui only - see *GENERATE REPORT* below) at the end. All work
+  exactly as the matching CLI keys (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`,
+  `E`), except the address mode select, DOWNLOAD and GENERATE REPORT, which are web
+  gui only and have no matching CLI key (see below for the address mode select).
   The host field feeds both ADD and DELETE — type a value and press the matching
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
@@ -329,7 +329,8 @@ These are the same bounds enforced at CLI startup for the matching flags (see
 | GET | `/api/download/hosts_all` | — | the full reference list as a `.txt` download (DOWNLOAD > ALL HOSTS) |
 | GET | `/api/download/hosts_shown` | — | the currently displayed hosts as a `.txt` download (DOWNLOAD > SHOWN HOSTS) |
 | GET | `/api/download/logfile` | — | the active CSV log as a download (DOWNLOAD > LOGFILE); `404` while logging is off |
-| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*) |
+| GET | `/api/report` | — | the last `GENERATE REPORT` HTML result, served inline; `404` until one has completed |
+| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|run_report\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*); `run_report` starts a background `GENERATE REPORT` run (see below) |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 
 There is no authentication. The default bind address is `0.0.0.0` — use
@@ -507,6 +508,24 @@ exiting; Enter or any other input skips it. If no interactive input is
 available (e.g. stdin closed), the prompt is skipped silently. No prompt is
 shown if logging is disabled or the logfile doesn't exist/is empty.
 
+Both this and `GENERATE REPORT` below resolve `epinga.py` the same way: the copy
+next to `eping.py` is preferred, falling back to `epinga.py` in `PATH` if there
+isn't one.
+
+## GENERATE REPORT (web gui)
+
+`GENERATE REPORT`, next to `ADD FILE`, runs `epinga.py` on the active CSV log and
+opens the resulting HTML report in a new browser tab - without leaving eping.py or
+touching a terminal. It needs logging to be on and the logfile to be non-empty;
+otherwise the tab opens and immediately closes with an error in the footer.
+
+epinga.py runs in a background thread (`stdin` closed, `--no-version-check`, `-q`,
+`--html <logfile-base>_report.html`), so a large logfile doesn't block the fping
+loop or the rest of the web gui - the new tab opens blank right away and is
+navigated to the report once analysis finishes; poll interval is the same 1s as
+the rest of the page. Only one run at a time; a click while one is already running
+is a no-op until it completes.
+
 `PREFER HOSTNAMES` / `P` (`-ph` to start with it on) drops a raw-IP host from what gets
 pinged as soon as another entry in the list is a hostname resolving to that same
 address — the hostname is already being probed, so the bare IP would just be a
@@ -618,7 +637,7 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
 
-# epinga.py 1.98
+# epinga.py 1.99
 
 Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
 HTML report (no server, no external assets) with per-host detail, state-change
@@ -650,6 +669,7 @@ override the latter).
 | `--html FILE` | Custom HTML report filename |
 | `--open` | Open the HTML report automatically, no prompt |
 | `-q`, `--quiet` | Suppress the progress bar |
+| `--no-version-check` | Skip the online update check (used by eping.py's `GENERATE REPORT`) |
 
 ## HTML report
 
