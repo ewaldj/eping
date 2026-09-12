@@ -637,7 +637,7 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
 
-# epinga.py 1.99
+# epinga.py 2.04
 
 Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
 HTML report (no server, no external assets) with per-host detail, state-change
@@ -677,7 +677,8 @@ Everything is inlined into one `.html` file (CSS, JS and the analysed data as JS
 can be copied, emailed or opened offline, with no dependency on the log file it was
 built from.
 
-The top bar shows total/UP/flapping/DOWN/no-DNS counts, followed by a toolbar with:
+The top bar shows total/UP/flapping/DOWN/no-DNS/duplicate-host counts, followed by a
+toolbar with:
 
 - **Filter** - plain text or a regex (case-insensitive), matched against both hostname
   and IP; an invalid regex falls back to plain substring matching instead of showing
@@ -694,11 +695,24 @@ The top bar shows total/UP/flapping/DOWN/no-DNS counts, followed by a toolbar wi
 - **IP View** button (green when on) - display toggle only: swaps every host's primary
   label between hostname and IP (table and all four buckets), the other value shown
   small next to it. Independent of deduplication below.
-- **Deduplication** dropdown (`No Deduplication` / `Hostname` / `IP`, default: no
-  deduplication) - for a host monitored under both a hostname and its own raw IP,
-  hides the redundant side; `Hostname` keeps the name and drops the IP entry,
-  `IP` keeps the IP and drops the name entry. Applies to the table and all four
-  buckets.
+- **Deduplication** dropdown (`No deduplication` / `Prefer IP address` / `Prefer
+  hostname`, default: no deduplication) - for a host monitored under both a
+  hostname and its own raw IP, hides the redundant side; `Prefer IP address` keeps
+  the IP and drops the hostname entry, `Prefer hostname` keeps the hostname and
+  drops the IP entry. Applies to the table, all four buckets, and the TOTAL
+  HOSTS/ALWAYS UP/FLAPPING/ALWAYS DOWN/NO-DNS cards in the top bar - the hidden
+  side no longer counts towards any of them. The **DUPLICATES** card shows the
+  total number of hosts involved in a hostname/IP duplication (both sides of
+  each pair) with `No deduplication` selected, and `0` with either `Prefer IP
+  address` or `Prefer hostname` active - once a mode hides the redundant side,
+  nothing left is a duplicate.
+- **Download** button, right of the Deduplication dropdown - saves the report
+  exactly as currently shown (theme, dedup mode, sort, filter, collapsed
+  buckets) as a standalone `<base>_report.html` file, via a client-side Blob of
+  the page's own DOM (`document.documentElement.outerHTML`) - no server
+  round-trip. Hidden when the report is opened as a local `file://` page (there
+  is already a copy on disk); shown when served over HTTP, e.g. eping.py's
+  `GENERATE REPORT` / `/api/report`, which has no local copy to offer otherwise.
 
 A **Comments** section, populated from `#COMMENT#` rows written by eping.py's
 `ADD COMMENT` / `T` (see above), is shown above the Host List - collapsed by

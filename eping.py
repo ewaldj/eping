@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.75'
+VERSION = '2.78'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1575,6 +1575,28 @@ def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offse
     if tz_offset:
         ts = ts + datetime.timedelta(hours=tz_offset)
     logdata = [ts, '#COMMENT#', '', '', '', '', '', '', comment_text]
+    with open(logfile_file_name, 'a', encoding='UTF8') as f:
+        writer = csv.writer(f)
+        writer.writerow(logdata)
+    return True
+
+def write_log_info(logging_enabled, logfile_file_name, info_text, tz_offset=0):
+    """Append a timestamped settings-snapshot row to the CSV log (if logging is on).
+
+    Same mechanics as write_log_comment(), but with the '#INFO#' sentinel so
+    epinga.py can tell a settings snapshot/change apart from a free-text
+    comment. info_text is a CLI-flag-style string (e.g. '-B 1.5 -t 250 ...' for
+    a full snapshot, or '-B 2.0' for a single ADV OPTIONS change) - see
+    build_cli_snapshot()/format_option_cli().
+    Returns True if the row was written, False if logging is currently off.
+    """
+    if not logging_enabled or not info_text:
+        return False
+    now_str = get_date_time()
+    ts = datetime.datetime.strptime(now_str, "%d/%m/%Y %H:%M:%S")
+    if tz_offset:
+        ts = ts + datetime.timedelta(hours=tz_offset)
+    logdata = [ts, '#INFO#', '', '', '', '', '', '', info_text]
     with open(logfile_file_name, 'a', encoding='UTF8') as f:
         writer = csv.writer(f)
         writer.writerow(logdata)
@@ -3244,6 +3266,158 @@ def adv_option_values(args, down_retries, flap_window, confirm, down_slices,
     }
 
 
+# ADV OPTIONS key -> its CLI flag, for #INFO# logging (write_log_info()) - one
+# ADV OPTIONS change is logged as that single CLI-equivalent flag, see
+# format_option_cli() below.
+# a slider drag or held +/- button fires set_option many times per second -
+# a value is only #INFO#-logged once this many seconds pass with no further
+# change to that key (see pending_info in run_web_mode)
+INFO_DEBOUNCE_SECONDS = 1.0
+
+ADV_OPTION_CLI_FLAG = {
+    'backoff':         '-B',
+    'timeout':         '-t',
+    'retries':         '-re',
+    'down_retries':    '-dr',
+    'interval':        '-i',
+    'num_of_threads':  '-p',
+    'waittime':        '-w',
+    'confirm':         '-cf',
+    'rate_pps':        '-ra',
+    'flap_window':     '-fw',
+    'down_slices':     '-ds',
+    'full_sweep':      '-fs',
+    'dns_ttl':         '-dns',
+    'tz_offset':       '-tz',
+}
+
+
+def format_option_cli(key, val):
+    """One ADV OPTIONS change as its single CLI-flag equivalent, e.g. '-B 2.0'.
+
+    val is apply_adv_option()'s already-normalized return value - this only
+    maps the auto/off sentinels back to the CLI's own spelling (interval=''
+    -> -1, num_of_threads='auto' stays 'auto', down_retries=None -> 0).
+    """
+    flag = ADV_OPTION_CLI_FLAG[key]
+    if key == 'interval':
+        shown = '-1' if val in ('', None) else str(int(val))
+    elif key == 'num_of_threads':
+        shown = 'auto' if val == 'auto' else str(int(val))
+    elif key == 'down_retries':
+        shown = '0' if val is None else str(int(val))
+    else:
+        shown = str(val)
+    return flag + ' ' + shown
+
+
+def current_option_value(key, args, backoff, timeout, retries, down_retries,
+                         flap_window, confirm, down_slices, full_sweep, tz_offset):
+    """One ADV OPTIONS key's current value, normalized the same way
+    apply_adv_option()'s return value is - so it can be diffed/logged with
+    format_option_cli() after a RESET TO DEFAULT (see reset_options).
+    """
+    if key == 'backoff':        return float(backoff)
+    if key == 'timeout':        return int(timeout)
+    if key == 'retries':        return int(retries)
+    if key == 'down_retries':   return down_retries
+    if key == 'interval':       return '' if args.interval == '' else int(args.interval)
+    if key == 'num_of_threads': return 'auto' if args.num_of_threads == 'auto' else int(args.num_of_threads)
+    if key == 'waittime':       return float(args.waittime)
+    if key == 'confirm':        return confirm
+    if key == 'rate_pps':       return int(args.rate_pps)
+    if key == 'flap_window':    return flap_window
+    if key == 'down_slices':    return down_slices
+    if key == 'full_sweep':     return full_sweep
+    if key == 'dns_ttl':        return int(args.dns_ttl)
+    if key == 'tz_offset':      return tz_offset
+    return None
+
+
+def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_window,
+                       confirm, down_slices, full_sweep, tz_offset):
+    """Full current configuration as one CLI-flag-style string, for the
+    startup #INFO# log line (write_log_info()) - reconstructs the equivalent
+    'eping.py ...' command line for every currently active setting.
+
+    One-shot actions with no persistent 'current value' (-cl/--clean,
+    -setref/--set_reference, -gn/--get_names as a startup action) are left
+    out - they describe something that already happened, not a setting.
+    Flags left at their inactive/empty value (-n, -r, -df, -o, -du, -4/-6,
+    -ph, -ipo, -dg, -ncs, -web, -wv) are omitted, same as a user would simply
+    not pass them.
+    """
+    parts = ['-f ' + args.hostfile]
+    if args.disable_hostfile:
+        parts.append('-df')
+    if args.network_cidr:
+        parts.append('-n ' + args.network_cidr)
+    if args.network_range:
+        parts.append('-r ' + args.network_range)
+    parts.append('-B ' + str(backoff))
+    parts.append('-t ' + str(timeout))
+    parts.append('-re ' + str(retries))
+    parts.append('-i ' + ('-1' if args.interval == '' else str(args.interval)))
+    if args.logfile:
+        parts.append('-o ' + args.logfile)
+    if not args.disable_logging:
+        parts.append('-dl')
+    parts.append('-up ' + str(args.up_hosts_check))
+    parts.append('-p ' + ('auto' if args.num_of_threads == 'auto' else str(args.num_of_threads)))
+    parts.append('-tz ' + str(tz_offset))
+    parts.append('-w ' + str(args.waittime))
+    if args.disable_versioncheck:
+        parts.append('-du')
+    parts.append('-ra ' + str(args.rate_pps))
+    parts.append('-dns ' + str(args.dns_ttl))
+    if args.force_ipv4:
+        parts.append('-4')
+    if args.force_ipv6:
+        parts.append('-6')
+    if args.prefer_hostname:
+        parts.append('-ph')
+    if args.ip_only:
+        parts.append('-ipo')
+    parts.append('-dr ' + ('0' if down_retries is None else str(down_retries)))
+    if args.diag:
+        parts.append('-dg')
+    parts.append('-fw ' + str(flap_window))
+    parts.append('-cf ' + str(confirm))
+    parts.append('-ds ' + str(down_slices))
+    parts.append('-fs ' + str(full_sweep))
+    if args.no_check_source:
+        parts.append('-ncs')
+    if args.web:
+        parts.append('-web')
+    if args.web_view:
+        parts.append('-wv')
+    parts.append('-port ' + str(args.web_port))
+    parts.append('-bind ' + args.web_bind)
+    return ' '.join(parts)
+
+
+def host_spec_cli(action, value):
+    """ADD/DEL host input as its CLI-flag equivalent, for #INFO# logging.
+
+    Reuses the real -n (CIDR/single host as /32 or /128) and -r (range)
+    flags - no invented flag for a single add/remove. 'action' ('ADD'/'DEL')
+    is a plain label, not a flag, since eping.py has no startup flag for
+    removing a host.
+    """
+    v = value.strip()
+    if match_re(v, cidr_ipv4_re):
+        spec = '-n ' + v
+    elif '-' in v and v.count('-') == 1 and not is_ip_host(v):
+        spec = '-r ' + v
+    elif ip_version_str(v) == '6':
+        spec = '-n ' + v + '/128'
+    elif is_ip_host(v):
+        spec = '-n ' + v + '/32'
+    else:
+        spec = '-n ' + v   # hostname - no real flag fits; kept for a readable trail
+    return action + ' ' + spec
+
+
 def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                  update_available, up_check_runs, down_retries=None, full_sweep=0,
                  confirm=1, down_slices=1, flap_window=FLAP_WINDOW_DEF):
@@ -3288,6 +3462,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     gn_candidates     = []
     match_filter_re   = None   # [M] display-only regex filter - active_hosts_list unaffected
     match_filter_text = ''
+    pending_info      = {}   # ADV OPTIONS #INFO# debounce - key -> (val, last_change_ts),
+                              # see set_option/flush below
 
     def apply_addr_mode(lst):
         if addr_mode == 1:
@@ -3338,6 +3514,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     filter_mode       = next_mode
                     active_hosts_list = apply_addr_mode(next_list)
                     message = 'view: ' + FILTER_MODES[filter_mode][0]
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   'FILTER ' + FILTER_MODES[filter_mode][0], tz_offset)
                 else:
                     message = 'no hosts match ' + FILTER_MODES[next_mode][0]
             elif cmd == 'set_filter':
@@ -3354,6 +3532,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         filter_mode       = target_mode
                         active_hosts_list = apply_addr_mode(target_list)
                         message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
                     else:
                         message = 'no hosts match ' + WEB_VIEW_MODES[target_mode][0]
             elif cmd == 'addr_mode':
@@ -3397,6 +3577,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     else:
                         message = ('get names: running in background (%d host(s))'
                                   % len(gn_candidates))
+                        write_log_info(args.disable_logging, logfile_file_name, '-gn', tz_offset)
             elif cmd == 'match_filter':
                 value = value.strip()
                 if not value:
@@ -3423,6 +3604,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 else:
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     message = err if err else 'added ' + str(added) + ' host(s)'
+                    if not err and added:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       host_spec_cli('ADD', value), tz_offset)
             elif cmd == 'del':
                 del_stats = {}
                 del_hosts = parse_host_input(value, del_stats)
@@ -3436,6 +3620,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         down_streak.pop(_h, None)
                     forget_names(del_hosts)
                     message = 'removed ' + str(removed) + ' host(s)'
+                    if removed:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       host_spec_cli('DEL', value), tz_offset)
             elif cmd == 'upload':
                 up_stats  = {}
                 new_hosts = parse_hosts_from_text(value, up_stats)
@@ -3455,6 +3642,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message += (', %d network(s) expanded' % up_stats['networks'])
                         if up_stats.get('skipped'):
                             message += (', %d ignored (mask)' % len(up_stats['skipped']))
+                        if added:
+                            write_log_info(args.disable_logging, logfile_file_name,
+                                           'ADD -f (uploaded, ' + str(added) + ' host(s))', tz_offset)
             elif cmd == 'set_ref':
                 # what is displayed right now becomes the new reference list
                 dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
@@ -3462,11 +3652,13 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 original_hosts_list[:] = list(active_hosts_list)
                 filter_mode = 0
                 message = 'reference set to the ' + str(len(active_hosts_list)) + ' host(s) shown'
+                write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
             elif cmd == 'zero':
                 for _entry in host_state.values():
                     _entry[5] = 0
                     _entry[6] = ''
                 message = 'change counters reset'
+                write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
             elif cmd == 'add_comment':
                 value = value.strip()
                 if not args.disable_logging:
@@ -3486,6 +3678,12 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         logfile_file_name = new_name
                         _logfile_file_name = new_name   # keep _web_sigint() in sync
                         message = 'logging started: ' + logfile_file_name
+                        # fresh file - same full snapshot as a program startup, see main()
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       build_cli_snapshot(args, backoff, timeout, retries,
+                                                          down_retries, flap_window, confirm,
+                                                          down_slices, full_sweep, tz_offset),
+                                       tz_offset)
                     else:
                         message = 'failed to start logging'
                 else:
@@ -3493,6 +3691,11 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     if choice == 'y':
                         if reset_logfile(logfile_file_name):
                             message = 'logging reset - ' + logfile_file_name + ' cleared'
+                            write_log_info(args.disable_logging, logfile_file_name,
+                                           build_cli_snapshot(args, backoff, timeout, retries,
+                                                              down_retries, flap_window, confirm,
+                                                              down_slices, full_sweep, tz_offset),
+                                           tz_offset)
                         else:
                             message = 'failed to reset log file'
                     elif choice == 'new':
@@ -3501,6 +3704,11 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             logfile_file_name  = new_name
                             _logfile_file_name = new_name   # keep _web_sigint() in sync
                             message = 'new logfile: ' + logfile_file_name
+                            write_log_info(args.disable_logging, logfile_file_name,
+                                           build_cli_snapshot(args, backoff, timeout, retries,
+                                                              down_retries, flap_window, confirm,
+                                                              down_slices, full_sweep, tz_offset),
+                                           tz_offset)
                         else:
                             message = 'failed to create new logfile'
                     else:
@@ -3524,6 +3732,11 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         full_sweep = val
                     elif key == 'tz_offset':
                         tz_offset = val
+                if ok:
+                    # debounced - a dragged slider/held +/- fires many set_option
+                    # calls per second; only the value it settles on gets logged,
+                    # see INFO_DEBOUNCE_SECONDS flush below
+                    pending_info[key] = (val, time.time())
                 # Publish the new value right away, not at the end of this fping
                 # round - a round can easily take longer than advCheckApplied()'s
                 # check delay (especially right after raising backoff/timeout/
@@ -3535,6 +3748,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                                              confirm, down_slices, full_sweep, tz_offset)
             elif cmd == 'reset_options':
                 # same as set_option above: no footer message on purpose
+                _before_reset = {_k: current_option_value(_k, args, backoff, timeout, retries,
+                                                          down_retries, flap_window, confirm,
+                                                          down_slices, full_sweep, tz_offset)
+                                 for _k in ADV_OPTION_KEYS}
                 for _key, _raw in start_option_values.items():
                     _ok, _val, _ = apply_adv_option(_key, _raw, args)
                     if _ok and _key in ADV_OPTION_LOCAL_KEYS:
@@ -3550,6 +3767,15 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             full_sweep = _val
                         elif _key == 'tz_offset':
                             tz_offset = _val
+                # only log keys RESET TO DEFAULT actually changed - a reset that
+                # touches nothing (already at defaults) should stay silent
+                for _key in ADV_OPTION_KEYS:
+                    _after = current_option_value(_key, args, backoff, timeout, retries,
+                                                  down_retries, flap_window, confirm,
+                                                  down_slices, full_sweep, tz_offset)
+                    if _after != _before_reset[_key]:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       format_option_cli(_key, _after), tz_offset)
                 # same immediate-publish reasoning as set_option above
                 with web_lock:
                     web_state['options'] = adv_option_values(args, down_retries, flap_window,
@@ -3564,6 +3790,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 _addr_redundancy_cache.clear()
                 filter_mode = 0
                 message = 'all hosts cleared'
+                write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
             elif cmd == 'exit':
                 with web_lock:
                     web_state['stopped'] = True
@@ -3572,11 +3799,27 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
                 if _remote_version and _remote_version > VERSION:
                     print_update_notice(_remote_version)
+                # flush any not-yet-settled ADV OPTIONS change - see set_option
+                for _key, (_val, _t) in pending_info.items():
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   format_option_cli(_key, _val), tz_offset)
+                pending_info.clear()
                 maybe_run_epinga(logfile_file_name, args.disable_logging)
                 sys.stdout.flush()
                 # os._exit(), not sys.exit(): see sigint_handler() for why - a
                 # running [G] GET NAMES lookup must not delay shutdown.
                 os._exit(0)
+
+        # ADV OPTIONS #INFO# debounce - a value that hasn't changed again in
+        # INFO_DEBOUNCE_SECONDS is done settling, log it now (see set_option)
+        if pending_info:
+            _now = time.time()
+            for _key in list(pending_info.keys()):
+                _val, _t = pending_info[_key]
+                if _now - _t >= INFO_DEBOUNCE_SECONDS:
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   format_option_cli(_key, _val), tz_offset)
+                    del pending_info[_key]
 
         if cmds or gn_just_finished:
             # view and order are pure display changes - show them at once instead of
@@ -4107,6 +4350,13 @@ if __name__=='__main__':
                 writer.writerow(header)
         except:
             error_handler('ERROR: failed to create logfile: ' + logfile_file_name )
+        # #INFO# startup snapshot - full CLI-equivalent of every current setting
+        startup_snapshot = build_cli_snapshot(args, backoff, timeout, retries,
+                                              down_retries, flap_window, confirm,
+                                              down_slices, full_sweep,
+                                              int(args.time_zone_adjust))
+        write_log_info(args.disable_logging, logfile_file_name, startup_snapshot,
+                       int(args.time_zone_adjust))
 
     _logfile_file_name = logfile_file_name
     _logging_enabled = args.disable_logging
@@ -4709,6 +4959,7 @@ if __name__=='__main__':
             original_hosts_list = list(active_hosts_list)
             filter_mode = 0            # active == reference, so no filter is active
             screen.clear()
+            write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
         elif cmd == 'CLEAR':
             active_hosts_list   = []
             original_hosts_list = []
@@ -4719,6 +4970,7 @@ if __name__=='__main__':
             _addr_redundancy_cache.clear()
             filter_mode = 0
             screen.clear()
+            write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
         elif cmd == 'UP_ONLY':
             next_mode = (filter_mode + 1) % len(FILTER_MODES)
             next_list = filter_hosts(next_mode, original_hosts_list, host_state,
@@ -4728,6 +4980,8 @@ if __name__=='__main__':
                 active_hosts_list = (apply_prefer_hostname(next_list, int(args.dns_ttl))
                                      if prefer_hostname else next_list)
                 screen.clear()
+                write_log_info(args.disable_logging, logfile_file_name,
+                               'FILTER ' + FILTER_MODES[filter_mode][0], tz_offset)
             else:
                 notice('NO HOSTS MATCH ' + FILTER_MODES[next_mode][0], 3)
         elif cmd == 'PREFER_HOSTNAME':
@@ -4761,6 +5015,7 @@ if __name__=='__main__':
                 else:
                     notice('GET NAMES: RUNNING IN BACKGROUND (%d HOST(S))'
                           % len(gn_candidates), 2)
+                    write_log_info(args.disable_logging, logfile_file_name, '-gn', tz_offset)
         elif cmd == 'MATCH_FILTER':
             value = input_dialog(' MATCH FILTER ',
                                  ' regex to match hostname/IP, case-insensitive - empty to disable:')
@@ -4798,6 +5053,9 @@ if __name__=='__main__':
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     if err:
                         notice(err.upper(), 3)
+                    elif added:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       host_spec_cli('ADD', value), tz_offset)
         elif cmd == 'ADD_FILE':
             value = input_dialog(' ADD HOSTS FROM FILE ', ' Enter path of the host file:')
             if value:
@@ -4810,6 +5068,9 @@ if __name__=='__main__':
                         notice(err.upper(), 3)
                     else:
                         notice('ADDED ' + str(added) + ' NEW HOST(S) OF ' + str(len(new_hosts)) + ' FOUND', 2)
+                        if added:
+                            write_log_info(args.disable_logging, logfile_file_name,
+                                           'ADD -f ' + value, tz_offset)
         elif cmd == 'DEL':
             value = input_dialog(' DELETE HOSTS ',
                                  ' IPv4/IPv6, hostname, IPv4 CIDR /%d../%d, IPv6 /128 or ip1-ip2:'
@@ -4827,12 +5088,16 @@ if __name__=='__main__':
                         down_streak.pop(_h, None)
                     forget_names(del_hosts)
                     notice('REMOVED ' + str(removed) + ' HOST(S)', 2 if removed else 3)
+                    if removed:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       host_spec_cli('DEL', value), tz_offset)
         elif cmd == 'ZERO':
             # forget the change history, keep the current UP/DOWN state
             for _entry in host_state.values():
                 _entry[5] = 0
                 _entry[6] = ''
             notice('CHANGE COUNTERS RESET', 2)
+            write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
         elif cmd == 'ADD_COMMENT':
             if not args.disable_logging:
                 notice('LOGGING IS OFF - COMMENT NOT SAVED', 3)
@@ -4854,6 +5119,12 @@ if __name__=='__main__':
                     logfile_file_name  = new_name
                     _logfile_file_name = new_name   # keep sigint_handler() in sync
                     notice('LOGGING STARTED: ' + logfile_file_name, 2)
+                    # fresh file - same full snapshot as a program startup, see main()
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   build_cli_snapshot(args, backoff, timeout, retries,
+                                                      down_retries, flap_window, confirm,
+                                                      down_slices, full_sweep, tz_offset),
+                                   tz_offset)
                 else:
                     notice('FAILED TO START LOGGING', 3)
             else:
@@ -4863,6 +5134,11 @@ if __name__=='__main__':
                 if answer == 'y':
                     if reset_logfile(logfile_file_name):
                         notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       build_cli_snapshot(args, backoff, timeout, retries,
+                                                          down_retries, flap_window, confirm,
+                                                          down_slices, full_sweep, tz_offset),
+                                       tz_offset)
                     else:
                         notice('FAILED TO RESET LOGFILE', 3)
                 elif answer == 'n':
@@ -4871,6 +5147,11 @@ if __name__=='__main__':
                         logfile_file_name  = new_name
                         _logfile_file_name = new_name   # keep sigint_handler() in sync
                         notice('NEW LOGFILE: ' + logfile_file_name, 2)
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       build_cli_snapshot(args, backoff, timeout, retries,
+                                                          down_retries, flap_window, confirm,
+                                                          down_slices, full_sweep, tz_offset),
+                                       tz_offset)
                     else:
                         notice('FAILED TO CREATE NEW LOGFILE', 3)
                 else:

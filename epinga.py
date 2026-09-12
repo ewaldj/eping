@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '1.99'
+version = '2.13'
 
 import re
 import os
@@ -252,6 +252,7 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
     hosts      = {}   # hostname -> HostStats
     host_order = []   # insertion order
     comments   = []   # [{'ts': datetime, 'text': str}, ...] - from '#COMMENT#' sentinel rows
+    infos      = []   # [{'ts': datetime, 'text': str}, ...] - from '#INFO#' sentinel rows
     rows_read  = 0
 
     progress = Progress(file_size) if not quiet else None
@@ -289,6 +290,19 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
                     comments.append({'ts': ts, 'text': text})
                 continue
 
+            if hostname == '#INFO#':
+                ts = parse_ts(row['TIMESTAMP'])
+                if ts is None:
+                    continue
+                if ts_start and ts < ts_start:
+                    continue
+                if ts_end   and ts > ts_end:
+                    continue
+                text = row.get('IP', '').strip()
+                if text:
+                    infos.append({'ts': ts, 'text': text})
+                continue
+
             if filter_hosts and hostname not in filter_hosts:
                 continue
 
@@ -323,7 +337,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
         h.finalise()
 
     comments.sort(key=lambda c: c['ts'])
-    return hosts, host_order, rows_read, comments
+    infos.sort(key=lambda i: i['ts'])
+    return hosts, host_order, rows_read, comments, infos
 
 
 # ── state colour ──────────────────────────────────────────────────────────────
@@ -508,7 +523,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
 
 # ── HTML export ───────────────────────────────────────────────────────────────
-def build_report_data(hosts, host_order, filename, rows_read, base='', comments=None):
+def build_report_data(hosts, host_order, filename, rows_read, base='', comments=None, infos=None):
     """Serialize all analysis data to a plain dict for JSON embedding."""
     rows = []
     for h in host_order:
@@ -542,6 +557,10 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
         {'ts': c['ts'].strftime(TS_FMT), 'text': c['text']}
         for c in (comments or [])
     ]
+    info_rows = [
+        {'ts': i['ts'].strftime(TS_FMT), 'text': i['text']}
+        for i in (infos or [])
+    ]
     return {
         'filename':     filename,
         'base':         base,
@@ -551,7 +570,37 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
         'global_end':   max(all_last)  if all_last  else '',
         'hosts':        rows,
         'comments':     comment_rows,
+        'infos':        info_rows,
     }
+
+
+def _is_ip_host(name):
+    """Same intent as the report's client-side isIpHost() - true for a raw
+    IPv4/IPv6 literal host, false for a hostname."""
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        return False
+
+
+def count_duplicate_hosts(rows):
+    """Hosts monitored under both a hostname and an IP resolving to it - both
+    sides of every such pair count (mirrors REDUNDANT_IPS/REDUNDANT_NAMES in the
+    report's JS - see there for the exact matching rule). Used for the
+    DUPLICATES stat card, independent of which dedup mode is selected.
+    """
+    name_hosts_ips = set(h['ip'] for h in rows if h['ip'] and not _is_ip_host(h['name']))
+    ip_hosts_names = set(h['name'] for h in rows if _is_ip_host(h['name']))
+    n = 0
+    for h in rows:
+        if _is_ip_host(h['name']):
+            if h['name'] in name_hosts_ips:
+                n += 1
+        else:
+            if h['ip'] and h['ip'] in ip_hosts_names:
+                n += 1
+    return n
 
 
 def generate_html(data, out_path):
@@ -565,11 +614,21 @@ def generate_html(data, out_path):
         )
     else:
         comment_rows_html = '<div class="comment-row comment-empty">No comments logged.</div>'
+    infos = data.get('infos') or []
+    if infos:
+        info_rows_html = '\n'.join(
+            f'<div class="comment-row"><span class="comment-ts">{html_lib.escape(i["ts"])}</span>'
+            f'<span class="comment-text info-text">{html_lib.escape(i["text"])}</span></div>'
+            for i in infos
+        )
+    else:
+        info_rows_html = '<div class="comment-row comment-empty">No info logged.</div>'
     n_total   = len(data['hosts'])
     n_up      = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'UP')
     n_flap    = sum(1 for h in data['hosts'] if h['changes'] > 0)
     n_down    = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'DOWN')
     n_nodns   = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'NO-DNS')
+    n_dup     = count_duplicate_hosts(data['hosts'])
 
     html = f"""<!DOCTYPE html>
 <html lang="de">
@@ -619,13 +678,20 @@ a {{ color: var(--cyan); text-decoration: none; }}
 /* ── stat cards ── */
 .cards {{ display: flex; gap: 12px; padding: 16px 24px; flex-wrap: wrap; }}
 .card {{ background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
-         padding: 12px 20px; min-width: 120px; text-align: center; }}
+         padding: 12px 20px; min-width: 120px; text-align: center; height: 73px;
+         box-sizing: border-box; display: flex; flex-direction: column; }}
+.card .num, .card .info {{ flex: 1 1 0; min-height: 0; display: flex;
+                           align-items: flex-end; justify-content: center; }}
 .card .num {{ font-size: 28px; font-weight: 700; }}
-.card .lbl {{ font-size: 11px; color: var(--dim); margin-top: 2px; }}
+.card .lbl, .card .info-sub {{ flex: 0 0 auto; font-size: 11px; color: var(--dim); }}
 .card.up    .num {{ color: var(--green);  }}
 .card.flap  .num {{ color: var(--orange); }}
 .card.down  .num {{ color: var(--red);    }}
 .card.nodns .num {{ color: var(--red);    }}
+.card.dup   .num {{ color: var(--cyan);   }}
+.card.dup .info {{ font-size: 14px; font-weight: 700; line-height: 1.2;
+                   color: var(--green); letter-spacing: .3px; }}
+.card.dup .info-sub {{ font-weight: 400; }}
 .cards {{ align-items: center; }}
 .side-widget {{ margin-left: auto; width: 190px; display: flex; justify-content: center; }}
 .cat-link {{ display: block; line-height: 0; }}
@@ -652,6 +718,7 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .toolbar button:hover {{ border-color: var(--cyan); }}
 .toolbar button.active {{ background: var(--orange); border-color: var(--orange); color: var(--bg); font-weight: 600; }}
 #btnShowIp.active {{ background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }}
+.sep {{ width: 1px; height: 20px; background: var(--border); align-self: center; }}
 .toolbar .site-link {{ display: flex; align-items: center; gap: 6px;
   color: var(--dim); text-decoration: none; font-size: 12px;
   padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); }}
@@ -663,13 +730,14 @@ a {{ color: var(--cyan); text-decoration: none; }}
 /* comments + hostlist are static buckets outside #buckets (which supplies its
    own 24px via .buckets padding for the dynamically-generated buckets) - give
    both the same horizontal margin so all bucket boxes line up */
-.bucket.hostlist, .bucket.comments {{ margin: 0 24px 20px; }}
+.bucket.hostlist, .bucket.comments, .bucket.info {{ margin: 0 24px 20px; }}
 .bucket.hostlist .tbl-wrap {{ padding: 0; }}
-.bucket.comments .bucket-body {{ padding: 10px 16px; }}
+.bucket.comments .bucket-body, .bucket.info .bucket-body {{ padding: 10px 16px; }}
 .comment-row {{ display: flex; gap: 14px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }}
 .comment-row:last-child {{ border-bottom: none; }}
 .comment-ts {{ color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }}
 .comment-text {{ color: var(--text); word-break: break-word; }}
+.comment-text.info-text {{ color: var(--cyan); font-family: var(--font); }}
 .comment-row.comment-empty {{ color: var(--dim); font-style: italic; }}
 .bucket.collapsed.hostlist .tbl-wrap {{ display: none; }}
 table {{ width: 100%; border-collapse: collapse; }}
@@ -746,8 +814,8 @@ tr.hidden {{ display: none; }}
                    flex: 1; user-select: none; }}
 .bucket-chevron {{ color: var(--dim); transition: transform .2s; display: inline-block; }}
 .bucket.collapsed .bucket-chevron {{ transform: rotate(-90deg); }}
-.sort-btn {{ color: var(--dim); font-size: 11px; cursor: pointer; user-select: none;
-             letter-spacing: 0; }}
+.sort-btn {{ color: var(--cyan); font-size: 11px; cursor: pointer; user-select: none;
+             letter-spacing: 0; margin-left: 2ch; }}
 .sort-btn:hover {{ color: var(--text); }}
 .bucket.collapsed .bucket-body {{ display: none; }}
 .bucket-actions {{ display: flex; align-items: center; gap: 10px; }}
@@ -809,11 +877,12 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
 </div>
 
 <div class="cards">
-  <div class="card"><div class="num">{n_total}</div><div class="lbl">TOTAL HOSTS</div></div>
-  <div class="card up">  <div class="num">{n_up}</div>   <div class="lbl">ALWAYS UP</div></div>
-  <div class="card flap"><div class="num">{n_flap}</div> <div class="lbl">FLAPPING</div></div>
-  <div class="card down"><div class="num">{n_down}</div> <div class="lbl">ALWAYS DOWN</div></div>
-  <div class="card nodns"><div class="num">{n_nodns}</div><div class="lbl">NO-DNS</div></div>
+  <div class="card" id="cardTotal"><div class="num">{n_total}</div><div class="lbl">TOTAL HOSTS</div></div>
+  <div class="card up" id="cardUp">  <div class="num">{n_up}</div>   <div class="lbl">ALWAYS UP</div></div>
+  <div class="card flap" id="cardFlap"><div class="num">{n_flap}</div> <div class="lbl">FLAPPING</div></div>
+  <div class="card down" id="cardDown"><div class="num">{n_down}</div> <div class="lbl">ALWAYS DOWN</div></div>
+  <div class="card nodns" id="cardNodns"><div class="num">{n_nodns}</div><div class="lbl">NO-DNS</div></div>
+  <div class="card dup" id="cardDup"><div class="num">{n_dup}</div><div class="lbl">DUPLICATES</div></div>
   <div class="side-widget">
   <a href="https://jeitler.cc/nelly/" class="cat-link" target="_blank" rel="noopener" aria-label="More about Nelly">
   <svg class="cat" viewBox="0 0 320 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cute cartoon cat">
@@ -887,10 +956,12 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
   <button id="btnShowIp" onclick="toggleShowIp()"
           title="Switch every host's displayed label between hostname and IP">IP View</button>
   <select id="dedupSel" onchange="onDedupSelectChange()" title="Deduplication mode for hosts monitored under both a hostname and an IP">
-    <option value="" selected>No Deduplication</option>
-    <option value="name">Hostname</option>
-    <option value="ip">IP</option>
+    <option value="" selected>No deduplication</option>
+    <option value="ip">Prefer IP address</option>
+    <option value="name">Prefer hostname</option>
   </select>
+  <span class="sep" id="sepDownload"></span>
+  <button id="btnDownloadHtml" onclick="downloadHtml()" title="Save this report as a standalone .html file">Download</button>
   <div class="side-widget">
   <a class="site-link" href="https://www.jeitler.cc" target="_blank" rel="noopener">
     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -958,6 +1029,17 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
 </div>
 
 <div class="buckets" id="buckets"></div>
+
+<div class="bucket info collapsed" id="bucket-info">
+  <h3>
+    <span class="bucket-toggle" onclick="toggleBucket('info')">
+      <span class="bucket-chevron">&#9662;</span><span>Info ({len(infos)})</span>
+    </span>
+  </h3>
+  <div class="bucket-body">
+    {info_rows_html}
+  </div>
+</div>
 
 <footer>
   <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -1231,6 +1313,29 @@ function isIpHost(name) {{
   return name.indexOf(':') !== -1 && /^[0-9a-fA-F:]+$/.test(name);   // IPv6 literal
 }}
 
+// IPv4 dotted-quad -> a comparable integer, or null if not a valid IPv4 literal
+// (any octet > 255) - used so host/IP columns sort numerically (172.17.17.9
+// before .10) instead of lexicographically (.10 before .9, .100 before .11).
+function ipv4ToNum(s) {{
+  const m = /^(\\d{{1,3}})\\.(\\d{{1,3}})\\.(\\d{{1,3}})\\.(\\d{{1,3}})$/.exec(s);
+  if (!m) return null;
+  const o = [1, 2, 3, 4].map(i => Number(m[i]));
+  if (o.some(n => n > 255)) return null;
+  return ((o[0] * 256 + o[1]) * 256 + o[2]) * 256 + o[3];
+}}
+
+// comparator for any host-identifying string (a 'name' or an IP, whichever is
+// shown - see hostLabel()): numeric for two IPv4 literals, otherwise plain
+// text order (IPv6 literals and hostnames alike - no numeric ordering defined
+// for those here).
+function hostCompare(a, b) {{
+  const na = ipv4ToNum(a), nb = ipv4ToNum(b);
+  if (na !== null && nb !== null) return na - nb;
+  if (na !== null) return -1;   // IPv4 addresses sort before hostnames/IPv6
+  if (nb !== null) return 1;
+  return a.localeCompare(b);
+}}
+
 // true if 'h' is the duplicate side that the current dedup mode should hide -
 // applied to both the table filter and the bucket sections below
 function isDeduped(h) {{
@@ -1262,10 +1367,63 @@ function toggleShowIp() {{
   renderBuckets();
 }}
 
+// total hosts involved in a duplicate hostname/IP pair - both sides count,
+// independent of dedupMode (mirrors count_duplicate_hosts() server-side, used
+// for the initial DUPLICATES card before any JS has run)
+function isDuplicatePair(h) {{
+  if (isIpHost(h.name)) return REDUNDANT_IPS.has(h.name);
+  return !!(h.ip && REDUNDANT_NAMES.has(h.name));
+}}
+
+// TOTAL/UP/FLAPPING/DOWN/NO-DNS must reflect the active dedup mode (a hidden
+// duplicate should not still count towards the totals) - DUPLICATES itself
+// stays constant, it reports what's in the data, not what the filter is doing
+function updateCards() {{
+  const active = RAW.hosts.filter(h => !isDeduped(h));
+  const nTotal = active.length;
+  const nUp    = active.filter(h => h.changes === 0 && h.state === 'UP').length;
+  const nFlap  = active.filter(h => h.changes > 0).length;
+  const nDown  = active.filter(h => h.changes === 0 && h.state === 'DOWN').length;
+  const nNodns = active.filter(h => h.changes === 0 && h.state === 'NO-DNS').length;
+  document.querySelector('#cardTotal .num').textContent = nTotal;
+  document.querySelector('#cardUp .num').textContent    = nUp;
+  document.querySelector('#cardFlap .num').textContent  = nFlap;
+  document.querySelector('#cardDown .num').textContent  = nDown;
+  document.querySelector('#cardNodns .num').textContent = nNodns;
+  // dedup on -> the redundant side of every pair is hidden, so none of what's
+  // left counts as a duplicate anymore; a '0' there reads as 'no problem found'
+  // which is misleading while dedup is hiding the very thing it would count,
+  // so show an active-state message instead, same card size either way
+  const dupCard = document.getElementById('cardDup');
+  if (dedupMode === '') {{
+    const nDup = RAW.hosts.filter(isDuplicatePair).length;
+    dupCard.innerHTML = '<div class="num">' + nDup + '</div><div class="lbl">DUPLICATES</div>';
+  }} else {{
+    const nFiltered = RAW.hosts.filter(isDeduped).length;
+    dupCard.innerHTML = '<div class="info">DEDUPLICATION<br>ACTIVE</div>' +
+      '<div class="info-sub">' + nFiltered + ' FILTERED</div>';
+  }}
+}}
+
 function onDedupSelectChange() {{
   dedupMode = document.getElementById('dedupSel').value;
   applyFilter();
   renderBuckets();
+  updateCards();
+}}
+
+// saves this report as a standalone .html file - the whole page (current DOM,
+// so theme/dedup/sort/collapse state as currently shown) is self-contained
+// already (CSS/JS/data all inlined), so a plain Blob download of outerHTML
+// reproduces it exactly, same filename convention as --html/epinga.py itself
+function downloadHtml() {{
+  const blob = new Blob(['<!DOCTYPE html>\\n' + document.documentElement.outerHTML], {{type: 'text/html'}});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url;
+  a.download = (RAW.base || 'epinga') + '_report.html';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }}
 
 // single-column comparator used by the sortChain - 'state' groups by the
@@ -1275,7 +1433,10 @@ function compareOneColumn(col, asc, a, b) {{
   if (col === 'state') {{
     const od = stateOrder(a) - stateOrder(b);
     if (od !== 0) return asc ? od : -od;
-    return asc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+    return asc ? hostCompare(a.name, b.name) : hostCompare(b.name, a.name);
+  }}
+  if (col === 'name') {{
+    return asc ? hostCompare(a.name, b.name) : hostCompare(b.name, a.name);
   }}
   const av = a[col], bv = b[col];
   const aNull = av === null, bNull = bv === null;
@@ -1324,7 +1485,7 @@ function applyFilter() {{
     if (sortChain.length === 0) {{
       // default: UP → FLAPPING → DOWN → NO-DNS, then by name
       const od = stateOrder(a) - stateOrder(b);
-      return od !== 0 ? od : a.name.localeCompare(b.name);
+      return od !== 0 ? od : hostCompare(a.name, b.name);
     }}
     return 0;   // every criterion in the chain tied
   }});
@@ -1406,7 +1567,7 @@ function renderBuckets() {{
   // as before, just reversible now.
   function byName(lst, suffix) {{
     const dir = bucketSortDir(suffix);
-    const s   = [...lst].sort((a, b) => hostLabel(a).localeCompare(hostLabel(b)));
+    const s   = [...lst].sort((a, b) => hostCompare(hostLabel(a), hostLabel(b)));
     return dir === 'desc' ? s.reverse() : s;
   }}
   function byChanges(lst, suffix) {{
@@ -1483,10 +1644,19 @@ function stateOrder(h) {{
 const defaultSorted = [...RAW.hosts].sort((a, b) => {{
   const od = stateOrder(a) - stateOrder(b);
   if (od !== 0) return od;
-  return a.name.localeCompare(b.name);
+  return hostCompare(a.name, b.name);
 }});
 renderTable(defaultSorted);
 renderBuckets();
+updateCards();
+// Download saves this DOM as a file - pointless (and confusing) when the report
+// is already sitting on disk as a local file; only useful when served over
+// HTTP (e.g. eping.py's GENERATE REPORT / /api/report), where there is no
+// local copy for the user to grab otherwise.
+if (location.protocol === 'file:') {{
+  document.getElementById('btnDownloadHtml').style.display = 'none';
+  document.getElementById('sepDownload').style.display = 'none';
+}}
 </script>
 </body>
 </html>"""
@@ -1648,7 +1818,7 @@ def main():
 
     # ── stream & analyse ──
     print('  Analysing…')
-    hosts, host_order, rows_read, comments = analyse(
+    hosts, host_order, rows_read, comments, infos = analyse(
         filename,
         filter_hosts=filter_hosts,
         ts_start=ts_start,
@@ -1663,6 +1833,21 @@ def main():
     # ── start capturing output for text file ──
     _buf        = _io.StringIO()
     sys.stdout  = _Tee(sys.__stdout__, _buf)
+
+    # ── info (settings snapshot/change timeline from eping.py's '#INFO#' rows -
+    # shown first, above COMMENTS - like the HTML report's Info section, placed
+    # above its Comments section) ──
+    hr('═')
+    header_line(f'INFO ({len(infos)})', '═')
+    hr('═')
+    print()
+    if infos:
+        for i in infos:
+            ts_str = i['ts'].strftime(TS_FMT) if i['ts'] else '?'
+            print(f'  {ts_str}  {col(i["text"], CCYAN)}')
+    else:
+        print(f'  {col("No info logged.", CDIM)}')
+    print()
 
     # ── comments (global timeline, shown once before the per-host detail - like
     # the HTML report's Comments section, placed above its Host List) ──
@@ -1698,7 +1883,7 @@ def main():
         fh.write(strip_ansi(_buf.getvalue()))
 
     # ── save HTML report ──
-    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments)
+    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments, infos)
     generate_html(report_data, html_path)
 
     # ── version check ──
