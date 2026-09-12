@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '2.13'
+version = '2.20'
 
 import re
 import os
@@ -814,9 +814,13 @@ tr.hidden {{ display: none; }}
                    flex: 1; user-select: none; }}
 .bucket-chevron {{ color: var(--dim); transition: transform .2s; display: inline-block; }}
 .bucket.collapsed .bucket-chevron {{ transform: rotate(-90deg); }}
+/* padding + a compensating negative margin enlarge the actual clickable hit
+   area well beyond the small arrow glyph itself, without shifting where the
+   glyph visually sits or nudging the layout around it */
 .sort-btn {{ color: var(--cyan); font-size: 11px; cursor: pointer; user-select: none;
-             letter-spacing: 0; margin-left: 2ch; }}
-.sort-btn:hover {{ color: var(--text); }}
+             letter-spacing: 0; display: inline-block; border-radius: 4px;
+             padding: 7px 9px; margin: -7px -9px -7px calc(2ch - 9px); }}
+.sort-btn:hover {{ color: var(--text); background: rgba(255,255,255,.08); }}
 .bucket.collapsed .bucket-body {{ display: none; }}
 .bucket-actions {{ display: flex; align-items: center; gap: 10px; }}
 .dl-btn {{
@@ -835,7 +839,7 @@ tr.hidden {{ display: none; }}
 .tag.flap  {{ background:rgba(210,153,34,.1); color:var(--orange); border-color:var(--orange); }}
 .tag.down  {{ background:rgba(248,81,73,.1);  color:var(--red);    border-color:var(--red); }}
 .tag.nodns {{ background:rgba(248,81,73,.1);  color:var(--red);    border-color:var(--red); }}
-.tag.flap .chg {{ font-size:10px; opacity:.7; }}
+.tag .chg {{ font-size:10px; opacity:.7; }}
 
 /* ── theme toggle ── */
 .theme-btn {{
@@ -939,10 +943,12 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
   <input id="search" type="text" placeholder="hostname/IP or /regex/ …" title="plain text or a regex (case-insensitive), matched against hostname and IP" oninput="applyFilter()">
   <label>Show:</label>
   <select id="stateFilter" onchange="applyFilter()">
-    <option value="">All states</option>
-    <option value="UP">UP</option>
-    <option value="FLAP">Flapping</option>
-    <option value="DOWN">DOWN</option>
+    <option value="">ALL HOSTS</option>
+    <option value="ALWAYS-UP">ALWAYS-UP</option>
+    <option value="UP+FLAP">UP+FLAPPING</option>
+    <option value="FLAP">FLAPPING-ONLY</option>
+    <option value="ALWAYS-DOWN">ALWAYS-DOWN</option>
+    <option value="DOWN+FLAP">DOWN+FLAPPING</option>
     <option value="NO-DNS">NO-DNS</option>
   </select>
   <label>Sort:</label>
@@ -999,6 +1005,11 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <span class="bucket-toggle" onclick="toggleBucket('hostlist')">
       <span class="bucket-chevron">&#9662;</span><span>Host List</span>
     </span>
+    <span class="bucket-actions"><span id="hostlistCount">0</span>
+      <button class="dl-btn" onclick="downloadHostListCsv()"
+              title="download the shown host list as CSV">&#8681; Download CSV</button>
+      <button class="dl-btn" onclick="copyBucketList(CURRENT_FILTERED, this)"
+              title="copy hostnames/IPs of the shown list to clipboard">Copy</button></span>
   </h3>
   <div class="bucket-body">
     <div class="tbl-wrap">
@@ -1448,6 +1459,10 @@ function compareOneColumn(col, asc, a, b) {{
   return asc ? av - bv : bv - av;
 }}
 
+// current filtered+sorted host list, kept in sync by applyFilter() - backs
+// the Host List section's Download CSV / Copy buttons (bucket buttons instead
+// take their own bucket's list directly, since those are fixed subsets)
+let CURRENT_FILTERED = [];
 function applyFilter() {{
   const qRaw  = document.getElementById('search').value;
   const state = document.getElementById('stateFilter').value;
@@ -1471,9 +1486,23 @@ function applyFilter() {{
         return false;
       }}
     }}
-    if (state === 'FLAP' && h.changes === 0) return false;
-    // UP/DOWN/NO-DNS filters must exclude flapping hosts, same as the buckets
-    if (state && state !== 'FLAP' && (h.state !== state || h.changes > 0)) return false;
+    // mirrors eping.py's live view-filter set (WEB_VIEW_MODES), minus
+    // CURRENTLY-UP/CURRENTLY-DOWN (no meaning for a static log) and EVER-UP
+    // (redundant with UP+FLAPPING here: changes>0 already implies it passed
+    // through UP at some point): ALWAYS-UP/-DOWN/NO-DNS = current state never
+    // changed (changes===0, same as the summary buckets above);
+    // UP+FLAPPING/DOWN+FLAPPING = currently in that state OR ever flapped -
+    // kept disjoint from NO-DNS, which stays its own category rather than
+    // folding into "down".
+    switch (state) {{
+      case '':            break;
+      case 'ALWAYS-UP':   if (h.state !== 'UP'     || h.changes > 0) return false; break;
+      case 'ALWAYS-DOWN': if (h.state !== 'DOWN'   || h.changes > 0) return false; break;
+      case 'NO-DNS':      if (h.state !== 'NO-DNS' || h.changes > 0) return false; break;
+      case 'FLAP':        if (h.changes === 0) return false; break;
+      case 'UP+FLAP':     if (!(h.state === 'UP'   || h.changes > 0)) return false; break;
+      case 'DOWN+FLAP':   if (!(h.state === 'DOWN' || h.changes > 0)) return false; break;
+    }}
     if (isDeduped(h)) return false;
     return true;
   }});
@@ -1490,6 +1519,8 @@ function applyFilter() {{
     return 0;   // every criterion in the chain tied
   }});
   document.getElementById('shownHosts').textContent = filtered.length + ' shown';
+  CURRENT_FILTERED = filtered;
+  document.getElementById('hostlistCount').textContent = filtered.length;
   renderTable(filtered);
 }}
 
@@ -1504,6 +1535,32 @@ function downloadBucketList(list, suffix) {{
   const a     = document.createElement('a');
   a.href      = url;
   a.download  = (RAW.base || 'epinga-export') + '-' + suffix + '-hosts.txt';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}}
+
+// CSV export of the Host List section, honouring the active search/state
+// filter and dedup mode (same set CURRENT_FILTERED/the table itself shows) -
+// unlike downloadBucketList() below (plain hostname/IP .txt for the fixed
+// bucket subsets), this carries the full per-host stats as real CSV columns.
+function csvField(v) {{
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}}
+function downloadHostListCsv() {{
+  const cols = ['name', 'ip', 'state', 'uptime', 'rtt_avg', 'rtt_min', 'rtt_max', 'changes'];
+  const header = ['HOST', 'IP', 'STATE', 'UPTIME_PCT', 'AVG_RTT', 'MIN_RTT', 'MAX_RTT', 'CHANGES'];
+  const lines  = [header.join(',')];
+  CURRENT_FILTERED.forEach(h => {{
+    lines.push(cols.map(c => csvField(h[c])).join(','));
+  }});
+  const blob = new Blob([lines.join('\\n') + '\\n'], {{type: 'text/csv'}});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = (RAW.base || 'epinga-export') + '-hostlist.csv';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1543,9 +1600,11 @@ function copyBucketList(list, btn) {{
 let BUCKET_LISTS = {{}};
 // per-bucket sort direction ('asc'/'desc'), keyed by suffix - survives re-renders
 // (showIp toggle, dedup change, collapse) since it lives outside renderBuckets().
+// every bucket starts descending (Z-A / highest change-count first) until the
+// user clicks its sort arrow to flip it.
 let BUCKET_SORT = {{}};
 function bucketSortDir(suffix) {{
-  return BUCKET_SORT[suffix] || (suffix === 'flap' ? 'desc' : 'asc');
+  return BUCKET_SORT[suffix] || 'desc';
 }}
 function toggleBucketSort(suffix, evt) {{
   if (evt) evt.stopPropagation();   // don't also collapse the bucket
@@ -1576,24 +1635,43 @@ function renderBuckets() {{
     return dir === 'desc' ? s.reverse() : s;
   }}
 
-  const up    = byName(pool.filter(h => h.changes === 0 && h.state === 'UP'), 'up');
-  const flap  = byChanges(pool.filter(h => h.changes > 0), 'flap');
-  const down  = byName(pool.filter(h => h.changes === 0 && h.state === 'DOWN'), 'down');
-  const nodns = byName(pool.filter(h => h.changes === 0 && h.state === 'NO-DNS'), 'nodns');
+  const up      = byName(pool.filter(h => h.changes === 0 && h.state === 'UP'), 'up');
+  const upflap  = byName(pool.filter(h => h.state === 'UP'   || h.changes > 0), 'upflap');
+  const flap    = byChanges(pool.filter(h => h.changes > 0), 'flap');
+  const down    = byName(pool.filter(h => h.changes === 0 && h.state === 'DOWN'), 'down');
+  const downflap= byName(pool.filter(h => h.state === 'DOWN' || h.changes > 0), 'downflap');
+  const nodns   = byName(pool.filter(h => h.changes === 0 && h.state === 'NO-DNS'), 'nodns');
 
-  function tags(lst, cls, labelFn) {{
+  // per-host tag colour: a flapping member is always orange regardless of
+  // which bucket it's shown in (matches the dedicated Flapping bucket), a
+  // non-flapping member keeps its actual current-state colour - matters for
+  // the UP+FLAPPING/DOWN+FLAPPING buckets, which mix both kinds of member.
+  function hostCls(h) {{
+    if (h.changes > 0) return 'flap';
+    if (h.state === 'UP')   return 'up';
+    if (h.state === 'DOWN') return 'down';
+    return 'nodns';
+  }}
+  function tags(lst, labelFn) {{
     if (!lst.length) return '<span style="color:var(--dim)">–</span>';
-    return lst.map(h => `<span class="tag ${{cls}}">${{labelFn(h)}}</span>`).join('');
+    return lst.map(h => `<span class="tag ${{hostCls(h)}}">${{labelFn(h)}}</span>`).join('');
   }}
 
+  // members that also flapped get the same "(N)" change-count suffix as the
+  // Flapping bucket - the up/down-only members among them stay plain
+  const flapSuffix = h => h.changes > 0 ? ` <span class="chg">(${{h.changes}})</span>` : '';
   const bkts = [
-    {{ title:'Always UP',    cls:'up',    list:up,    suffix:'up',
+    {{ title:'Always UP',      list:up,       suffix:'up',
        fn: h=>`${{hostLabel(h)}}` }},
-    {{ title:'Flapping',     cls:'flap',  list:flap,  suffix:'flap',
+    {{ title:'UP+FLAPPING',    list:upflap,   suffix:'upflap',
+       fn: h=>`${{hostLabel(h)}}${{flapSuffix(h)}}` }},
+    {{ title:'Flapping',       list:flap,     suffix:'flap',
        fn: h=>`${{hostLabel(h)}} <span class="chg">(${{h.changes}})</span>` }},
-    {{ title:'Always DOWN',  cls:'down',  list:down,  suffix:'down',
+    {{ title:'Always DOWN',    list:down,     suffix:'down',
        fn: h=>`${{hostLabel(h)}}` }},
-    {{ title:'No-DNS',       cls:'nodns', list:nodns, suffix:'nodns',
+    {{ title:'DOWN+FLAPPING',  list:downflap, suffix:'downflap',
+       fn: h=>`${{hostLabel(h)}}${{flapSuffix(h)}}` }},
+    {{ title:'No-DNS',         list:nodns,    suffix:'nodns',
        fn: h=>`${{hostLabel(h)}}` }},
   ];
   BUCKET_LISTS = {{}};
@@ -1621,7 +1699,7 @@ function renderBuckets() {{
                 ${{b.list.length ? '' : 'disabled'}}>Copy</button></span>
       </h3>
       <div class="bucket-body">
-        <div class="tag-list">${{tags(b.list, b.cls, b.fn)}}</div>
+        <div class="tag-list">${{tags(b.list, b.fn)}}</div>
       </div>
     </div>`).join('');
   wasCollapsed.forEach(s => {{
@@ -1646,6 +1724,11 @@ const defaultSorted = [...RAW.hosts].sort((a, b) => {{
   if (od !== 0) return od;
   return hostCompare(a.name, b.name);
 }});
+// initial render bypasses applyFilter() (no filter/search applied yet) - keep
+// CURRENT_FILTERED/hostlistCount in sync here too, otherwise Download CSV/Copy
+// stay empty and the count shows 0 until the user first touches the filter
+CURRENT_FILTERED = defaultSorted;
+document.getElementById('hostlistCount').textContent = defaultSorted.length;
 renderTable(defaultSorted);
 renderBuckets();
 updateCards();
