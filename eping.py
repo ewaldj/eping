@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.78'
+VERSION = '2.79'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2492,6 +2492,19 @@ document.getElementById('selDownload').onchange = function(){
   var label = this.options[this.selectedIndex].text;
   this.value = '';                              // reset - a select, not a toggle
   if(!what) return;
+  if(what === 'logfile'){
+    // plain navigation, not fetch+blob (see below) - the log can be large and
+    // fetch+blob buffers the whole response in JS before the <a> download even
+    // starts, so the browser shows no transfer/progress at all until it's fully
+    // in memory. A direct <a href> download is handled natively by the browser
+    // (progress in its downloads bar) - the server already sends the filename
+    // via Content-Disposition.
+    var a = document.createElement('a');
+    a.href = 'api/download/logfile';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    note('downloading ' + label + ' ...', true);
+    return;
+  }
   note('downloading ' + label + ' ...', true);
   fetch('api/download/' + what).then(function(r){
     if(!r.ok){
