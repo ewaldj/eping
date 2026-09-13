@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '2.87'
+VERSION = '3.02'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -103,8 +103,14 @@ WEB_VIEW_MODES = FILTER_MODES + [
     ('DOWN',           'DOWN',  'DWN'),
     ('DOWN+FLAPPING',  'DN+FL', 'D+F'),
     ('NO-DNS',         'NODNS', 'NDN'),
-    ('EVER-UP',        'E-UP',  'EUP'),
 ]
+# EVER-UP (former mode 9) was removed - redundant with UP+FLAPPING (mode 2), see
+# epinga.py's same removal for the identical reasoning.
+
+# [U] view picker (curses) shows WEB_VIEW_MODES in the same order as the web
+# gui's <select id="selFilter"> dropdown - NOT WEB_VIEW_MODES' own index order.
+# Each entry is a WEB_VIEW_MODES index; see filter_hosts() for what each mode does.
+VIEW_PICKER_ORDER = [0, 1, 3, 2, 4, 5, 6, 7, 8]
 
 # web gui only: unifies the previously independent PREFER HOSTNAME / IP ONLY
 # toggles into one mutually-exclusive dropdown (see the 'addr_mode' web command).
@@ -1030,15 +1036,15 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF, up_seen=None):
     """Host list for the given view mode - a snapshot, taken when the view switches.
     Modes 0-2 (ALL/UP/UP+FLAPPING) are also used by the CLI's [U] key and its web
-    gui keyboard-shortcut equivalent; modes 3-9 are reachable only through the web
+    gui keyboard-shortcut equivalent; modes 3-8 are reachable only through the web
     gui's view dropdown (set_filter) - see WEB_VIEW_MODES.
     'changes' (entry[5], the CH NO column) is 0 while a host has never left the state
     it was first observed in this run - that is what ALWAYS-UP/ALWAYS-DOWN mean here;
     it is a live-session fact, not the full-log uptime% epinga.py's report computes.
-    Mode 9 (EVER-UP) needs up_seen (the same set update_host_state() feeds and that
-    survives state changes for the whole run, unlike host_state's single-prior-state
-    'changes' counter) - a host can flip DOWN<->NO-DNS with changes>0 and still have
-    never been UP, so 'changes' alone cannot stand in for 'ever up'."""
+    up_seen is accepted for signature compatibility with its other callers (used
+    elsewhere for renaming/pruning bookkeeping) - no current mode reads it here;
+    EVER-UP (former mode 9, the only mode that did) was removed as redundant with
+    UP+FLAPPING (mode 2)."""
     if mode <= 0:
         return list(original_hosts_list)
     now_ref = now_local(tz_offset)
@@ -1065,8 +1071,6 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
         elif mode == 7 and (not is_up or is_flap):
             out.append(h)
         elif mode == 8 and 'NO-DNS' in entry[1]:
-            out.append(h)
-        elif mode == 9 and up_seen is not None and h in up_seen:
             out.append(h)
     return out
 
@@ -1111,10 +1115,10 @@ def apply_prefer_hostname(hosts_list, dns_ttl):
             if not (is_ip_host(h) and h in hostname_ips)]
 
 def apply_prefer_ip(hosts_list, dns_ttl):
-    """Web-gui-only mirror of apply_prefer_hostname: drop a hostname entry when its
-    resolved address is already covered by a raw-IP entry in the same list (the
-    opposite redundancy check - IP wins, hostname is dropped). dns_ttl controls how
-    long a hostname's resolved addresses are cached for this check - see
+    """[K] toggle / web addr_mode=2 mirror of apply_prefer_hostname: drop a hostname
+    entry when its resolved address is already covered by a raw-IP entry in the same
+    list (the opposite redundancy check - IP wins, hostname is dropped). dns_ttl
+    controls how long a hostname's resolved addresses are cached for this check - see
     _cached_all_ips()."""
     raw_ips = set(h for h in hosts_list if is_ip_host(h))
     if not raw_ips:
@@ -1545,13 +1549,11 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
 
         host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd, resolved_ip]
 
-        # up_seen tracks "seen UP at least once" for the whole run (used by the
-        # web gui's EVER-UP view, see filter_hosts()) - not gated on learning_done:
-        # with the default -up 0, learning_done is True from run 1, so gating this
-        # on it would leave up_seen permanently empty and EVER-UP would never match
-        # anything. The one-time learning-phase seeding read (active_hosts_list =
-        # sorted(up_seen, ...) below) only happens while up_check_runs > 0 and
-        # fires once, so up_seen continuing to grow afterward does not affect it.
+        # up_seen tracks "seen UP at least once" for the whole run - fed here so
+        # the one-time learning-phase seeding read (active_hosts_list =
+        # sorted(up_seen, ...) below) has data to read once up_check_runs reaches
+        # 0. Not gated on learning_done (with the default -up 0, learning_done is
+        # True from run 1, which would leave up_seen permanently empty otherwise).
         if 'UP' in new_state:
             up_seen.add(hostname)
 
@@ -2025,7 +2027,6 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="0">ALL HOSTS</option>
         <option value="1">CURRENTLY-UP</option>
         <option value="3">ALWAYS-UP</option>
-        <option value="9">EVER-UP</option>
         <option value="2">UP+FLAPPING</option>
         <option value="4">FLAPPING-ONLY</option>
         <option value="5">ALWAYS-DOWN</option>
@@ -2034,11 +2035,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="8">NO-DNS</option>
       </select>
       <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
-        <option value="0">SORT: ADDRESS</option>
-        <option value="1">SORT: UP/FLAP/DOWN</option>
-        <option value="2">SORT: DOWN/FLAP/UP</option>
-        <option value="3">SORT: FLAP/UP/DOWN</option>
-        <option value="4">SORT: FLAP/DOWN/UP</option>
+        <option value="0">ADDRESS</option>
+        <option value="1">UP/FLAP/DOWN</option>
+        <option value="2">DOWN/FLAP/UP</option>
+        <option value="3">FLAP/UP/DOWN</option>
+        <option value="4">FLAP/DOWN/UP</option>
       </select>
       <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
@@ -2969,6 +2970,34 @@ _report_lock = threading.Lock()   # guards _report_file_path (separate from web_
 _report_file_path = None          # last successfully generated report HTML, or None
 _report_running   = False         # guards against overlapping GENERATE REPORT runs
 
+def generate_epinga_report(logpath):
+    """Run epinga.py against logpath and produce an HTML report next to it -
+    core logic shared by the web gui's GENERATE REPORT (run_epinga_report, below)
+    and the curses [N] ANALYSE NOW key. Headless invocation: -q suppresses
+    epinga.py's own console output, --html writes the report, --no-version-check
+    skips a network call. stdin=DEVNULL makes epinga.py's end-of-run "open in
+    browser?" prompt fail fast with EOFError instead of blocking - harmless, the
+    report is already written to disk by that point.
+    Returns (report_path, None) on success, (None, error_message) on failure.
+    """
+    if not logpath or not os.path.exists(logpath) or os.path.getsize(logpath) == 0:
+        return None, 'no active logfile with data yet'
+    epinga_path = find_epinga_path()
+    if not epinga_path:
+        return None, 'epinga.py not found next to eping.py or in PATH'
+    report_path = os.path.splitext(logpath)[0] + '_report.html'
+    try:
+        subprocess.run([sys.executable, epinga_path, '-f', logpath, '-q',
+                        '--html', report_path, '--no-version-check'],
+                       stdin=subprocess.DEVNULL,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        return None, str(e)
+    if not os.path.exists(report_path) or os.path.getsize(report_path) == 0:
+        return None, 'epinga.py did not produce a report'
+    return report_path, None
+
+
 def run_epinga_report():
     """GENERATE REPORT (web gui): analyse the active logfile with epinga.py and
     make the resulting HTML available at /api/report.
@@ -2979,32 +3008,16 @@ def run_epinga_report():
     global _report_file_path, _report_running
     with web_lock:
         logpath = web_state.get('logfile') or ''
-    try:
-        if not logpath or not os.path.exists(logpath) or os.path.getsize(logpath) == 0:
-            raise RuntimeError('no active logfile with data yet')
-        epinga_path = find_epinga_path()
-        if not epinga_path:
-            raise RuntimeError('epinga.py not found next to eping.py or in PATH')
-        report_path = os.path.splitext(logpath)[0] + '_report.html'
-        # stdin=DEVNULL: epinga.py's end-of-run "open in browser?" prompt then
-        # fails fast with EOFError instead of blocking - harmless, the report
-        # is already written to disk by that point. --no-version-check avoids
-        # an unnecessary network call from a headless/background run.
-        subprocess.run([sys.executable, epinga_path, '-f', logpath, '-q',
-                        '--html', report_path, '--no-version-check'],
-                       stdin=subprocess.DEVNULL,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if not os.path.exists(report_path) or os.path.getsize(report_path) == 0:
-            raise RuntimeError('epinga.py did not produce a report')
+    report_path, err = generate_epinga_report(logpath)
+    if report_path:
         with _report_lock:
             _report_file_path = report_path
         with web_lock:
             web_state['report'] = {'status': 'ready', 'error': ''}
-    except Exception as e:
+    else:
         with web_lock:
-            web_state['report'] = {'status': 'error', 'error': str(e)}
-    finally:
-        _report_running = False
+            web_state['report'] = {'status': 'error', 'error': err}
+    _report_running = False
 
 
 class EpingWebHandler(http.server.BaseHTTPRequestHandler):
@@ -3273,6 +3286,26 @@ ADV_OPTIONS = [
 ]
 ADV_OPTION_KEYS = set(o[0] for o in ADV_OPTIONS)
 
+# [X] ADV OPTIONS panel (curses) friendly labels - ranges/units/steps stay in
+# ADV_OPTIONS above (single source of truth), only the display label lives here.
+# Same labels as ADV_OPTIONS_UI (web gui JS), kept in the same order.
+ADV_OPTION_LABELS = {
+    'backoff':         'BACKOFF',
+    'timeout':         'TIMEOUT',
+    'retries':         'RETRIES',
+    'down_retries':    'DOWN RETRIES',
+    'interval':        'INTERVAL',
+    'num_of_threads':  'THREADS',
+    'waittime':        'WAIT TIME',
+    'confirm':         'CONFIRM',
+    'rate_pps':        'RATE',
+    'flap_window':     'FLAP WINDOW',
+    'down_slices':     'DOWN SLICES',
+    'full_sweep':      'FULL SWEEP',
+    'dns_ttl':         'DNS TTL',
+    'tz_offset':       'TIMEZONE',
+}
+
 # keys kept as local variables inside run_web_mode() (not read from args each
 # round) - the caller applies the returned value itself, see run_web_mode()
 ADV_OPTION_LOCAL_KEYS = set(['down_retries', 'flap_window', 'confirm',
@@ -3493,6 +3526,8 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
         parts.append('-web')
     if args.web_view:
         parts.append('-wv')
+    if args.web_view_control:
+        parts.append('-wvc')
     parts.append('-port ' + str(args.web_port))
     parts.append('-bind ' + args.web_bind)
     return ' '.join(parts)
@@ -4107,6 +4142,7 @@ if __name__=='__main__':
     parser.add_argument('-ncs', '--no_check_source', action="store_true", dest='no_check_source', help="do not pass --check-source to fping (only needed for hosts replying from a different address)")
     parser.add_argument('-web', '--web', action="store_true", dest='web', help="start the web gui instead of the terminal (CLI) output")
     parser.add_argument('-wv', '--web_view', action="store_true", dest='web_view', help="CLI mode plus a read-only web view on --port (browser shows the same data, no controls)")
+    parser.add_argument('-wvc', '--web_view_control', action="store_true", dest='web_view_control', help="like --web_view, but the browser can also drive - both the terminal and the browser control the same run")
     parser.add_argument('-port', '--port', default=str(WEB_DEFAULT_PORT), dest='web_port', help="http port for --web and --web_view (default: " + str(WEB_DEFAULT_PORT) + ")")
     parser.add_argument('-bind', '--bind', default=WEB_DEFAULT_BIND, dest='web_bind', help="bind address for --web and --web_view (default: " + WEB_DEFAULT_BIND + " = all interfaces)")
 
@@ -4315,8 +4351,8 @@ if __name__=='__main__':
     if args.set_reference and up_hosts_check_int <= 0:
         error_handler("ERROR: --set_reference requires --up N (N > 0)")
 
-    # web gui port check (relevant with --web and --web_view)
-    if args.web or args.web_view:
+    # web gui port check (relevant with --web and --web_view/--web_view_control)
+    if args.web or args.web_view or args.web_view_control:
         try:
             web_port = int(args.web_port)
             if web_port < 1 or web_port > 65535:
@@ -4504,9 +4540,10 @@ if __name__=='__main__':
         # fallback: do nothing or log
         error_handler('ERROR: curs_set() is not supported by this terminal. Some terminal types (e.g. vt100) do not allow changing cursor visibility' )
 
-    if args.web_view:
+    if args.web_view or args.web_view_control:
         shown_bind = '127.0.0.1' if args.web_bind in ('0.0.0.0', '') else args.web_bind
-        print('\n read-only web view on http://' + shown_bind + ':' + str(args.web_port) + '\n')
+        kind = 'controllable' if args.web_view_control else 'read-only'
+        print('\n ' + kind + ' web view on http://' + shown_bind + ':' + str(args.web_port) + '\n')
         time.sleep(1.5)
 
     # stdscr = curses.initscr()
@@ -4523,6 +4560,11 @@ if __name__=='__main__':
         pass
     # disable Curser
     curses.curs_set(0)
+    # translate arrow/function-key escape sequences into curses.KEY_* constants
+    # (KEY_UP/DOWN/LEFT/RIGHT/PPAGE/NPAGE/HOME/END) - required for list_picker_dialog()
+    # and adv_options_dialog() navigation; without this getch() returns the raw
+    # ESC-prefixed byte sequence instead, which the ESC=cancel check swallows.
+    screen.keypad(True)
     # enable Color
     curses.start_color()
     # defing color pairs
@@ -4692,6 +4734,548 @@ if __name__=='__main__':
             screen.refresh()
         return result
 
+    def list_picker_dialog(title, items, current_idx):
+        """[V] view-filter picker (and reusable for any future single-choice list):
+        show items (list of display strings) in a bordered box, arrow keys/j/k move
+        the selection, ENTER confirms, ESC cancels. Returns the selected index, or
+        None on cancel. Scrolls when the list is taller than the terminal allows.
+        Pinging keeps running in the background, same as input_dialog()/
+        key_confirm_dialog()."""
+        rows, cols = screen.getmaxyx()
+        dialog_w  = min(50, max(30, cols - 4))
+        max_rows  = max(3, rows - 6)              # leave room for border/title/footer
+        visible   = min(len(items), max_rows)
+        dialog_h  = visible + 5
+        dialog_y  = max(0, rows // 2 - dialog_h // 2)
+        dialog_x  = max(0, cols // 2 - dialog_w // 2)
+
+        sel  = max(0, min(current_idx, len(items) - 1))
+        top  = max(0, min(sel - visible // 2, len(items) - visible))
+
+        screen.nodelay(False)
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        result = None
+        try:
+            while True:
+                if sel < top:
+                    top = sel
+                elif sel >= top + visible:
+                    top = sel - visible + 1
+                for dy in range(dialog_h):
+                    screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
+                screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
+                screen_output(dialog_y + 1, dialog_x, '│' + title.center(dialog_w - 2) + '│', 1, 1)
+                screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+                for row in range(visible):
+                    i = top + row
+                    if i >= len(items):
+                        line = ''
+                        is_sel = False
+                    else:
+                        is_sel = (i == sel)
+                        marker = '>' if is_sel else ' '
+                        line = marker + ' ' + items[i]
+                    screen_output(dialog_y + 3 + row, dialog_x,
+                                  '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│',
+                                  2 if is_sel else 1, 1 if is_sel else 0)
+                footer = ' [UP/DOWN]=move  [ENTER]=select  [ESC]=cancel'
+                screen_output(dialog_y + 3 + visible, dialog_x,
+                              '│' + footer[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+                screen_output(dialog_y + dialog_h - 1, dialog_x,
+                              '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
+                screen.refresh()
+
+                ch = screen.getch()
+                if ch in (curses.KEY_UP, ord('k')):
+                    sel = max(0, sel - 1)
+                elif ch in (curses.KEY_DOWN, ord('j')):
+                    sel = min(len(items) - 1, sel + 1)
+                elif ch == curses.KEY_PPAGE:
+                    sel = max(0, sel - visible)
+                elif ch == curses.KEY_NPAGE:
+                    sel = min(len(items) - 1, sel + visible)
+                elif ch == curses.KEY_HOME:
+                    sel = 0
+                elif ch == curses.KEY_END:
+                    sel = len(items) - 1
+                elif ch in (10, 13):                   # ENTER = confirm
+                    result = sel
+                    break
+                elif ch == 27:                          # ESC = cancel
+                    break
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
+
+        screen.nodelay(True)
+        screen.clear()
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+        return result
+
+    def adv_options_dialog():
+        """[X] ADV OPTIONS panel - curses equivalent of the web gui's options modal
+        (see ADV_OPTIONS_UI). UP/DOWN selects a row, LEFT/RIGHT (or -/+) steps its
+        value by its own step size, ENTER opens a free-text edit (also accepts
+        'auto'/'off' where that option supports it), 'D' resets the selected row
+        to its startup value, 'R' resets ALL rows, ESC/'X' closes. Applies live
+        via apply_adv_option() - same validation/effect as the web gui's
+        set_option/reset_options, just triggered one key at a time instead of a
+        dragged slider, so every accepted change is logged immediately (no
+        debounce needed - see run_web_mode()'s pending_info for why the web gui
+        needs one and curses does not)."""
+        global down_retries, flap_window, confirm, down_slices, full_sweep, tz_offset
+
+        def _assign_local(key, val):
+            global down_retries, flap_window, confirm, down_slices, full_sweep, tz_offset
+            if key == 'down_retries':
+                down_retries = val
+            elif key == 'flap_window':
+                flap_window = val
+            elif key == 'confirm':
+                confirm = val
+            elif key == 'down_slices':
+                down_slices = val
+            elif key == 'full_sweep':
+                full_sweep = val
+            elif key == 'tz_offset':
+                tz_offset = val
+
+        def _cur(key):
+            return current_option_value(key, args, backoff, timeout, retries,
+                                        down_retries, flap_window, confirm,
+                                        down_slices, full_sweep, tz_offset)
+
+        def _numeric(key, spec):
+            _, _kind, lo, _hi, _step, _unit, auto_sentinel = spec
+            val = _cur(key)
+            if val in ('', None) or val == 'auto':
+                return auto_sentinel if auto_sentinel is not None else lo
+            return val
+
+        def _display(key, spec):
+            _, kind, _lo, _hi, _step, unit, _auto_sentinel = spec
+            val = _cur(key)
+            if val in ('', None):
+                return 'OFF' if key == 'down_retries' else 'AUTO'
+            if val == 'auto':
+                return 'AUTO'
+            shown = ('%.2f' % val) if kind == 'float' else str(val)
+            return shown + (' ' + unit if unit else '')
+
+        def _apply(key, raw, log=True):
+            ok, val, msg = apply_adv_option(key, raw, args)
+            if ok and key in ADV_OPTION_LOCAL_KEYS:
+                _assign_local(key, val)
+            if ok and log:
+                write_log_info(args.disable_logging, logfile_file_name,
+                               format_option_cli(key, val), tz_offset)
+            return ok, val, msg
+
+        rows, cols = screen.getmaxyx()
+        dialog_w  = min(56, max(30, cols - 4))
+        max_rows  = max(3, rows - 8)
+        visible   = min(len(ADV_OPTIONS), max_rows)
+        dialog_h  = visible + 6
+        dialog_y  = max(0, rows // 2 - dialog_h // 2)
+        dialog_x  = max(0, cols // 2 - dialog_w // 2)
+
+        sel, top = 0, 0
+        screen.nodelay(False)
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        try:
+            while True:
+                if sel < top:
+                    top = sel
+                elif sel >= top + visible:
+                    top = sel - visible + 1
+                for dy in range(dialog_h):
+                    screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
+                screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
+                screen_output(dialog_y + 1, dialog_x, '│' + 'ADV OPTIONS'.center(dialog_w - 2) + '│', 1, 1)
+                screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+                for row in range(visible):
+                    i = top + row
+                    if i >= len(ADV_OPTIONS):
+                        continue
+                    r_spec  = ADV_OPTIONS[i]
+                    r_key   = r_spec[0]
+                    r_label = ADV_OPTION_LABELS.get(r_key, r_key.upper())
+                    r_value = _display(r_key, r_spec)
+                    is_sel  = (i == sel)
+                    line = (('>' if is_sel else ' ') + ' ' + r_label).ljust(dialog_w - 14) + r_value.rjust(12)
+                    screen_output(dialog_y + 3 + row, dialog_x,
+                                  '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│',
+                                  2 if is_sel else 1, 1 if is_sel else 0)
+                footer1 = ' [UP/DN]=select [+/-]=step [ENTER]=type'
+                footer2 = ' [D]=default [R]=reset all [ESC/X]=close'
+                screen_output(dialog_y + 3 + visible, dialog_x,
+                              '│' + footer1[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+                screen_output(dialog_y + 4 + visible, dialog_x,
+                              '│' + footer2[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+                screen_output(dialog_y + dialog_h - 1, dialog_x,
+                              '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
+                screen.refresh()
+
+                ch = screen.getch()
+                spec = ADV_OPTIONS[sel]
+                key  = spec[0]
+                label = ADV_OPTION_LABELS.get(key, key.upper())
+                _, kind, lo, hi, step, unit, _auto_sentinel = spec
+
+                if ch in (curses.KEY_UP,):
+                    sel = max(0, sel - 1)
+                elif ch in (curses.KEY_DOWN,):
+                    sel = min(len(ADV_OPTIONS) - 1, sel + 1)
+                elif ch == curses.KEY_PPAGE:
+                    sel = max(0, sel - visible)
+                elif ch == curses.KEY_NPAGE:
+                    sel = min(len(ADV_OPTIONS) - 1, sel + visible)
+                elif ch in (curses.KEY_LEFT, ord('-'), ord('_')):
+                    cur = _numeric(key, spec) - step
+                    cur = max(lo, min(hi, round(cur, 2) if kind == 'float' else int(cur)))
+                    ok, _val, msg = _apply(key, str(cur))
+                    if not ok:
+                        notice(msg.upper(), 3, 1.2)
+                elif ch in (curses.KEY_RIGHT, ord('+'), ord('=')):
+                    cur = _numeric(key, spec) + step
+                    cur = max(lo, min(hi, round(cur, 2) if kind == 'float' else int(cur)))
+                    ok, _val, msg = _apply(key, str(cur))
+                    if not ok:
+                        notice(msg.upper(), 3, 1.2)
+                elif ch in (10, 13):                    # ENTER = type exact value
+                    unit_txt = (' ' + unit) if unit else ''
+                    typed = input_dialog('SET ' + label,
+                                         label + ' (' + str(lo) + '..' + str(hi) + unit_txt + '):')
+                    if typed:
+                        ok, _val, msg = _apply(key, typed)
+                        if not ok:
+                            notice(msg.upper(), 3, 1.6)
+                elif ch in (ord('d'), ord('D')):        # reset THIS row to startup value
+                    _apply(key, str(start_option_values[key]))
+                elif ch in (ord('r'), ord('R')):        # reset ALL rows to startup values
+                    before = {k2: _cur(k2) for k2 in ADV_OPTION_KEYS}
+                    for k2, raw2 in start_option_values.items():
+                        _apply(k2, raw2, log=False)
+                    for k2 in ADV_OPTION_KEYS:
+                        after = _cur(k2)
+                        if after != before[k2]:
+                            write_log_info(args.disable_logging, logfile_file_name,
+                                           format_option_cli(k2, after), tz_offset)
+                elif ch in (27, ord('x'), ord('X')):
+                    break
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
+
+        screen.nodelay(True)
+        screen.clear()
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+
+    def apply_browser_command(bcmd, bval):
+        """--web_view_control: apply one command posted by the browser. Mirrors
+        run_web_mode()'s own per-cmd handling (same low-level functions:
+        filter_hosts/apply_prefer_*/apply_ip_only_on-off/apply_adv_option/
+        add_hosts_to/...), just applied to curses's own state variables instead
+        of run_web_mode()'s - the two loops stay independent implementations of
+        the same behaviour, same as the keyboard handlers below already are.
+        Keep in sync with both if either side's command handling changes.
+        'run_report' is not handled here - do_POST() runs it directly against
+        web_state['logfile'], no curses state needed (see run_epinga_report())."""
+        global filter_mode, active_hosts_list, original_hosts_list, prefer_hostname
+        global prefer_ip, ip_only_mode, ip_only_map, sort_mode, match_filter_re
+        global match_filter_text, gn_thread, gn_result, gn_candidates
+        global logfile_file_name, _logfile_file_name, down_retries, flap_window
+        global confirm, down_slices, full_sweep, tz_offset
+
+        if bcmd == 'up_only':
+            next_mode = (filter_mode + 1) % len(FILTER_MODES) if filter_mode < len(FILTER_MODES) else 0
+            next_list = filter_hosts(next_mode, original_hosts_list, host_state,
+                                     tz_offset, flap_window, up_seen)
+            if next_list or next_mode == 0:
+                filter_mode       = next_mode
+                active_hosts_list = (apply_prefer_ip(next_list, int(args.dns_ttl)) if prefer_ip
+                                     else apply_prefer_hostname(next_list, int(args.dns_ttl))
+                                     if prefer_hostname else next_list)
+                screen.clear()
+                write_log_info(args.disable_logging, logfile_file_name,
+                               'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
+            else:
+                notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[next_mode][0], 3)
+
+        elif bcmd == 'set_filter':
+            try:
+                target_mode = int(bval)
+            except (TypeError, ValueError):
+                target_mode = filter_mode
+            if 0 <= target_mode < len(WEB_VIEW_MODES) and target_mode != filter_mode:
+                target_list = filter_hosts(target_mode, original_hosts_list, host_state,
+                                           tz_offset, flap_window, up_seen)
+                if target_list or target_mode == 0:
+                    filter_mode       = target_mode
+                    active_hosts_list = (apply_prefer_ip(target_list, int(args.dns_ttl)) if prefer_ip
+                                         else apply_prefer_hostname(target_list, int(args.dns_ttl))
+                                         if prefer_hostname else target_list)
+                    screen.clear()
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
+                else:
+                    notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[target_mode][0], 3)
+
+        elif bcmd == 'addr_mode':
+            try:
+                target_mode = int(bval)
+            except (TypeError, ValueError):
+                target_mode = -1
+            cur_mode = (3 if ip_only_mode else (2 if prefer_ip else (1 if prefer_hostname else 0)))
+            if 0 <= target_mode < len(ADDR_MODE_LABELS) and target_mode != cur_mode:
+                if ip_only_mode:
+                    apply_ip_only_off(ip_only_map, original_hosts_list, active_hosts_list,
+                                      host_state, up_seen, down_streak)
+                    ip_only_map  = {}
+                    ip_only_mode = False
+                prefer_hostname = (target_mode == 1)
+                prefer_ip       = (target_mode == 2)
+                if target_mode == 3:
+                    ip_only_map, io_msg = apply_ip_only_on(
+                        original_hosts_list, active_hosts_list, host_state,
+                        up_seen, down_streak, int(args.dns_ttl))
+                    ip_only_mode = True
+                    notice(io_msg.upper(), 2)
+                else:
+                    base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
+                                             tz_offset, flap_window, up_seen)
+                    active_hosts_list = (apply_prefer_ip(base_list, int(args.dns_ttl)) if prefer_ip
+                                         else apply_prefer_hostname(base_list, int(args.dns_ttl))
+                                         if prefer_hostname else base_list)
+
+        elif bcmd == 'sort':
+            try:
+                sort_mode = int(bval) % len(SORT_MODES)
+            except ValueError:
+                sort_mode = 0
+            screen.clear()
+
+        elif bcmd == 'add':
+            add_stats = {}
+            new_hosts = parse_host_input(bval, add_stats)
+            if not new_hosts:
+                notice((add_stats.get('error') or ('invalid host: ' + bval)).upper(), 3)
+            else:
+                added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
+                if err:
+                    notice(err.upper(), 3)
+                elif added:
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   host_spec_cli('ADD', bval), tz_offset)
+
+        elif bcmd == 'del':
+            del_stats = {}
+            del_hosts = parse_host_input(bval, del_stats)
+            if not del_hosts:
+                notice((del_stats.get('error') or ('invalid host: ' + bval)).upper(), 3)
+            else:
+                removed = remove_hosts_from(del_hosts, active_hosts_list,
+                                            original_hosts_list, host_state)
+                up_seen.difference_update(del_hosts)
+                for _h in del_hosts:
+                    down_streak.pop(_h, None)
+                forget_names(del_hosts)
+                notice('REMOVED ' + str(removed) + ' HOST(S)', 2 if removed else 3)
+                if removed:
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   host_spec_cli('DEL', bval), tz_offset)
+
+        elif bcmd == 'upload':
+            up_stats  = {}
+            new_hosts = parse_hosts_from_text(bval, up_stats)
+            if not new_hosts and up_stats.get('skipped'):
+                notice(('UPLOAD: MASK MUST BE /%d..%d: %s'
+                       % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0])).upper(), 3)
+            elif not new_hosts:
+                notice('UPLOAD: NO VALID HOST FOUND IN FILE', 3)
+            else:
+                added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
+                if err:
+                    notice(('UPLOAD ' + err).upper(), 3)
+                else:
+                    msg = 'UPLOADED: ' + str(added) + ' NEW HOST(S) OF ' + str(len(new_hosts)) + ' FOUND'
+                    notice(msg, 2)
+                    if added:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       'ADD -f (uploaded, ' + str(added) + ' host(s))', tz_offset)
+
+        elif bcmd == 'set_ref':
+            dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
+            prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
+            original_hosts_list[:] = list(active_hosts_list)
+            filter_mode = 0
+            screen.clear()
+            write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
+
+        elif bcmd == 'clear':
+            active_hosts_list[:]   = []
+            original_hosts_list[:] = []
+            host_state.clear()
+            up_seen.clear()
+            down_streak.clear()
+            _dns_cache.clear()
+            _addr_redundancy_cache.clear()
+            filter_mode = 0
+            screen.clear()
+            write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
+
+        elif bcmd == 'zero':
+            for _entry in host_state.values():
+                _entry[5] = 0
+                _entry[6] = ''
+            notice('CHANGE COUNTERS RESET', 2)
+            write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
+
+        elif bcmd == 'get_names':
+            if gn_thread is not None and gn_thread.is_alive():
+                notice('GET NAMES: ALREADY RUNNING', 3)
+            else:
+                gn_thread, gn_result, gn_candidates = get_names_start(
+                    original_hosts_list, int(args.dns_ttl))
+                if gn_thread is None:
+                    notice('GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
+                else:
+                    notice('GET NAMES: RUNNING IN BACKGROUND (%d HOST(S))'
+                          % len(gn_candidates), 2)
+                    write_log_info(args.disable_logging, logfile_file_name, '-gn', tz_offset)
+
+        elif bcmd == 'match_filter':
+            bval = bval.strip()
+            if not bval:
+                match_filter_re, match_filter_text = None, ''
+                notice('MATCH FILTER: OFF', 2)
+            else:
+                try:
+                    new_re = re.compile(bval, re.IGNORECASE)
+                except re.error as e:
+                    notice(('INVALID REGEX: ' + str(e)).upper(), 3)
+                else:
+                    match_filter_re, match_filter_text = new_re, bval
+                    notice('MATCH FILTER: ON', 2)
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+
+        elif bcmd == 'add_comment':
+            bval = bval.strip()
+            if not args.disable_logging:
+                notice('LOGGING IS OFF - COMMENT NOT SAVED', 3)
+            elif bval:
+                write_log_comment(args.disable_logging, logfile_file_name, bval, tz_offset)
+                notice('COMMENT LOGGED', 2)
+
+        elif bcmd == 'reset_log':
+            choice = bval.strip().lower()
+            if not args.disable_logging:
+                new_name = new_logfile_name(tz_offset)
+                if reset_logfile(new_name):
+                    args.disable_logging = True
+                    logfile_file_name  = new_name
+                    _logfile_file_name = new_name
+                    notice('LOGGING STARTED: ' + logfile_file_name, 2)
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   build_cli_snapshot(args, backoff, timeout, retries, down_retries,
+                                                      flap_window, confirm, down_slices, full_sweep,
+                                                      tz_offset), tz_offset)
+                else:
+                    notice('FAILED TO START LOGGING', 3)
+            elif choice == 'y':
+                if reset_logfile(logfile_file_name):
+                    notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   build_cli_snapshot(args, backoff, timeout, retries, down_retries,
+                                                      flap_window, confirm, down_slices, full_sweep,
+                                                      tz_offset), tz_offset)
+                else:
+                    notice('FAILED TO RESET LOGFILE', 3)
+            elif choice == 'new':
+                new_name = new_logfile_name(tz_offset)
+                if reset_logfile(new_name):
+                    logfile_file_name  = new_name
+                    _logfile_file_name = new_name
+                    notice('NEW LOGFILE: ' + logfile_file_name, 2)
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   build_cli_snapshot(args, backoff, timeout, retries, down_retries,
+                                                      flap_window, confirm, down_slices, full_sweep,
+                                                      tz_offset), tz_offset)
+                else:
+                    notice('FAILED TO CREATE NEW LOGFILE', 3)
+            else:
+                notice('RESET CANCELLED', 3)
+
+        elif bcmd == 'set_option':
+            key, _, raw = str(bval).partition('=')
+            ok, val, msg = apply_adv_option(key, raw, args)
+            if ok and key in ADV_OPTION_LOCAL_KEYS:
+                if key == 'down_retries':   down_retries = val
+                elif key == 'flap_window':  flap_window = val
+                elif key == 'confirm':      confirm = val
+                elif key == 'down_slices':  down_slices = val
+                elif key == 'full_sweep':   full_sweep = val
+                elif key == 'tz_offset':    tz_offset = val
+            if ok:
+                write_log_info(args.disable_logging, logfile_file_name,
+                               format_option_cli(key, val), tz_offset)
+            else:
+                notice(msg.upper(), 3, 1.2)
+
+        elif bcmd == 'reset_options':
+            before = {k: current_option_value(k, args, backoff, timeout, retries, down_retries,
+                                              flap_window, confirm, down_slices, full_sweep, tz_offset)
+                     for k in ADV_OPTION_KEYS}
+            for key, raw in start_option_values.items():
+                ok, val, _ = apply_adv_option(key, raw, args)
+                if ok and key in ADV_OPTION_LOCAL_KEYS:
+                    if key == 'down_retries':   down_retries = val
+                    elif key == 'flap_window':  flap_window = val
+                    elif key == 'confirm':      confirm = val
+                    elif key == 'down_slices':  down_slices = val
+                    elif key == 'full_sweep':   full_sweep = val
+                    elif key == 'tz_offset':    tz_offset = val
+            for key in ADV_OPTION_KEYS:
+                after = current_option_value(key, args, backoff, timeout, retries, down_retries,
+                                             flap_window, confirm, down_slices, full_sweep, tz_offset)
+                if after != before[key]:
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   format_option_cli(key, after), tz_offset)
+
+        elif bcmd == 'exit':
+            # same effect/order as the keyboard [E] EXIT handler further below -
+            # kept as its own copy here (not a shared call) since the keyboard
+            # handler's control flow can't safely be invoked from mid-loop.
+            with web_lock:
+                web_state['stopped'] = True
+                web_state['message'] = 'stopped'
+            time.sleep(1.5)
+            curses.endwin()
+            print('THX for using eping.py v' + VERSION + '  -  www.jeitler.cc')
+            if remote_version and remote_version > version:
+                print_update_notice(remote_version)
+            maybe_run_epinga(logfile_file_name, args.disable_logging)
+            sys.stdout.flush()
+            os._exit(0)
+
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+            web_sync()
+
     def notice(text, color=3, seconds=1.4):
         """Show a short message box in the middle of the screen."""
         rows, cols = screen.getmaxyx()
@@ -4711,6 +5295,10 @@ if __name__=='__main__':
 
     # precompute values used in hot loop
     tz_offset = int(args.time_zone_adjust)
+    # [X] ADV OPTIONS: snapshot of every startup value, for RESET TO DEFAULT -
+    # same reasoning as run_web_mode()'s start_option_values.
+    start_option_values = adv_option_values(args, down_retries, flap_window,
+                                            confirm, down_slices, full_sweep, tz_offset)
 
     down_streak = {}
     last_draw_time = 0.0
@@ -4719,6 +5307,8 @@ if __name__=='__main__':
     have_data      = False
     filter_mode    = 0
     prefer_hostname = bool(args.prefer_hostname)
+    prefer_ip      = False   # [K] PREFER IP ADDRESS - curses mirror of the web
+                              # addr_mode dropdown's 3rd option (apply_prefer_ip)
     ip_only_mode   = False
     ip_only_map    = {}
     sort_mode      = 0
@@ -4733,6 +5323,8 @@ if __name__=='__main__':
     gn_thread      = None   # [G] background PTR lookup - see get_names_start/finish
     gn_result      = None
     gn_candidates  = []
+    report_thread  = None   # [N] ANALYSE NOW - background epinga.py report generation
+    report_result  = None   # mutable [(path, err)] set by the thread when done
     match_filter_re   = None   # [M] display-only regex filter - active_hosts_list unaffected
     match_filter_text = ''
 
@@ -4748,18 +5340,19 @@ if __name__=='__main__':
     active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                          if prefer_hostname else active_hosts_list)
 
-    # --web_view: read only browser view next to the terminal. The curses loop stays the
-    # only driver - one process, one scan, two ways to look at it. Two separate eping
-    # processes would mean two fping groups stealing each other's replies.
-    if args.web_view:
-        web_readonly = True
+    # --web_view/--web_view_control: browser view next to the terminal, read only
+    # or (with -wvc) also controllable. The curses loop stays the only driver -
+    # one process, one scan, two ways to look at and/or drive it. Two separate
+    # eping processes would mean two fping groups stealing each other's replies.
+    if args.web_view or args.web_view_control:
+        web_readonly = not args.web_view_control
         with web_lock:
             web_state['version']  = version
-            web_state['readonly'] = True
+            web_state['readonly'] = web_readonly
         start_web_server(args.web_bind, int(args.web_port))
 
     def web_sync(msg=''):
-        if not args.web_view:
+        if not (args.web_view or args.web_view_control):
             return
         # mirror the same fix as run_web_mode(): HOSTS-UP/DOWN in the web view should
         # be the totals for the current view, not narrowed by the [M] display filter
@@ -4768,12 +5361,17 @@ if __name__=='__main__':
                                    tz_offset, flap_window)
         total_up   = sum(1 for e in total_list if 'UP' in e[1])
         total_down = len(total_list) - total_up
+        # ADV OPTIONS current values - only actually looked at by the browser's
+        # options modal in -wvc (harmless, cheap dict build otherwise)
+        opts = adv_option_values(args, down_retries, flap_window, confirm,
+                                 down_slices, full_sweep, tz_offset)
         web_publish(display_list, run_counter, run_time, total_up, total_down,
                     filter_mode, learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available_cli,
                     tz_offset, msg, used_scan, sort_mode,
-                    (3 if ip_only_mode else (1 if prefer_hostname else 0)),
-                    match_filter_text, original_hosts_list, hosts_shown=len(display_list))
+                    (3 if ip_only_mode else (2 if prefer_ip else (1 if prefer_hostname else 0))),
+                    match_filter_text, original_hosts_list, hosts_shown=len(display_list),
+                    options=opts)
 
 
     def rebuild_display():
@@ -4899,7 +5497,8 @@ if __name__=='__main__':
 
         # key bar - four label sets so it still fits on narrow terminals. [U] and [O]
         # show the view and the order that are active right now.
-        fm = FILTER_MODES[filter_mode]
+        fm = WEB_VIEW_MODES[filter_mode]   # filter_mode can be any WEB_VIEW_MODES
+                                            # index now - see [V] VIEW_PICKER
         sm = SORT_MODES[sort_mode]
         # order: U, M, A, D, F, O, T, S, Z, C, P, I, G, R, E - grouped by how often
         # each is used, rather than the historical add-order
@@ -4908,25 +5507,25 @@ if __name__=='__main__':
         l_tiny  = ' [L]RSTLOG '         if args.disable_logging else ' [L]STARTLOG '
         keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=MATCH FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
-                      ' [C]=CLEAR ALL ', ' [P]=PREFER HOST ', ' [I]=IP ONLY ', ' [G]=GET NAMES ',
-                      ' [R]=SCREEN REFRESH ', l_full, ' [E]=EXIT ']
+                      ' [C]=CLEAR ALL ', ' [P]=ADDR MODE ', ' [X]=ADV OPTIONS ',
+                      ' [N]=ANALYSE NOW ', ' [G]=GET NAMES ', ' [R]=SCREEN REFRESH ', l_full, ' [E]=EXIT ']
         keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
                       ' [O]=' + sm[1] + ' ', ' [T]=COMMENT ', ' [S]=SET REF ', ' [Z]=ZERO ',
-                      ' [C]=CLEAR ', ' [P]=PREFER ', ' [I]=IP ONLY ', ' [G]=NAMES ',
-                      ' [R]=REFRESH ', l_short, ' [E]=EXIT ']
+                      ' [C]=CLEAR ', ' [P]=ADDR ', ' [X]=ADV OPT ',
+                      ' [N]=ANALYSE ', ' [G]=NAMES ', ' [R]=REFRESH ', l_short, ' [E]=EXIT ']
         keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
                       ' [O]' + sm[1] + ' ', ' [T]CMT ', ' [S]REF ', ' [Z]ZERO ',
-                      ' [C]CLR ', ' [P]PREF ', ' [I]IP ', ' [G]NAME ',
-                      ' [R]RFR ', l_tiny, ' [E]EXIT ']
-        keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' I ', ' G ', ' R ', ' L ', ' E ']
+                      ' [C]CLR ', ' [P]ADDR ', ' [X]ADV ',
+                      ' [N]ANLZ ', ' [G]NAME ', ' [R]RFR ', l_tiny, ' [E]EXIT ']
+        keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' X ', ' N ', ' G ', ' R ', ' L ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
         key_col = 2
         for idx, label in enumerate(keys):
             highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and match_filter_re is not None)
-                        or (idx == 5 and sort_mode != 0) or (idx == 10 and prefer_hostname)
-                        or (idx == 11 and ip_only_mode))
+                        or (idx == 5 and sort_mode != 0)
+                        or (idx == 10 and (prefer_hostname or prefer_ip)))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)
             key_col += len(label)
 
@@ -5015,6 +5614,23 @@ if __name__=='__main__':
                 screen.refresh()
             notice(gn_msg.upper(), 2, 3)
 
+        # --- [N] ANALYSE NOW: apply the epinga.py report result once it's done ---
+        if report_thread is not None and not report_thread.is_alive():
+            _rpt_path, _rpt_err = report_result[0]
+            report_thread = None
+            if _rpt_path:
+                notice('REPORT READY: ' + _rpt_path, 2, 3)
+            else:
+                notice('ANALYSIS FAILED: ' + str(_rpt_err).upper(), 3, 3)
+
+        # --- --web_view_control: drain commands posted by the browser ---
+        if args.web_view_control:
+            with web_lock:
+                _browser_cmds = list(web_commands)
+                del web_commands[:]
+            for _bcmd, _bval in _browser_cmds:
+                apply_browser_command(_bcmd, _bval)
+
         # --- keyboard: drain all buffered keys ---
         cmd = None
         while True:
@@ -5024,7 +5640,7 @@ if __name__=='__main__':
             if k == curses.KEY_RESIZE:
                 screen.clear()          # geometry handled below, not a command
             elif k in (ord('u'), ord('U')):
-                cmd = 'UP_ONLY'
+                cmd = 'VIEW_PICKER'
             elif k in (ord('a'), ord('A')):
                 cmd = 'ADD'
             elif k in (ord('f'), ord('F')):
@@ -5038,9 +5654,11 @@ if __name__=='__main__':
             elif k in (ord('o'), ord('O')):
                 cmd = 'ORDER'
             elif k in (ord('p'), ord('P')):
-                cmd = 'PREFER_HOSTNAME'
-            elif k in (ord('i'), ord('I')):
-                cmd = 'IP_ONLY'
+                cmd = 'ADDR_MODE_PICKER'
+            elif k in (ord('x'), ord('X')):
+                cmd = 'ADV_OPTIONS'
+            elif k in (ord('n'), ord('N')):
+                cmd = 'ANALYSE_NOW'
             elif k in (ord('g'), ord('G')):
                 cmd = 'GET_NAMES'
             elif k in (ord('m'), ord('M')):
@@ -5074,39 +5692,77 @@ if __name__=='__main__':
             filter_mode = 0
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
-        elif cmd == 'UP_ONLY':
-            next_mode = (filter_mode + 1) % len(FILTER_MODES)
-            next_list = filter_hosts(next_mode, original_hosts_list, host_state,
-                                     tz_offset, flap_window, up_seen)
-            if next_list or next_mode == 0:
-                filter_mode       = next_mode
-                active_hosts_list = (apply_prefer_hostname(next_list, int(args.dns_ttl))
-                                     if prefer_hostname else next_list)
-                screen.clear()
-                write_log_info(args.disable_logging, logfile_file_name,
-                               'FILTER ' + FILTER_MODES[filter_mode][0], tz_offset)
+        elif cmd == 'VIEW_PICKER':
+            # [U] opens the view picker directly - the curses equivalent of the
+            # web gui's <select id="selFilter"> (same pattern as [O]/[P]: one
+            # key, one menu). Reaches all of WEB_VIEW_MODES, in the same display
+            # order as the web dropdown - see VIEW_PICKER_ORDER above.
+            items    = [WEB_VIEW_MODES[m][0] for m in VIEW_PICKER_ORDER]
+            cur_pos  = (VIEW_PICKER_ORDER.index(filter_mode)
+                       if filter_mode in VIEW_PICKER_ORDER else 0)
+            picked   = list_picker_dialog('SELECT VIEW', items, cur_pos)
+            if picked is not None:
+                new_mode = VIEW_PICKER_ORDER[picked]
+                new_list = filter_hosts(new_mode, original_hosts_list, host_state,
+                                        tz_offset, flap_window, up_seen)
+                if new_list or new_mode == 0:
+                    filter_mode       = new_mode
+                    active_hosts_list = (apply_prefer_ip(new_list, int(args.dns_ttl)) if prefer_ip
+                                         else apply_prefer_hostname(new_list, int(args.dns_ttl))
+                                         if prefer_hostname else new_list)
+                    screen.clear()
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
+                else:
+                    notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[new_mode][0], 3)
+        elif cmd == 'ADV_OPTIONS':
+            adv_options_dialog()
+        elif cmd == 'ANALYSE_NOW':
+            # [N] curses equivalent of the web gui's GENERATE REPORT button -
+            # runs epinga.py against the current logfile in the background (see
+            # generate_epinga_report()) so the ping loop is not blocked while it
+            # runs; the result is picked up by the poll block above once done.
+            if not args.disable_logging:            # True means 'logging enabled', see -dl
+                notice('LOGGING IS DISABLED - NO LOG TO ANALYSE', 3)
+            elif report_thread is not None and report_thread.is_alive():
+                notice('ANALYSIS ALREADY RUNNING...', 3)
             else:
-                notice('NO HOSTS MATCH ' + FILTER_MODES[next_mode][0], 3)
-        elif cmd == 'PREFER_HOSTNAME':
-            prefer_hostname = not prefer_hostname
-            base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
-                                     tz_offset, flap_window, up_seen)
-            active_hosts_list = (apply_prefer_hostname(base_list, int(args.dns_ttl))
-                                 if prefer_hostname else base_list)
-            notice('PREFER HOSTNAME: ' + ('ON' if prefer_hostname else 'OFF'), 2)
-        elif cmd == 'IP_ONLY':
-            if not ip_only_mode:
-                ip_only_map, io_msg = apply_ip_only_on(
-                    original_hosts_list, active_hosts_list, host_state,
-                    up_seen, down_streak, int(args.dns_ttl))
-                ip_only_mode = True
-            else:
-                io_msg = apply_ip_only_off(ip_only_map, original_hosts_list,
-                                           active_hosts_list, host_state,
-                                           up_seen, down_streak)
-                ip_only_map = {}
-                ip_only_mode = False
-            notice(io_msg.upper(), 2)
+                report_result = [None]
+                def _report_worker(_holder=report_result, _logpath=logfile_file_name):
+                    _holder[0] = generate_epinga_report(_logpath)
+                report_thread = threading.Thread(target=_report_worker, daemon=True)
+                report_thread.start()
+                notice('ANALYSING LOGFILE IN BACKGROUND...', 2, 1.4)
+        elif cmd == 'ADDR_MODE_PICKER':
+            # [P] full address-mode picker - the curses equivalent of the web
+            # gui's addr_mode dropdown (see ADDR_MODE_LABELS). [K]/[I] remain as
+            # quick individual toggles, same relationship as [U]/[V] for views.
+            cur_mode = (3 if ip_only_mode else (2 if prefer_ip else (1 if prefer_hostname else 0)))
+            items    = [l.upper() for l in ADDR_MODE_LABELS]
+            picked   = list_picker_dialog('SELECT ADDRESS MODE', items, cur_mode)
+            if picked is not None and picked != cur_mode:
+                if ip_only_mode:
+                    # leaving IP ONLY: restore the renamed hostnames first
+                    io_msg = apply_ip_only_off(ip_only_map, original_hosts_list,
+                                               active_hosts_list, host_state,
+                                               up_seen, down_streak)
+                    ip_only_map  = {}
+                    ip_only_mode = False
+                prefer_hostname = (picked == 1)
+                prefer_ip       = (picked == 2)
+                if picked == 3:
+                    ip_only_map, io_msg = apply_ip_only_on(
+                        original_hosts_list, active_hosts_list, host_state,
+                        up_seen, down_streak, int(args.dns_ttl))
+                    ip_only_mode = True
+                    notice(io_msg.upper(), 2)
+                else:
+                    base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
+                                             tz_offset, flap_window, up_seen)
+                    active_hosts_list = (apply_prefer_ip(base_list, int(args.dns_ttl)) if prefer_ip
+                                         else apply_prefer_hostname(base_list, int(args.dns_ttl))
+                                         if prefer_hostname else base_list)
+                    notice('ADDRESS MODE: ' + items[picked], 2)
         elif cmd == 'GET_NAMES':
             if gn_thread is not None and gn_thread.is_alive():
                 notice('GET NAMES: ALREADY RUNNING', 3)
@@ -5141,8 +5797,14 @@ if __name__=='__main__':
                 screen.refresh()
                 notice('MATCH FILTER: OFF', 2)
         elif cmd == 'ORDER':
-            sort_mode = (sort_mode + 1) % len(SORT_MODES)
-            screen.clear()
+            # [O] opens the sort-order picker directly - the curses equivalent
+            # of the web gui's <select id="sortSel"> (same pattern as [P] for
+            # address mode: one key, one menu, no separate cycle-only key).
+            items  = [m[0] for m in SORT_MODES]
+            picked = list_picker_dialog('SELECT SORT ORDER', items, sort_mode)
+            if picked is not None:
+                sort_mode = picked
+                screen.clear()
         elif cmd == 'ADD':
             value     = input_dialog(' ADD HOSTS ',
                                      ' IPv4/IPv6, hostname, IPv4 CIDR /%d../%d, IPv6 /128 or ip1-ip2:'
@@ -5300,7 +5962,8 @@ if __name__=='__main__':
                 active_hosts_list = sorted(up_seen, key=lambda h: (
                     int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')
                 ))
-                active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
+                active_hosts_list = (apply_prefer_ip(active_hosts_list, int(args.dns_ttl)) if prefer_ip
+                                     else apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
                                      if prefer_hostname else active_hosts_list)
                 if args.set_reference:
                     # -setref: same as pressing [S]/SET REFERENCE once learning ends
