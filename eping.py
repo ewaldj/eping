@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.02'
+VERSION = '3.03'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2045,7 +2045,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
       <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
       <select id="selAddrMode" title="prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
-        <option value="0">PROVIDED IP/NAME</option>
+        <option value="0">PROVIDED IP & NAME</option>
         <option value="1">PREFER HOSTNAME</option>
         <option value="2">PREFER IP ADDRESS</option>
         <option value="3">SWITCH TO IP ONLY</option>
@@ -2156,7 +2156,7 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
    slider (cheapest to give up, rarely touched) shrinks first; buttons/selects
    only shrink too if that alone isn't enough. */
 var COMPACT_LABELS = [
-  {sel:'#selAddrMode option[value="0"]', full:'PROVIDED IP/NAME', short:'IP/NAME MODE'},
+  {sel:'#selAddrMode option[value="0"]', full:'PROVIDED IP & NAME', short:'IP/NAME MODE'},
   {sel:'#btnGenReport',                  full:'GENERATE REPORT',  short:'REPORT'}
 ];
 // stage 3 only - the least-used labels, shortened further once stage 2 alone
