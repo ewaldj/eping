@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.18'
+VERSION = '3.19'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2058,6 +2058,19 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="chooseReportModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>CHOOSE LOGFILE</h3>
+      <p>Pick a *.csv log file in this eping.py's working directory to analyse with epinga.py.</p>
+      <div id="chooseReportList" style="width:100%;max-height:220px;overflow-y:auto;
+           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
+           padding:6px 10px;box-sizing:border-box"></div>
+      <div class="modal-buttons">
+        <button id="modalBtnChooseReportGenerate">GENERATE</button>
+        <button id="modalBtnChooseReportCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
   <div id="advOptionsModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>ADV OPTIONS</h3>
@@ -2163,7 +2176,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
      <span class="sep">&nbsp;|&nbsp;</span>
      <button id="btnUpload" title="load hosts from a text/CSV file">ADD FILE</button>
      <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
-     <button id="btnGenReport" title="analyse the active logfile with epinga.py and open the report in a new tab">GENERATE REPORT</button>
+     <select id="selGenReport" title="analyse a logfile with epinga.py and open the report in a new tab">
+       <option value="" selected>GENERATE REPORT</option>
+       <option value="active">ACTIVE LOGFILE</option>
+       <option value="choose">CHOOSE LOGFILE</option>
+      </select>
     </span>
    </span>
   </div>
@@ -2234,7 +2251,7 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
    only shrink too if that alone isn't enough. */
 var COMPACT_LABELS = [
   {sel:'#selAddrMode option[value="0"]', full:'HOSTNAME & IP', short:'IP/NAME MODE'},
-  {sel:'#btnGenReport',                  full:'GENERATE REPORT',  short:'REPORT'}
+  {sel:'#selGenReport option[value=""]', full:'GENERATE REPORT',  short:'REPORT'}
 ];
 // stage 3 only - the least-used labels, shortened further once stage 2 alone
 // still isn't enough (very small window)
@@ -2739,7 +2756,7 @@ var REPORT_WAIT_HTML = '<!doctype html><html><head><meta charset="UTF-8">'
   + 'Generating report with epinga.py &hellip;<br>'
   + '<small style="color:#5d6b5d">please wait - this tab will update automatically</small>'
   + '</div></body></html>';
-document.getElementById('btnGenReport').onclick = function(){
+function runReport(value){
   // window.open() must happen synchronously in the click handler or browsers
   // treat it as a popup and block it - open a blank tab now, fill it in once
   // poll() sees the report become ready (or close it again on error).
@@ -2748,7 +2765,54 @@ document.getElementById('btnGenReport').onclick = function(){
     reportWindow.document.write(REPORT_WAIT_HTML);
     reportWindow.document.close();
   }
-  post('run_report', '');
+  post('run_report', value || '');
+}
+document.getElementById('selGenReport').onchange = function(){
+  var what = this.value;
+  this.value = '';                              // reset - a select, not a toggle
+  if(what === 'active'){ runReport(''); }
+  else if(what === 'choose'){ openChooseReport(); }
+};
+function openChooseReport(){
+  var list = document.getElementById('chooseReportList');
+  list.innerHTML = '<div style="color:var(--dim);font-size:12px">loading ...</div>';
+  chooseReportModal.style.display = 'flex';
+  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
+    var files = (j.files || []).filter(function(f){
+      return f.name.split('.').pop().toLowerCase() === 'csv';
+    });
+    list.innerHTML = '';
+    if(!files.length){
+      list.innerHTML = '<div style="color:var(--dim);font-size:12px">no *.csv files found</div>';
+      return;
+    }
+    files.forEach(function(f, i){
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;cursor:pointer;white-space:nowrap';
+      var rb = document.createElement('input');
+      rb.type      = 'radio';
+      rb.name      = 'chooseReportFile';
+      rb.className = 'chooseReportRadio';
+      rb.value     = f.name;
+      if(i === 0) rb.checked = true;   // most recent file (list is newest-first) preselected
+      row.appendChild(rb);
+      row.appendChild(document.createTextNode(
+        f.name + (f.active ? '  (ACTIVE)' : '') + '  -  ' + humanBytes(f.size)));
+      list.appendChild(row);
+    });
+  }).catch(function(){
+    list.innerHTML = '<div style="color:var(--dim);font-size:12px">failed to list files</div>';
+  });
+}
+var chooseReportModal = document.getElementById('chooseReportModal');
+document.getElementById('modalBtnChooseReportCancel').onclick = function(){
+  chooseReportModal.style.display = 'none';
+};
+document.getElementById('modalBtnChooseReportGenerate').onclick = function(){
+  var picked = document.querySelector('.chooseReportRadio:checked');
+  if(!picked) return;
+  chooseReportModal.style.display = 'none';
+  runReport(picked.value);
 };
 document.getElementById('selDownload').onchange = function(){
   var what  = this.value;
@@ -3184,16 +3248,21 @@ def generate_epinga_report(logpath):
     return report_path, None
 
 
-def run_epinga_report():
-    """GENERATE REPORT (web gui): analyse the active logfile with epinga.py and
-    make the resulting HTML available at /api/report.
+def run_epinga_report(target_path=None):
+    """GENERATE REPORT (web gui): analyse a logfile with epinga.py and make the
+    resulting HTML available at /api/report. target_path picks an arbitrary
+    *.csv (DOWNLOAD > CHOOSE LOGFILE - already validated by the caller); None
+    (or the ACTIVE LOGFILE choice) uses the currently active one instead.
 
     Runs in its own thread - epinga.py can take a while on large logfiles, and
     must never block run_web_mode()'s fping loop or the HTTP request thread.
     """
     global _report_file_path, _report_running
-    with web_lock:
-        logpath = web_state.get('logfile') or ''
+    if target_path:
+        logpath = target_path
+    else:
+        with web_lock:
+            logpath = web_state.get('logfile') or ''
     report_path, err = generate_epinga_report(logpath)
     if report_path:
         with _report_lock:
@@ -3451,15 +3520,28 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         if cmd == 'run_report':
             # GENERATE REPORT - runs in its own background thread (epinga.py can
             # take a while on a large logfile), not via web_commands/run_web_mode -
-            # it needs no access to that loop's locals, only web_state['logfile'].
+            # it needs no access to that loop's locals, only web_state['logfile']
+            # (ACTIVE LOGFILE) or the validated target_path below (CHOOSE LOGFILE).
             global _report_running
+            target_path = None
+            if value:
+                if (os.path.basename(value) != value or value in ('.', '..')
+                        or not value.lower().endswith('.csv')):
+                    self._respond(400, 'application/json; charset=utf-8',
+                                  json.dumps({'ok': False, 'error': 'invalid filename'}))
+                    return
+                if not os.path.isfile(value):
+                    self._respond(404, 'application/json; charset=utf-8',
+                                  json.dumps({'ok': False, 'error': 'file not found'}))
+                    return
+                target_path = value
             with web_lock:
                 already_running = _report_running
                 if not already_running:
                     _report_running = True
                     web_state['report'] = {'status': 'running', 'error': ''}
             if not already_running:
-                threading.Thread(target=run_epinga_report, daemon=True).start()
+                threading.Thread(target=run_epinga_report, args=(target_path,), daemon=True).start()
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
         with web_lock:
