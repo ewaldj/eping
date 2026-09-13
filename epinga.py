@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '2.21'
+version = '2.24'
 
 import re
 import os
@@ -719,6 +719,8 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .toolbar button:hover {{ border-color: var(--cyan); }}
 .toolbar button.active {{ background: var(--orange); border-color: var(--orange); color: var(--bg); font-weight: 600; }}
 #btnShowIp.active {{ background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }}
+#btnSaveHtml.saved {{ background: var(--green); border-color: var(--green); color: var(--bg); font-weight: 600; }}
+#btnSaveHtml.save-failed {{ background: var(--red); border-color: var(--red); color: var(--bg); font-weight: 600; }}
 .sep {{ width: 1px; height: 20px; background: var(--border); align-self: center; }}
 .toolbar .site-link {{ display: flex; align-items: center; gap: 6px;
   color: var(--dim); text-decoration: none; font-size: 12px;
@@ -968,6 +970,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <option value="name">Prefer hostname</option>
   </select>
   <span class="sep" id="sepDownload"></span>
+  <button id="btnSaveHtml" onclick="saveHtmlToServer()" title="Save this report's current state on the eping.py server (working directory)">Save</button>
   <button id="btnDownloadHtml" onclick="downloadHtml()" title="Save this report as a standalone .html file">Download</button>
   <div class="side-widget">
   <a class="site-link" href="https://www.jeitler.cc" target="_blank" rel="noopener">
@@ -1437,6 +1440,18 @@ function downloadHtml() {{
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }}
+function saveHtmlToServer() {{
+  const btn  = document.getElementById('btnSaveHtml');
+  const html = '<!DOCTYPE html>' + String.fromCharCode(10) + document.documentElement.outerHTML;
+  btn.disabled = true;
+  fetch('/api/save_report', {{method: 'POST',
+                             headers: {{'Content-Type': 'text/html; charset=utf-8'}},
+                             body: html}})
+    .then(r => r.json())
+    .then(j => {{ btn.classList.add(j.ok ? 'saved' : 'save-failed'); }})
+    .catch(() => {{ btn.classList.add('save-failed'); }})
+    .finally(() => {{ setTimeout(() => {{ btn.classList.remove('saved', 'save-failed'); btn.disabled = false; }}, 2000); }});
+}}
 
 // single-column comparator used by the sortChain - 'state' groups by the
 // UP/FLAPPING/DOWN/NO-DNS badge order (not the raw state string, which has no
@@ -1739,6 +1754,7 @@ updateCards();
 // local copy for the user to grab otherwise.
 if (location.protocol === 'file:') {{
   document.getElementById('btnDownloadHtml').style.display = 'none';
+  document.getElementById('btnSaveHtml').style.display = 'none';
   document.getElementById('sepDownload').style.display = 'none';
 }}
 </script>
