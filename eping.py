@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.03'
+VERSION = '3.18'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -46,6 +46,14 @@ WAITTIME_MAX       = 600      # -w upper bound (seconds)
 DOWN_SLICES_MAX    = 20
 FULL_SWEEP_MAX     = 50       # 0 = disabled (never sweep)
 DNS_TTL_MAX        = 3600
+DOWNLOAD_FILE_EXTS = ('.csv', '.txt', '.html')  # CHOOSE FILE picker - listed types
+RUNTIME_UNAVAILABLE = 'n/a'  # shown instead of a stale/misleading RUNTIME value - see
+                             # run_background_pings(): background rounds during a dialog
+                             # advance RUNS but never update RUNTIME, so the figure would
+                             # otherwise look frozen/wrong right after the dialog closes
+LOG_MAX_SIZE_MIN   = 100      # MB - lower bound once log rotation by size is enabled
+LOG_MAX_SIZE_MAX   = 2500     # MB - upper bound; 0 = no limit (rotation disabled)
+LOG_MAX_FILES_MAX  = 500      # 0 = unlimited kept eping-log_*.csv files
 DNS_CACHE_TTL      = 300      # seconds a resolved hostname stays valid (0 = no caching)
 DNS_FAIL_TTL       = 30       # negative cache: retry unresolvable names sooner
 DNS_RESOLVERS      = 16       # parallel name lookups
@@ -116,7 +124,7 @@ VIEW_PICKER_ORDER = [0, 1, 3, 2, 4, 5, 6, 7, 8]
 # toggles into one mutually-exclusive dropdown (see the 'addr_mode' web command).
 # 0/1/2 are non-destructive display filters (recomputed from original_hosts_list
 # each time); 3 renames hosts to their address in place (apply_ip_only_on/off).
-ADDR_MODE_LABELS = ['provided ip/name', 'prefer hostname', 'prefer ip address', 'ip only']
+ADDR_MODE_LABELS = ['hostname & ip', 'prefer hostname', 'prefer ip address', 'ip only']
 
 # [O] cycles through these orders. A flapping host is also UP or DOWN right now, so the
 # FLAP group takes precedence over its current state; NO-DNS counts as DOWN. Inside the
@@ -154,6 +162,8 @@ import datetime
 import resource
 import http.server
 import socketserver
+import urllib.parse
+import zipfile
 import socket
 import shlex
 import concurrent.futures
@@ -1249,8 +1259,9 @@ def screen_output(line,coll,text,color,attr_val):
     except:
         pass
 
-def screen_print_date_time(color_pair):
-    now = datetime.datetime.now() + datetime.timedelta(hours=int(args.time_zone_adjust))
+def screen_print_date_time(color_pair, tz_offset=None):
+    offset = int(args.time_zone_adjust) if tz_offset is None else tz_offset
+    now = datetime.datetime.now() + datetime.timedelta(hours=offset)
     dt_string = now.strftime("%d/%m/%Y %H:%M:%S")
     screen_output(0, 1, dt_string, color_pair, 1)
 
@@ -1630,6 +1641,46 @@ def new_logfile_name(tz_offset=0):
     now = datetime.datetime.now() + datetime.timedelta(hours=tz_offset)
     return 'eping-log_' + now.strftime('%Y-%m-%d_%H:%M:%S') + '.csv'
 
+def prune_old_logfiles(max_files):
+    """Delete the oldest eping-log_*.csv files (by mtime) beyond max_files.
+
+    max_files <= 0 means unlimited kept files (no-op). Used after a size-based
+    rollover (see rotate_log_if_needed()) to enforce MAX LOG FILES.
+    """
+    if max_files <= 0:
+        return
+    try:
+        files = [f for f in os.listdir('.') if f.startswith('eping-log_') and f.endswith('.csv')]
+        files.sort(key=lambda f: os.path.getmtime(f))
+        for old in files[:-max_files] if len(files) > max_files else []:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+def rotate_log_if_needed(logfile_file_name, max_size_mb, max_files, tz_offset=0):
+    """Start a fresh CSV log file once the current one reaches max_size_mb.
+
+    max_size_mb <= 0 disables rotation (default: no limit). On rollover, also
+    enforces max_files via prune_old_logfiles(). Returns the active logfile
+    path - unchanged unless a rollover actually happened.
+    """
+    if max_size_mb <= 0:
+        return logfile_file_name
+    try:
+        size = os.path.getsize(logfile_file_name)
+    except OSError:
+        return logfile_file_name
+    if size < max_size_mb * 1024 * 1024:
+        return logfile_file_name
+    new_name = new_logfile_name(tz_offset)
+    if not reset_logfile(new_name):
+        return logfile_file_name
+    prune_old_logfiles(max_files)
+    return new_name
+
 def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
                    interval_arg='', dns_ttl=DNS_CACHE_TTL,
                    down_hosts=None, down_retries=None, progress_cb=None,
@@ -1790,6 +1841,8 @@ web_state = {
     'hosts'            : 0,
     'hosts_up'         : 0,
     'hosts_down'       : 0,
+    'hosts_flap'       : 0,
+    'pending_wait'     : False,
     'hosts_shown'      : 0,   # after the [M] display filter narrows the view
     'run_counter'      : 0,
     'run_time'         : '0.00',
@@ -1983,6 +2036,28 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="chooseLogModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>CHOOSE FILE</h3>
+      <p>Pick one or more files in this eping.py's working directory to download<br>
+        - selecting more than one bundles them into a single ZIP.</p>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button type="button" class="chooseLogExtBtn on" data-ext="csv">.CSV</button>
+        <button type="button" class="chooseLogExtBtn on" data-ext="txt">.TXT</button>
+        <button type="button" class="chooseLogExtBtn on" data-ext="html">.HTML</button>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px;color:var(--fg);font-size:12px;cursor:pointer">
+        <input type="checkbox" id="chooseLogSelectAll"> select all
+      </label>
+      <div id="chooseLogList" style="width:100%;max-height:220px;overflow-y:auto;
+           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
+           padding:6px 10px;box-sizing:border-box"></div>
+      <div class="modal-buttons">
+        <button id="modalBtnChooseLogDownload">DOWNLOAD</button>
+        <button id="modalBtnChooseLogCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
   <div id="advOptionsModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>ADV OPTIONS</h3>
@@ -2044,8 +2119,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
       <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
-      <select id="selAddrMode" title="prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
-        <option value="0">PROVIDED IP & NAME</option>
+      <select id="selAddrMode" title="Deduplication when the same host is entered as both a hostname and its IP: hostname &amp; ip keeps both as given (no dedup) | prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
+        <option value="0">HOSTNAME & IP</option>
         <option value="1">PREFER HOSTNAME</option>
         <option value="2">PREFER IP ADDRESS</option>
         <option value="3">SWITCH TO IP ONLY</option>
@@ -2053,11 +2128,12 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
-      <select id="selDownload" title="download the full reference list, only the currently shown hosts, or the active logfile">
+      <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file in this eping.py's working directory">
         <option value="" selected>DOWNLOAD</option>
         <option value="hosts_all">ALL HOSTS</option>
         <option value="hosts_shown">SHOWN HOSTS</option>
-        <option value="logfile">LOGFILE</option>
+        <option value="logfile">ACTIVE LOGFILE</option>
+        <option value="choose_logfile">CHOOSE FILE</option>
       </select>
       <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
      </span>
@@ -2094,10 +2170,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 
   <div class="stats">
     <span>HOSTS: <b id="sHosts">0</b></span>
-    <span>RUNTIME: <b id="sRuntime">0.00</b><b>s</b></span>
+    <span>RUNTIME: <b id="sRuntime">0.00</b><b id="sRuntimeUnit">s</b></span>
     <span>RUNS: <b id="sRuns">0</b></span>
     <span class="u">HOSTS-UP: <b id="sUp">0</b></span>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
+    <span>FLAPPING: <b id="sFlap">0</b></span>
     <span title="hosts matching the display filter, out of the totals above"
           id="sShownWrap">HOSTS-SHOWN: <b id="sShown">0</b></span>
     <span id="sLog"></span>
@@ -2156,7 +2233,7 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
    slider (cheapest to give up, rarely touched) shrinks first; buttons/selects
    only shrink too if that alone isn't enough. */
 var COMPACT_LABELS = [
-  {sel:'#selAddrMode option[value="0"]', full:'PROVIDED IP & NAME', short:'IP/NAME MODE'},
+  {sel:'#selAddrMode option[value="0"]', full:'HOSTNAME & IP', short:'IP/NAME MODE'},
   {sel:'#btnGenReport',                  full:'GENERATE REPORT',  short:'REPORT'}
 ];
 // stage 3 only - the least-used labels, shortened further once stage 2 alone
@@ -2225,11 +2302,19 @@ var pendingFilterMode = null;   // same problem/fix as pendingAddrMode, for selF
 var pendingSortMode   = null;   // same problem/fix as pendingAddrMode, for sortSel
 var lastOptions       = {};    // ADV OPTIONS - latest snapshot from the server, see poll()
 
+var noteClearTimer = null;
 function note(text, isPending){
   var m = document.getElementById('msg');
   m.textContent = text || '';
   m.className   = isPending ? 'msg pending' : 'msg';
   pending       = !!isPending;
+  clearTimeout(noteClearTimer);
+  // a pending '...ing' note is replaced by its own completion note once the
+  // action finishes (see poll()'s msg_seq check) - that completion note is
+  // the 'done' feedback; it should not linger forever, so auto-clear it
+  if(!isPending && text){
+    noteClearTimer = setTimeout(function(){ m.textContent = ''; m.className = 'msg'; }, 2000);
+  }
 }
 function post(cmd, value){
   // ADV OPTIONS deliberately never touches the footer - feedback is inline in
@@ -2281,6 +2366,98 @@ document.getElementById('sortSel').onchange = function(){
   // safety net: stop overriding the poll if the server never echoes this back
   setTimeout(function(){ if(pendingSortMode === picked) pendingSortMode = null; }, 10000);
   post('sort', picked);
+};
+var chooseLogModal = document.getElementById('chooseLogModal');
+function chooseLogOpen(){ return chooseLogModal.style.display !== 'none'; }
+function closeChooseLog(){ chooseLogModal.style.display = 'none'; }
+function humanBytes(n){
+  if(n === undefined || n === null) return '';
+  if(n < 1024) return n + ' B';
+  if(n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  return (n/1024/1024).toFixed(1) + ' MB';
+}
+function startIframeDownload(src, label){
+  var f = document.createElement('iframe');
+  f.style.display = 'none';
+  var done = false;
+  function finish(ok){
+    if(done) return;
+    done = true;
+    if(f.parentNode) document.body.removeChild(f);
+    note(ok ? (label + ': downloaded') : (label + ': download may have failed'), false);
+  }
+  f.onload  = function(){ finish(true); };
+  f.onerror = function(){ finish(false); };
+  f.src = src;
+  document.body.appendChild(f);
+  setTimeout(function(){ finish(true); }, 60000);   // safety net, see comment above
+  note('downloading ' + label + ' ...', true);
+}
+var chooseLogFiles = [];                          // raw list from the last /api/logfiles fetch
+var chooseLogExts   = {csv: true, txt: true, html: true};   // filter toggle state
+function chooseLogRenderList(){
+  var list = document.getElementById('chooseLogList');
+  var all  = document.getElementById('chooseLogSelectAll');
+  var visible = chooseLogFiles.filter(function(f){
+    var ext = f.name.split('.').pop().toLowerCase();
+    return !!chooseLogExts[ext];
+  });
+  list.innerHTML = '';
+  all.checked = false;
+  if(!visible.length){
+    list.innerHTML = '<div style="color:var(--dim);font-size:12px">no matching files</div>';
+    all.disabled = true;
+    return;
+  }
+  visible.forEach(function(f){
+    var row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;cursor:pointer;white-space:nowrap';
+    var cb = document.createElement('input');
+    cb.type      = 'checkbox';
+    cb.className = 'chooseLogCb';
+    cb.value     = f.name;
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(
+      f.name + (f.active ? '  (ACTIVE)' : '') + '  -  ' + humanBytes(f.size)));
+    list.appendChild(row);
+  });
+  all.disabled = false;
+}
+function openChooseLog(){
+  var list = document.getElementById('chooseLogList');
+  var all  = document.getElementById('chooseLogSelectAll');
+  list.innerHTML = '<div style="color:var(--dim);font-size:12px">loading ...</div>';
+  all.checked  = false;
+  all.disabled = true;
+  chooseLogModal.style.display = 'flex';
+  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
+    chooseLogFiles = j.files || [];
+    chooseLogRenderList();
+  }).catch(function(){
+    list.innerHTML = '<div style="color:var(--dim);font-size:12px">failed to list files</div>';
+  });
+}
+Array.prototype.forEach.call(document.querySelectorAll('.chooseLogExtBtn'), function(btn){
+  btn.onclick = function(){
+    var ext = this.dataset.ext;
+    chooseLogExts[ext] = !chooseLogExts[ext];
+    this.classList.toggle('on', chooseLogExts[ext]);
+    chooseLogRenderList();
+  };
+});
+document.getElementById('chooseLogSelectAll').onchange = function(){
+  var checked = this.checked;
+  Array.prototype.forEach.call(document.querySelectorAll('.chooseLogCb'), function(cb){ cb.checked = checked; });
+};
+document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
+document.getElementById('modalBtnChooseLogDownload').onclick = function(){
+  var boxes = document.querySelectorAll('.chooseLogCb:checked');
+  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+  if(!names.length) return;
+  closeChooseLog();
+  var qs = names.map(function(n){ return 'name=' + encodeURIComponent(n); }).join('&');
+  var label = names.length === 1 ? names[0] : (names.length + ' file(s)');
+  startIframeDownload('api/download/choose_logfile?' + qs, label);
 };
 var resetLogModal = document.getElementById('resetLogModal');
 var loggingOn = false;   // kept in sync from every status poll, see render()
@@ -2338,7 +2515,13 @@ var ADV_OPTIONS_UI = [
     'hostname cache lifetime'],
   ['tz_offset',      'TIMEZONE',       'h',   -24, 24,   1,
     'Hour offset applied to every timestamp shown in the web gui and written to the CSV log',
-    'timestamp offset']
+    'timestamp offset'],
+  ['log_max_size',   'MAX LOG SIZE',   'MB',   0,   2500, 50,
+    'Max size of the current CSV log file before rolling over to a new one. 0 = no limit (range 100-2500 when set)',
+    'log rotation size'],
+  ['log_max_files',  'MAX LOG FILES',  '',     0,   500,  10,
+    'Max number of eping-log_*.csv files kept - the oldest is deleted once a rollover exceeds this. 0 = unlimited',
+    'log files kept']
 ];
 var advOptionsModal = document.getElementById('advOptionsModal');
 var advRowsBuilt     = false;
@@ -2572,6 +2755,7 @@ document.getElementById('selDownload').onchange = function(){
   var label = this.options[this.selectedIndex].text;
   this.value = '';                              // reset - a select, not a toggle
   if(!what) return;
+  if(what === 'choose_logfile'){ openChooseLog(); return; }
   if(what === 'logfile'){
     // hidden iframe, not fetch+blob and not a real <a> click - the log can be
     // large, and fetch+blob buffers the whole response in JS before the
@@ -2583,12 +2767,7 @@ document.getElementById('selDownload').onchange = function(){
     // hidden iframe download never touches top-level navigation, so poll()
     // is unaffected either way; the server sends the filename via
     // Content-Disposition, browser handles it as a native download.
-    var f = document.createElement('iframe');
-    f.style.display = 'none';
-    f.src = 'api/download/logfile';
-    document.body.appendChild(f);
-    setTimeout(function(){ if(f.parentNode) document.body.removeChild(f); }, 60000);
-    note('downloading ' + label + ' ...', true);
+    startIframeDownload('api/download/logfile', label);
     return;
   }
   note('downloading ' + label + ' ...', true);
@@ -2605,6 +2784,7 @@ document.getElementById('selDownload').onchange = function(){
       a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      note(label + ': downloaded', false);
     });
   }).catch(function(){ note(label + ': download failed', false); });
 };
@@ -2630,7 +2810,7 @@ function cycleSortMode(){
 
 /* Letter shortcuts mirror the CLI keys 1:1 where a direct action exists
    (buttons are .click()'ed so confirm() on EXIT/CLEAR and the RESET LOGGING modal still fire);
-   where the CLI opens an input dialog (ADD, DEL, MATCH FILTER, COMMENT) the
+   where the CLI opens an input dialog (ADD, DEL, DISPLAY FILTER, COMMENT) the
    matching field is focused instead, since the web field is persistent, not
    a one-shot dialog. R has no curses screen to redraw, so it forces an
    immediate status refresh. Disabled entirely while the page is read-only,
@@ -2642,6 +2822,10 @@ document.addEventListener('keydown', function(e){
     else if(rk === 'n'){ closeResetLog(); post('reset_log', 'new'); e.preventDefault(); }
     else if(rk === 'escape' || e.key === 'Enter'){ closeResetLog(); e.preventDefault(); }
     return;   // any other key is ignored, the modal stays open
+  }
+  if(chooseLogOpen()){
+    if(e.key === 'Escape'){ closeChooseLog(); e.preventDefault(); }
+    return;
   }
   if(advOptionsOpen()){
     if(e.key === 'Escape'){ closeAdvOptions(); e.preventDefault(); }
@@ -2854,9 +3038,11 @@ function poll(){
     document.getElementById('clock').textContent = s.datetime;
     document.getElementById('sHosts').textContent   = s.hosts;
     document.getElementById('sRuntime').textContent = s.run_time;
+    document.getElementById('sRuntimeUnit').style.display = (s.run_time === 'n/a') ? 'none' : '';
     document.getElementById('sRuns').textContent    = s.run_counter;
     document.getElementById('sUp').textContent      = s.hosts_up;
     document.getElementById('sDown').textContent    = s.hosts_down;
+    document.getElementById('sFlap').textContent    = s.hosts_flap;
     var swrap = document.getElementById('sShownWrap');
     swrap.style.display = s.match_filter ? '' : 'none';
     document.getElementById('sShown').textContent   = s.hosts_shown;
@@ -2924,7 +3110,7 @@ function poll(){
     // msg_seq (not text) drives this: two commands in a row can produce the exact
     // same message text ("comment logged" twice) - comparing text alone would miss
     // the second completion and leave the "... ing" pending note stuck on screen.
-    if(s.msg_seq !== lastMsgSeq){ lastMsgSeq = s.msg_seq; note(s.message || '', false); }
+    if(s.msg_seq !== lastMsgSeq){ lastMsgSeq = s.msg_seq; note(s.message || '', !!s.pending_wait); }
 
     var b = document.getElementById('banner');
     if(s.update_available){ b.style.display='block';
@@ -3046,6 +3232,38 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def _stream_zip(self, files, zip_name):
+        """Send one or more (path, arcname) pairs as a single ZIP download,
+        streamed straight to the socket - zipfile falls back to its own
+        non-seekable-stream mode for a plain socket file object (no
+        .tell()/.seek()), so this never buffers a whole file or the whole zip
+        in memory: RAM stays a few MB regardless of file size or file count
+        (tested at ~500MB source: ~12MB peak RSS). Final size isn't known
+        ahead of time, so Content-Length is skipped in favour of closing the
+        connection - fine for a one-shot download."""
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/zip')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Connection', 'close')
+        self.send_header('Content-Disposition',
+                         'attachment; filename="' + zip_name + '.zip"')
+        self.end_headers()
+        self.close_connection = True
+        try:
+            with zipfile.ZipFile(self.wfile, mode='w',
+                                 compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                for path, arcname in files:
+                    zi = zipfile.ZipInfo(arcname, date_time=time.localtime()[:6])
+                    zi.compress_type = zipfile.ZIP_DEFLATED
+                    with zf.open(zi, mode='w') as zdst, open(path, 'rb') as src:
+                        while True:
+                            chunk = src.read(1024 * 1024)
+                            if not chunk:
+                                break
+                            zdst.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
     def do_GET(self):
         path = self.path.split('?')[0]
         if path in ('/', '/index.html'):
@@ -3054,6 +3272,29 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             with web_lock:
                 body = json.dumps(web_state)
             self._respond(200, 'application/json; charset=utf-8', body)
+        elif path in ('/api/logfiles', 'api/logfiles'):
+            # DOWNLOAD > CHOOSE FILE - every .csv/.txt/.html in the working
+            # directory (see DOWNLOAD_FILE_EXTS), not just eping-log_*.csv -
+            # the client applies its own extension filter on top of this list.
+            with web_lock:
+                active = web_state.get('logfile') or ''
+            active = os.path.basename(active) if active else ''
+            files = []
+            try:
+                for name in os.listdir('.'):
+                    if name.lower().endswith(DOWNLOAD_FILE_EXTS) and os.path.isfile(name):
+                        try:
+                            st = os.stat(name)
+                        except OSError:
+                            continue
+                        files.append({'name': name, 'size': st.st_size,
+                                     'mtime': st.st_mtime, 'active': name == active})
+            except OSError:
+                pass
+            files.sort(key=lambda f: f['mtime'], reverse=True)
+            for f in files:
+                del f['mtime']   # internal sort key only, not needed by the client
+            self._respond(200, 'application/json; charset=utf-8', json.dumps({'files': files}))
         elif path in ('/api/download/hosts_shown', 'api/download/hosts_shown',
                       '/api/download/hosts_all', 'api/download/hosts_all'):
             # DOWNLOAD > SHOWN HOSTS / ALL HOSTS - one host per line, same
@@ -3067,34 +3308,49 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S') + '.txt')
             self._respond(200, 'text/plain; charset=utf-8', body, fname)
         elif path in ('/api/download/logfile', 'api/download/logfile'):
-            # DOWNLOAD > LOGFILE - the currently active CSV log, read fresh from
-            # disk (not cached) so the download always reflects the latest rows.
-            # Streamed in chunks (not read() into one big bytes object) - the log
-            # can grow into the GB range and a single in-memory read/write nearly
-            # doubles peak RSS and can fail or stall on large files.
+            # DOWNLOAD > ACTIVE LOGFILE - the currently active CSV log, read
+            # fresh from disk (not cached) so the download always reflects the
+            # latest rows, zipped on the fly (see _stream_zip()).
             with web_lock:
                 logpath = web_state.get('logfile') or ''
             if not logpath or not os.path.exists(logpath):
                 self._respond(404, 'text/plain; charset=utf-8', 'no active logfile')
                 return
             try:
-                size = os.path.getsize(logpath)
-                f = open(logpath, 'rb')
+                with open(logpath, 'rb'):
+                    pass
             except OSError:
                 self._respond(404, 'text/plain; charset=utf-8', 'logfile not readable')
                 return
-            try:
-                with f:
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/csv; charset=utf-8')
-                    self.send_header('Content-Length', str(size))
-                    self.send_header('Cache-Control', 'no-store')
-                    self.send_header('Content-Disposition',
-                                     'attachment; filename="' + os.path.basename(logpath) + '"')
-                    self.end_headers()
-                    shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
-            except (BrokenPipeError, ConnectionResetError, OSError):
-                pass
+            self._stream_zip([(logpath, os.path.basename(logpath))], os.path.basename(logpath))
+        elif path in ('/api/download/choose_logfile', 'api/download/choose_logfile'):
+            qs    = urllib.parse.urlsplit(self.path).query
+            names = urllib.parse.parse_qs(qs).get('name') or []
+            if not names:
+                self._respond(400, 'text/plain; charset=utf-8', 'no filename given')
+                return
+            files = []
+            for name in names:
+                if (not name or os.path.basename(name) != name or name in ('.', '..')
+                        or not name.lower().endswith(DOWNLOAD_FILE_EXTS)):
+                    self._respond(400, 'text/plain; charset=utf-8', 'invalid filename: ' + name)
+                    return
+                if not os.path.isfile(name):
+                    self._respond(404, 'text/plain; charset=utf-8', 'file not found: ' + name)
+                    return
+                try:
+                    with open(name, 'rb'):
+                        pass
+                except OSError:
+                    self._respond(404, 'text/plain; charset=utf-8', 'file not readable: ' + name)
+                    return
+                files.append((name, name))
+            if len(files) == 1:
+                zip_name = files[0][1]
+            else:
+                zip_name = ('eping-logfiles_' + str(len(files)) + '_'
+                           + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S'))
+            self._stream_zip(files, zip_name)
         elif path in ('/api/report', 'api/report'):
             # GENERATE REPORT result - the epinga.py HTML report from the last
             # completed run_epinga_report(), served inline (not as a download)
@@ -3147,6 +3403,36 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             with web_lock:
                 web_commands.append(('upload', text))
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
+            return
+
+        if path in ('/api/save_report', 'api/save_report'):
+            raw = self._read_body(WEB_MAX_UPLOAD)
+            if raw is None:
+                self._respond(413, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'report too large'}))
+                return
+            try:
+                html_text = raw.decode('utf-8', 'replace')
+            except Exception:
+                html_text = ''
+            if not html_text.strip():
+                self._respond(400, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'empty report'}))
+                return
+            with web_lock:
+                logpath = web_state.get('logfile') or ''
+            base  = os.path.splitext(os.path.basename(logpath))[0] if logpath else 'eping'
+            fname = (base + '_report_saved_'
+                    + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S') + '.html')
+            try:
+                with open(fname, 'w', encoding='utf-8') as fh:
+                    fh.write(html_text)
+            except OSError as e:
+                self._respond(500, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': str(e)}))
+                return
+            self._respond(200, 'application/json; charset=utf-8',
+                          json.dumps({'ok': True, 'filename': fname}))
             return
 
         if path not in ('/api/command', 'api/command'):
@@ -3223,7 +3509,8 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
                 scan_info='', sort_mode=0, addr_mode=0,
-                match_filter='', original_hosts_list=None, hosts_shown=None, options=None):
+                match_filter='', original_hosts_list=None, hosts_shown=None, options=None,
+                hosts_flap=None, pending_wait=False):
     now  = now_local(tz_offset)
     rows = web_rows(display_list)
     with web_lock:
@@ -3238,6 +3525,8 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'host_list_all'   : list(original_hosts_list) if original_hosts_list is not None else [],
             'hosts_up'        : hosts_up,
             'hosts_down'      : hosts_down,
+            'hosts_flap'      : hosts_flap if hosts_flap is not None else 0,
+            'pending_wait'    : bool(pending_wait),
             # hosts actually visible with the [M] display filter applied - hosts_up/
             # hosts_down above stay the totals for the whole current view regardless
             # of that filter, so HOSTS/HOSTS-UP/HOSTS-DOWN don't collapse to whatever
@@ -3283,6 +3572,8 @@ ADV_OPTIONS = [
     ('full_sweep',      'int',   0,   FULL_SWEEP_MAX,            1,   '',    None),  # 0 = disabled
     ('dns_ttl',         'int',   0,   DNS_TTL_MAX,               10,  's',   None),
     ('tz_offset',       'int',   -24, 24,                        1,   'h',   None),
+    ('log_max_size',    'int',   LOG_MAX_SIZE_MIN, LOG_MAX_SIZE_MAX, 50, 'MB', 0),   # 0 = no limit
+    ('log_max_files',   'int',   0,   LOG_MAX_FILES_MAX,         10,  '',    None),  # 0 = unlimited
 ]
 ADV_OPTION_KEYS = set(o[0] for o in ADV_OPTIONS)
 
@@ -3304,6 +3595,8 @@ ADV_OPTION_LABELS = {
     'full_sweep':      'FULL SWEEP',
     'dns_ttl':         'DNS TTL',
     'tz_offset':       'TIMEZONE',
+    'log_max_size':    'MAX LOG SIZE',
+    'log_max_files':   'MAX LOG FILES',
 }
 
 # keys kept as local variables inside run_web_mode() (not read from args each
@@ -3343,6 +3636,8 @@ def apply_adv_option(key, raw, args):
                     val = ''
                 elif key == 'num_of_threads':
                     val = 'auto'
+                elif key == 'log_max_size':
+                    val = 0
                 else:
                     val = None
             elif num < lo or num > hi:
@@ -3365,6 +3660,10 @@ def apply_adv_option(key, raw, args):
         args.num_of_threads = 'auto' if val == 'auto' else str(int(val))
     elif key == 'dns_ttl':
         args.dns_ttl = str(int(val))
+    elif key == 'log_max_size':
+        args.log_max_size = str(int(val))
+    elif key == 'log_max_files':
+        args.log_max_files = str(int(val))
     elif key == 'retries':
         retries = str(int(val))
     elif key == 'backoff':
@@ -3395,6 +3694,8 @@ def adv_option_values(args, down_retries, flap_window, confirm, down_slices,
         'down_slices':    str(down_slices),
         'full_sweep':     str(full_sweep),
         'tz_offset':      str(tz_offset),
+        'log_max_size':   args.log_max_size,
+        'log_max_files':  args.log_max_files,
         'backoff':        str(backoff),
         'timeout':        str(timeout),
         'retries':        str(retries),
@@ -3424,6 +3725,8 @@ ADV_OPTION_CLI_FLAG = {
     'full_sweep':      '-fs',
     'dns_ttl':         '-dns',
     'tz_offset':       '-tz',
+    'log_max_size':    '-lms',
+    'log_max_files':   '-lmf',
 }
 
 
@@ -3466,6 +3769,8 @@ def current_option_value(key, args, backoff, timeout, retries, down_retries,
     if key == 'full_sweep':     return full_sweep
     if key == 'dns_ttl':        return int(args.dns_ttl)
     if key == 'tz_offset':      return tz_offset
+    if key == 'log_max_size':   return int(args.log_max_size)
+    if key == 'log_max_files':  return int(args.log_max_files)
     return None
 
 
@@ -3520,6 +3825,8 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
     parts.append('-cf ' + str(confirm))
     parts.append('-ds ' + str(down_slices))
     parts.append('-fs ' + str(full_sweep))
+    parts.append('-lms ' + str(args.log_max_size))
+    parts.append('-lmf ' + str(args.log_max_files))
     if args.no_check_source:
         parts.append('-ncs')
     if args.web:
@@ -3602,6 +3909,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     match_filter_text = ''
     pending_info      = {}   # ADV OPTIONS #INFO# debounce - key -> (val, last_change_ts),
                               # see set_option/flush below
+    pending_add_hosts = set()   # just-added hosts not yet in host_state - see ADD/UPLOAD
+                                 # below and the completion check after update_host_state()
 
     def apply_addr_mode(lst):
         if addr_mode == 1:
@@ -3725,9 +4034,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     try:
                         match_filter_re   = re.compile(value, re.IGNORECASE)
                         match_filter_text = value
-                        message = 'display filter enabled'
+                        message = 'display filter: on'
                     except re.error as e:
-                        message = 'match filter: invalid regex - ' + str(e)
+                        message = 'display filter: invalid regex - ' + str(e)
             elif cmd == 'sort':
                 try:
                     sort_mode = int(value) % len(SORT_MODES)
@@ -3740,11 +4049,17 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 if not new_hosts:
                     message = add_stats.get('error') or ('invalid host: ' + value)
                 else:
+                    before_active = set(active_hosts_list)
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
-                    message = err if err else 'added ' + str(added) + ' host(s)'
-                    if not err and added:
+                    if err:
+                        message = err
+                    elif added:
+                        pending_add_hosts |= (set(new_hosts) - before_active)
+                        message = 'added ' + str(added) + ' host(s) - please wait, pinging ...'
                         write_log_info(args.disable_logging, logfile_file_name,
                                        host_spec_cli('ADD', value), tz_offset)
+                    else:
+                        message = 'added 0 host(s)'
             elif cmd == 'del':
                 del_stats = {}
                 del_hosts = parse_host_input(value, del_stats)
@@ -3770,6 +4085,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 elif not new_hosts:
                     message = 'upload: no valid host found in file'
                 else:
+                    before_active = set(active_hosts_list)
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     if err:
                         message = 'upload ' + err
@@ -3781,15 +4097,28 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         if up_stats.get('skipped'):
                             message += (', %d ignored (mask)' % len(up_stats['skipped']))
                         if added:
+                            pending_add_hosts |= (set(new_hosts) - before_active)
+                            message += ' - please wait, pinging ...'
                             write_log_info(args.disable_logging, logfile_file_name,
                                            'ADD -f (uploaded, ' + str(added) + ' host(s))', tz_offset)
             elif cmd == 'set_ref':
-                # what is displayed right now becomes the new reference list
-                dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
+                # what is actually shown becomes the new reference list - the view
+                # filter (active_hosts_list) AND the [M]/display filter (display_list
+                # narrows it further) both apply, see quick/quick_rows just below
+                shown_hosts = [o[0] for o in build_display(active_hosts_list, host_state,
+                                                            sort_mode, tz_offset, flap_window)]
+                if match_filter_re is not None:
+                    shown_hosts = [h for h in shown_hosts
+                                  if match_filter_re.search(h)
+                                  or (h in host_state and len(host_state[h]) > 8 and host_state[h][8]
+                                      and match_filter_re.search(host_state[h][8]))]
+                dropped = [h for h in original_hosts_list if h not in set(shown_hosts)]
                 prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
-                original_hosts_list[:] = list(active_hosts_list)
+                original_hosts_list[:] = shown_hosts
+                active_hosts_list      = shown_hosts
                 filter_mode = 0
-                message = 'reference set to the ' + str(len(active_hosts_list)) + ' host(s) shown'
+                match_filter_re, match_filter_text = None, ''
+                message = 'reference set to the ' + str(len(shown_hosts)) + ' host(s) shown'
                 write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
             elif cmd == 'zero':
                 for _entry in host_state.values():
@@ -3972,6 +4301,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 quick = apply_match_filter(quick, match_filter_re)
             with web_lock:
                 web_state['message']      = message
+                web_state['pending_wait'] = bool(pending_add_hosts)
                 web_state['msg_seq']      = web_state.get('msg_seq', 0) + 1
                 quick_rows                = web_rows(quick)
                 web_state['rows']         = quick_rows
@@ -4037,6 +4367,21 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                           learning_done, learning_phase, up_seen,
                           args.disable_logging, logfile_file_name,
                           confirm, down_streak)
+        if args.disable_logging:
+            _new_lf = rotate_log_if_needed(logfile_file_name, int(args.log_max_size),
+                                           int(args.log_max_files), tz_offset)
+            if _new_lf != logfile_file_name:
+                logfile_file_name  = _new_lf
+                _logfile_file_name = _new_lf
+                write_log_info(args.disable_logging, logfile_file_name,
+                              build_cli_snapshot(args, backoff, timeout, retries,
+                                                 down_retries, flap_window, confirm,
+                                                 down_slices, full_sweep, tz_offset), tz_offset)
+        if pending_add_hosts and pending_add_hosts <= set(host_state):
+            pending_add_hosts.clear()
+            message = 'done'
+            with web_lock:
+                web_state['msg_seq'] = web_state.get('msg_seq', 0) + 1
         phase['state'] = time.time() - _t
 
         _t = time.time()
@@ -4048,6 +4393,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         # is the post-filter count, reported separately (HOSTS-SHOWN in the web GUI).
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
+        hosts_count_flap = sum(1 for e in display_list
+                               if host_is_flapping(e, now_local(tz_offset), flap_window))
         if match_filter_re is not None:
             display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_shown = len(display_list)
@@ -4085,7 +4432,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     tz_offset, message, scan_info, sort_mode, addr_mode,
                     match_filter_text, original_hosts_list, hosts_shown=hosts_count_shown,
                     options=adv_option_values(args, down_retries, flap_window, confirm,
-                                              down_slices, full_sweep, tz_offset))
+                                              down_slices, full_sweep, tz_offset),
+                    hosts_flap=hosts_count_flap, pending_wait=bool(pending_add_hosts))
 
         run_counter += 1
 
@@ -4127,6 +4475,8 @@ if __name__=='__main__':
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
+    parser.add_argument('-lms', '--log_max_size', default='0', dest='log_max_size', help="max CSV log file size in MB before rotating to a new file, range " + str(LOG_MAX_SIZE_MIN) + "-" + str(LOG_MAX_SIZE_MAX) + " (default: 0 = no limit)")
+    parser.add_argument('-lmf', '--log_max_files', default='0', dest='log_max_files', help="max number of eping-log_*.csv files to keep, oldest deleted first once exceeded, range 0-" + str(LOG_MAX_FILES_MAX) + " (default: 0 = unlimited)")
     family_group = parser.add_mutually_exclusive_group()
     family_group.add_argument('-4', '--force_ipv4', action="store_true", dest='force_ipv4', help="prefer IPv4 (A records); falls back to IPv6 if a name has no A record (default preference)")
     family_group.add_argument('-6', '--force_ipv6', action="store_true", dest='force_ipv6', help="prefer IPv6 (AAAA records); falls back to IPv4 if a name has no AAAA record")
@@ -4342,6 +4692,24 @@ if __name__=='__main__':
             error_handler("ERROR: --dns_ttl: must be between 0 and " + str(DNS_TTL_MAX))
     except ValueError:
         error_handler("ERROR: --dns_ttl: must be between 0 and " + str(DNS_TTL_MAX))
+
+    # log rotation: max CSV log file size in MB before starting a new file (0 = no limit)
+    try:
+        log_max_size = int(args.log_max_size)
+        if log_max_size != 0 and (log_max_size < LOG_MAX_SIZE_MIN or log_max_size > LOG_MAX_SIZE_MAX):
+            error_handler("ERROR: --log_max_size: must be 0 (no limit) or between "
+                          + str(LOG_MAX_SIZE_MIN) + " and " + str(LOG_MAX_SIZE_MAX))
+    except ValueError:
+        error_handler("ERROR: --log_max_size: must be 0 (no limit) or between "
+                      + str(LOG_MAX_SIZE_MIN) + " and " + str(LOG_MAX_SIZE_MAX))
+
+    # log rotation: max number of eping-log_*.csv files kept (0 = unlimited)
+    try:
+        log_max_files = int(args.log_max_files)
+        if log_max_files < 0 or log_max_files > LOG_MAX_FILES_MAX:
+            error_handler("ERROR: --log_max_files: must be between 0 and " + str(LOG_MAX_FILES_MAX))
+    except ValueError:
+        error_handler("ERROR: --log_max_files: must be between 0 and " + str(LOG_MAX_FILES_MAX))
 
     # -setref only makes sense together with a learning phase
     try:
@@ -4598,8 +4966,9 @@ if __name__=='__main__':
         what's on screen, so applying them a few seconds late (once the dialog
         closes and the main loop's own round runs) changes nothing but the timing.
         """
-        global run_counter
+        global run_counter, logfile_file_name, _logfile_file_name, run_time, pending_add_hosts
         while not stop_event.is_set():
+            run_time = RUNTIME_UNAVAILABLE
             t0 = datetime.datetime.now()
             sweep_now = (down_retries is None
                         or (full_sweep > 0 and (run_counter - 1) % full_sweep == 0))
@@ -4613,6 +4982,19 @@ if __name__=='__main__':
                               learning_done, learning_phase, up_seen,
                               args.disable_logging, logfile_file_name,
                               confirm, down_streak)
+            if args.disable_logging:
+                _new_lf = rotate_log_if_needed(logfile_file_name, int(args.log_max_size),
+                                               int(args.log_max_files), tz_offset)
+                if _new_lf != logfile_file_name:
+                    logfile_file_name  = _new_lf
+                    _logfile_file_name = _new_lf
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                  build_cli_snapshot(args, backoff, timeout, retries,
+                                                     down_retries, flap_window, confirm,
+                                                     down_slices, full_sweep, tz_offset), tz_offset)
+            if pending_add_hosts and pending_add_hosts <= set(host_state):
+                pending_add_hosts.clear()
+                web_sync('done', bump=True)
             run_counter += 1
             remaining = float(args.waittime) - (datetime.datetime.now() - t0).total_seconds()
             if remaining > 0:
@@ -4995,7 +5377,12 @@ if __name__=='__main__':
         global prefer_ip, ip_only_mode, ip_only_map, sort_mode, match_filter_re
         global match_filter_text, gn_thread, gn_result, gn_candidates
         global logfile_file_name, _logfile_file_name, down_retries, flap_window
-        global confirm, down_slices, full_sweep, tz_offset
+        global confirm, down_slices, full_sweep, tz_offset, pending_add_hosts
+
+        message = 'done'   # default footer text - overridden below where a more
+                            # specific one applies; always sent so the pending
+                            # '...ing' note (see PENDING/note() in the JS) is
+                            # replaced and then auto-cleared, never stuck
 
         if bcmd == 'up_only':
             next_mode = (filter_mode + 1) % len(FILTER_MODES) if filter_mode < len(FILTER_MODES) else 0
@@ -5009,8 +5396,10 @@ if __name__=='__main__':
                 screen.clear()
                 write_log_info(args.disable_logging, logfile_file_name,
                                'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
+                message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
             else:
                 notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[next_mode][0], 3)
+                message = 'no hosts match ' + WEB_VIEW_MODES[next_mode][0]
 
         elif bcmd == 'set_filter':
             try:
@@ -5028,8 +5417,10 @@ if __name__=='__main__':
                     screen.clear()
                     write_log_info(args.disable_logging, logfile_file_name,
                                    'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
+                    message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
                 else:
                     notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[target_mode][0], 3)
+                    message = 'no hosts match ' + WEB_VIEW_MODES[target_mode][0]
 
         elif bcmd == 'addr_mode':
             try:
@@ -5051,12 +5442,18 @@ if __name__=='__main__':
                         up_seen, down_streak, int(args.dns_ttl))
                     ip_only_mode = True
                     notice(io_msg.upper(), 2)
+                    message = io_msg
                 else:
                     base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
                                              tz_offset, flap_window, up_seen)
                     active_hosts_list = (apply_prefer_ip(base_list, int(args.dns_ttl)) if prefer_ip
                                          else apply_prefer_hostname(base_list, int(args.dns_ttl))
                                          if prefer_hostname else base_list)
+                    message = 'address mode: ' + ADDR_MODE_LABELS[addr_mode]
+            elif not (0 <= target_mode < len(ADDR_MODE_LABELS)):
+                message = 'invalid address mode'
+            else:
+                message = 'address mode: ' + ADDR_MODE_LABELS[cur_mode]
 
         elif bcmd == 'sort':
             try:
@@ -5064,25 +5461,36 @@ if __name__=='__main__':
             except ValueError:
                 sort_mode = 0
             screen.clear()
+            message = 'sort: ' + SORT_MODES[sort_mode][0]
 
         elif bcmd == 'add':
             add_stats = {}
             new_hosts = parse_host_input(bval, add_stats)
             if not new_hosts:
-                notice((add_stats.get('error') or ('invalid host: ' + bval)).upper(), 3)
+                err_text = add_stats.get('error') or ('invalid host: ' + bval)
+                notice(err_text.upper(), 3)
+                message = err_text
             else:
+                before_active = set(active_hosts_list)
                 added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                 if err:
                     notice(err.upper(), 3)
+                    message = err
                 elif added:
                     write_log_info(args.disable_logging, logfile_file_name,
                                    host_spec_cli('ADD', bval), tz_offset)
+                    pending_add_hosts |= (set(new_hosts) - before_active)
+                    message = 'added ' + str(added) + ' host(s) - please wait, pinging ...'
+                else:
+                    message = 'no new host(s) added'
 
         elif bcmd == 'del':
             del_stats = {}
             del_hosts = parse_host_input(bval, del_stats)
             if not del_hosts:
-                notice((del_stats.get('error') or ('invalid host: ' + bval)).upper(), 3)
+                err_text = del_stats.get('error') or ('invalid host: ' + bval)
+                notice(err_text.upper(), 3)
+                message = err_text
             else:
                 removed = remove_hosts_from(del_hosts, active_hosts_list,
                                             original_hosts_list, host_state)
@@ -5091,6 +5499,7 @@ if __name__=='__main__':
                     down_streak.pop(_h, None)
                 forget_names(del_hosts)
                 notice('REMOVED ' + str(removed) + ' HOST(S)', 2 if removed else 3)
+                message = 'removed ' + str(removed) + ' host(s)'
                 if removed:
                     write_log_info(args.disable_logging, logfile_file_name,
                                    host_spec_cli('DEL', bval), tz_offset)
@@ -5099,28 +5508,43 @@ if __name__=='__main__':
             up_stats  = {}
             new_hosts = parse_hosts_from_text(bval, up_stats)
             if not new_hosts and up_stats.get('skipped'):
-                notice(('UPLOAD: MASK MUST BE /%d..%d: %s'
-                       % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0])).upper(), 3)
+                err_text = ('upload: mask must be /%d..%d: %s'
+                           % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0]))
+                notice(err_text.upper(), 3)
+                message = err_text
             elif not new_hosts:
                 notice('UPLOAD: NO VALID HOST FOUND IN FILE', 3)
+                message = 'upload: no valid host found in file'
             else:
+                before_active = set(active_hosts_list)
                 added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                 if err:
                     notice(('UPLOAD ' + err).upper(), 3)
+                    message = 'upload ' + err
                 else:
                     msg = 'UPLOADED: ' + str(added) + ' NEW HOST(S) OF ' + str(len(new_hosts)) + ' FOUND'
                     notice(msg, 2)
+                    message = msg.lower()
                     if added:
+                        pending_add_hosts |= (set(new_hosts) - before_active)
+                        message += ' - please wait, pinging ...'
                         write_log_info(args.disable_logging, logfile_file_name,
                                        'ADD -f (uploaded, ' + str(added) + ' host(s))', tz_offset)
 
         elif bcmd == 'set_ref':
-            dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
+            # what is actually shown becomes the new reference list - see the
+            # matching comment in run_web_mode()'s own set_ref for why display_list
+            # (the [M]/display filter applied) is used, not just active_hosts_list
+            shown_hosts = [o[0] for o in display_list]
+            dropped = [h for h in original_hosts_list if h not in set(shown_hosts)]
             prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
-            original_hosts_list[:] = list(active_hosts_list)
+            original_hosts_list[:] = shown_hosts
+            active_hosts_list      = shown_hosts
             filter_mode = 0
+            match_filter_re, match_filter_text = None, ''
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
+            message = 'reference set to the ' + str(len(shown_hosts)) + ' host(s) shown'
 
         elif bcmd == 'clear':
             active_hosts_list[:]   = []
@@ -5133,6 +5557,7 @@ if __name__=='__main__':
             filter_mode = 0
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
+            message = 'cleared all hosts'
 
         elif bcmd == 'zero':
             for _entry in host_state.values():
@@ -5140,33 +5565,40 @@ if __name__=='__main__':
                 _entry[6] = ''
             notice('CHANGE COUNTERS RESET', 2)
             write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
+            message = 'change counters reset'
 
         elif bcmd == 'get_names':
             if gn_thread is not None and gn_thread.is_alive():
                 notice('GET NAMES: ALREADY RUNNING', 3)
+                message = 'get names: already running'
             else:
                 gn_thread, gn_result, gn_candidates = get_names_start(
                     original_hosts_list, int(args.dns_ttl))
                 if gn_thread is None:
                     notice('GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
+                    message = 'get names: no eligible ip host(s)'
                 else:
                     notice('GET NAMES: RUNNING IN BACKGROUND (%d HOST(S))'
                           % len(gn_candidates), 2)
                     write_log_info(args.disable_logging, logfile_file_name, '-gn', tz_offset)
+                    message = 'get names: running in background (%d host(s))' % len(gn_candidates)
 
         elif bcmd == 'match_filter':
             bval = bval.strip()
             if not bval:
                 match_filter_re, match_filter_text = None, ''
-                notice('MATCH FILTER: OFF', 2)
+                notice('DISPLAY FILTER: OFF', 2)
+                message = 'display filter: off'
             else:
                 try:
                     new_re = re.compile(bval, re.IGNORECASE)
                 except re.error as e:
                     notice(('INVALID REGEX: ' + str(e)).upper(), 3)
+                    message = 'invalid regex: ' + str(e)
                 else:
                     match_filter_re, match_filter_text = new_re, bval
-                    notice('MATCH FILTER: ON', 2)
+                    notice('DISPLAY FILTER: ON', 2)
+                    message = 'display filter: on'
             rebuild_display()
             draw_screen()
             screen.refresh()
@@ -5175,9 +5607,13 @@ if __name__=='__main__':
             bval = bval.strip()
             if not args.disable_logging:
                 notice('LOGGING IS OFF - COMMENT NOT SAVED', 3)
+                message = 'logging is off - comment not saved'
             elif bval:
                 write_log_comment(args.disable_logging, logfile_file_name, bval, tz_offset)
                 notice('COMMENT LOGGED', 2)
+                message = 'comment logged'
+            else:
+                message = 'comment empty - not logged'
 
         elif bcmd == 'reset_log':
             choice = bval.strip().lower()
@@ -5188,35 +5624,42 @@ if __name__=='__main__':
                     logfile_file_name  = new_name
                     _logfile_file_name = new_name
                     notice('LOGGING STARTED: ' + logfile_file_name, 2)
+                    message = 'logging started: ' + logfile_file_name
                     write_log_info(args.disable_logging, logfile_file_name,
                                    build_cli_snapshot(args, backoff, timeout, retries, down_retries,
                                                       flap_window, confirm, down_slices, full_sweep,
                                                       tz_offset), tz_offset)
                 else:
                     notice('FAILED TO START LOGGING', 3)
+                    message = 'failed to start logging'
             elif choice == 'y':
                 if reset_logfile(logfile_file_name):
                     notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
+                    message = 'logging reset - ' + logfile_file_name + ' cleared'
                     write_log_info(args.disable_logging, logfile_file_name,
                                    build_cli_snapshot(args, backoff, timeout, retries, down_retries,
                                                       flap_window, confirm, down_slices, full_sweep,
                                                       tz_offset), tz_offset)
                 else:
                     notice('FAILED TO RESET LOGFILE', 3)
+                    message = 'failed to reset logfile'
             elif choice == 'new':
                 new_name = new_logfile_name(tz_offset)
                 if reset_logfile(new_name):
                     logfile_file_name  = new_name
                     _logfile_file_name = new_name
                     notice('NEW LOGFILE: ' + logfile_file_name, 2)
+                    message = 'new logfile: ' + logfile_file_name
                     write_log_info(args.disable_logging, logfile_file_name,
                                    build_cli_snapshot(args, backoff, timeout, retries, down_retries,
                                                       flap_window, confirm, down_slices, full_sweep,
                                                       tz_offset), tz_offset)
                 else:
                     notice('FAILED TO CREATE NEW LOGFILE', 3)
+                    message = 'failed to create new logfile'
             else:
                 notice('RESET CANCELLED', 3)
+                message = 'reset cancelled'
 
         elif bcmd == 'set_option':
             key, _, raw = str(bval).partition('=')
@@ -5274,10 +5717,18 @@ if __name__=='__main__':
             rebuild_display()
             draw_screen()
             screen.refresh()
-            web_sync()
+            web_sync(message, bump=True)
 
     def notice(text, color=3, seconds=1.4):
-        """Show a short message box in the middle of the screen."""
+        """Show a short message box in the middle of the screen.
+
+        Also mirrors the text to a connected web GUI (-wv/-wvc) via cli_message -
+        it no-ops for plain CLI (web_sync() checks args.web_view/web_view_control).
+        Most CLI actions only ever surface their result through this box, so
+        without this the web side never heard about them.
+        """
+        global cli_message
+        cli_message = text.lower()
         rows, cols = screen.getmaxyx()
         text  = ' ' + text + ' '
         box_w = min(len(text), max(10, cols - 4))
@@ -5315,6 +5766,7 @@ if __name__=='__main__':
     display_list   = []
     hosts_count_up = 0
     hosts_count_down = 0
+    hosts_count_flap  = 0
     run_time       = '0.00'
     phase          = {}
     used_scan      = ''
@@ -5327,6 +5779,11 @@ if __name__=='__main__':
     report_result  = None   # mutable [(path, err)] set by the thread when done
     match_filter_re   = None   # [M] display-only regex filter - active_hosts_list unaffected
     match_filter_text = ''
+    pending_add_hosts = set()   # just-added hosts not yet in host_state - see ADD/UPLOAD
+                                 # in apply_browser_command() and the completion check
+                                 # after update_host_state() below and in run_background_pings()
+    cli_message       = None    # text for the next 'if cmd and have_data' web_sync() call -
+                                 # see notice() and the keyboard command handlers below
 
     # -gn / -ph: applied once, before the first ping round - by then original/active
     # host list, host_state, up_seen and down_streak all exist in this scope
@@ -5351,7 +5808,7 @@ if __name__=='__main__':
             web_state['readonly'] = web_readonly
         start_web_server(args.web_bind, int(args.web_port))
 
-    def web_sync(msg=''):
+    def web_sync(msg='', bump=False):
         if not (args.web_view or args.web_view_control):
             return
         # mirror the same fix as run_web_mode(): HOSTS-UP/DOWN in the web view should
@@ -5361,6 +5818,8 @@ if __name__=='__main__':
                                    tz_offset, flap_window)
         total_up   = sum(1 for e in total_list if 'UP' in e[1])
         total_down = len(total_list) - total_up
+        total_flap = sum(1 for e in total_list
+                         if host_is_flapping(e, now_local(tz_offset), flap_window))
         # ADV OPTIONS current values - only actually looked at by the browser's
         # options modal in -wvc (harmless, cheap dict build otherwise)
         opts = adv_option_values(args, down_retries, flap_window, confirm,
@@ -5371,7 +5830,10 @@ if __name__=='__main__':
                     tz_offset, msg, used_scan, sort_mode,
                     (3 if ip_only_mode else (2 if prefer_ip else (1 if prefer_hostname else 0))),
                     match_filter_text, original_hosts_list, hosts_shown=len(display_list),
-                    options=opts)
+                    options=opts, hosts_flap=total_flap, pending_wait=bool(pending_add_hosts))
+        if bump:
+            with web_lock:
+                web_state['msg_seq'] = web_state.get('msg_seq', 0) + 1
 
 
     def rebuild_display():
@@ -5380,13 +5842,16 @@ if __name__=='__main__':
         UP-ONLY, SET REFERENCE, DEL HOST and ZERO CHANGES are pure display operations,
         so they can take effect at once instead of after the next scan round.
         """
-        global display_list, hosts_count_up, hosts_count_down
+        global display_list, hosts_count_up, hosts_count_down, hosts_count_flap
         display_list = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
         if match_filter_re is not None:
             display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
+        _now_ref = now_local(tz_offset)
+        hosts_count_flap = sum(1 for e in display_list
+                               if host_is_flapping(e, _now_ref, flap_window))
 
     def draw_screen():
         """Paint the whole screen from the data of the last completed round.
@@ -5402,12 +5867,12 @@ if __name__=='__main__':
                 'GET NAMES running in background (%d host(s))...' % len(gn_candidates), 2)
         elif match_filter_re is not None:
             screen_print_center_top(
-                "MATCH FILTER '%s' active (%d of %d hosts shown, all still pinged)"
+                "DISPLAY FILTER '%s' active (%d of %d hosts shown, all still pinged)"
                 % (match_filter_text, len(display_list), len(active_hosts_list)), 2)
         else:
             screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
 
-        screen_print_date_time(1)
+        screen_print_date_time(1, tz_offset)
         screen_print_horizonta_line('-', 1, 1)
         screen_print_horizonta_line('-', 1, 3)
         screen_print_horizonta_line('-', 1, rows - 2)
@@ -5480,17 +5945,26 @@ if __name__=='__main__':
                 screen_output(output_linenr, output_coloffset + 46, str(change_timestamp), 1, 0)
 
         # --- status bar and key bar ---
-        hosts_up   = '{m: <5}'.format(m=hosts_count_up)
-        hosts_down = '{m: <5}'.format(m=hosts_count_down)
+        # 'HOST UP: n DOWN: n FLAPPING: n' replaces the old, wider
+        # 'HOSTS-UP: n   HOSTS-DOWN: n' pair - shorter and adds the flap count.
+        hosts_up   = '{m: <4}'.format(m=hosts_count_up)
+        hosts_down = '{m: <4}'.format(m=hosts_count_down)
+        hosts_flap = str(hosts_count_flap)
         screen_output(rows - 1, 1,  'HOSTS: '   + str(num_of_hosts), 1, 1)
-        screen_output(rows - 1, 14, 'RUNTIME: ' + str(run_time) + 's', 1, 1)
+        _runtime_txt = ('RUNTIME: ' + run_time if run_time == RUNTIME_UNAVAILABLE
+                        else 'RUNTIME: ' + str(run_time) + 's')
+        screen_output(rows - 1, 14, _runtime_txt, 1, 1)
         screen_output(rows - 1, 35, 'RUNS: '    + str(run_counter), 1, 1)
-        screen_output(rows - 1, 50, 'HOSTS-UP: '   + str(hosts_up),   2, 1)
-        screen_output(rows - 1, 66, 'HOSTS-DOWN: ' + str(hosts_down), 3, 1)
+        screen_output(rows - 1, 50, '| HOST UP: ', 1, 1)
+        screen_output(rows - 1, 61, hosts_up, 2, 1)
+        screen_output(rows - 1, 65, 'DOWN: ', 1, 1)
+        screen_output(rows - 1, 71, hosts_down, 3, 1)
+        screen_output(rows - 1, 75, 'FLAPPING: ', 1, 1)
+        screen_output(rows - 1, 85, hosts_flap + ' |', 1, 1)
         if args.disable_logging:
-            screen_output(rows - 1, 87, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
+            screen_output(rows - 1, 93, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
         else:
-            screen_output(rows - 1, 87, 'LOGGING-OFF', 1, 1)
+            screen_output(rows - 1, 93, 'LOGGING-OFF', 1, 1)
         if num_of_hosts > 0 and maxhosts < num_of_hosts:
             tts_text = ' | TERMINAL TOO SMALL '
             screen_output(rows - 1, cols - len(tts_text), tts_text, 3, 2)
@@ -5505,7 +5979,7 @@ if __name__=='__main__':
         l_full  = ' [L]=RESET LOGGING ' if args.disable_logging else ' [L]=START LOG '
         l_short = ' [L]=RESET LOG '     if args.disable_logging else ' [L]=START LOG '
         l_tiny  = ' [L]RSTLOG '         if args.disable_logging else ' [L]STARTLOG '
-        keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=MATCH FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
+        keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=DISPLAY FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [P]=ADDR MODE ', ' [X]=ADV OPTIONS ',
                       ' [N]=ANALYSE NOW ', ' [G]=GET NAMES ', ' [R]=SCREEN REFRESH ', l_full, ' [E]=EXIT ']
@@ -5674,13 +6148,23 @@ if __name__=='__main__':
             elif k in (ord('t'), ord('T')):
                 cmd = 'ADD_COMMENT'
         if cmd == 'SET_REFERENCE':
-            # the currently displayed host list becomes the new reference list
-            dropped = [h for h in original_hosts_list if h not in set(active_hosts_list)]
+            # the currently displayed host list becomes the new reference list -
+            # display_list already has both the [U] view filter (active_hosts_list)
+            # and the [M]/display filter applied, see rebuild_display()
+            shown_hosts = [o[0] for o in display_list]
+            dropped = [h for h in original_hosts_list if h not in set(shown_hosts)]
             prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
-            original_hosts_list = list(active_hosts_list)
+            # two independent list objects - do not bind both names to the same
+            # object here, or a later add_hosts_to()/remove_hosts_from() call
+            # (which mutates active_list and original_list as if separate) will
+            # apply its change twice to the one underlying list
+            original_hosts_list = list(shown_hosts)
+            active_hosts_list   = shown_hosts
             filter_mode = 0            # active == reference, so no filter is active
+            match_filter_re, match_filter_text = None, ''   # already absorbed into the new reference
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
+            cli_message = 'reference set to the ' + str(len(shown_hosts)) + ' host(s) shown'
         elif cmd == 'CLEAR':
             active_hosts_list   = []
             original_hosts_list = []
@@ -5692,6 +6176,7 @@ if __name__=='__main__':
             filter_mode = 0
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
+            cli_message = 'cleared'
         elif cmd == 'VIEW_PICKER':
             # [U] opens the view picker directly - the curses equivalent of the
             # web gui's <select id="selFilter"> (same pattern as [O]/[P]: one
@@ -5713,6 +6198,7 @@ if __name__=='__main__':
                     screen.clear()
                     write_log_info(args.disable_logging, logfile_file_name,
                                    'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
+                    cli_message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
                 else:
                     notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[new_mode][0], 3)
         elif cmd == 'ADV_OPTIONS':
@@ -5776,7 +6262,7 @@ if __name__=='__main__':
                           % len(gn_candidates), 2)
                     write_log_info(args.disable_logging, logfile_file_name, '-gn', tz_offset)
         elif cmd == 'MATCH_FILTER':
-            value = input_dialog(' MATCH FILTER ',
+            value = input_dialog(' DISPLAY FILTER ',
                                  ' regex to match hostname/IP, case-insensitive - empty to disable:')
             if value:
                 try:
@@ -5788,14 +6274,14 @@ if __name__=='__main__':
                     rebuild_display()
                     draw_screen()
                     screen.refresh()
-                    notice('MATCH FILTER: ON (%d OF %d SHOWN)'
+                    notice('DISPLAY FILTER: ON (%d OF %d SHOWN)'
                           % (len(display_list), len(active_hosts_list)), 2)
             elif match_filter_re is not None:
                 match_filter_re, match_filter_text = None, ''
                 rebuild_display()
                 draw_screen()
                 screen.refresh()
-                notice('MATCH FILTER: OFF', 2)
+                notice('DISPLAY FILTER: OFF', 2)
         elif cmd == 'ORDER':
             # [O] opens the sort-order picker directly - the curses equivalent
             # of the web gui's <select id="sortSel"> (same pattern as [P] for
@@ -5805,6 +6291,7 @@ if __name__=='__main__':
             if picked is not None:
                 sort_mode = picked
                 screen.clear()
+                cli_message = 'sort: ' + SORT_MODES[sort_mode][0]
         elif cmd == 'ADD':
             value     = input_dialog(' ADD HOSTS ',
                                      ' IPv4/IPv6, hostname, IPv4 CIDR /%d../%d, IPv6 /128 or ip1-ip2:'
@@ -5815,12 +6302,16 @@ if __name__=='__main__':
                 if not new_hosts:
                     notice((add_stats.get('error') or ('invalid host: ' + value)).upper(), 3)
                 else:
+                    before_active = set(active_hosts_list)
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     if err:
                         notice(err.upper(), 3)
                     elif added:
                         write_log_info(args.disable_logging, logfile_file_name,
                                        host_spec_cli('ADD', value), tz_offset)
+                        pending_add_hosts |= (set(new_hosts) - before_active)
+                        cli_message = ('added ' + str(added)
+                                       + ' host(s) - please wait, pinging ...')
         elif cmd == 'ADD_FILE':
             value = input_dialog(' ADD HOSTS FROM FILE ', ' Enter path of the host file:')
             if value:
@@ -5828,12 +6319,14 @@ if __name__=='__main__':
                 if err:
                     notice(err.upper(), 3)
                 else:
+                    before_active = set(active_hosts_list)
                     added, err = add_hosts_to(new_hosts, active_hosts_list, original_hosts_list)
                     if err:
                         notice(err.upper(), 3)
                     else:
                         notice('ADDED ' + str(added) + ' NEW HOST(S) OF ' + str(len(new_hosts)) + ' FOUND', 2)
                         if added:
+                            pending_add_hosts |= (set(new_hosts) - before_active)
                             write_log_info(args.disable_logging, logfile_file_name,
                                            'ADD -f ' + value, tz_offset)
         elif cmd == 'DEL':
@@ -5945,6 +6438,10 @@ if __name__=='__main__':
             rebuild_display()
             draw_screen()
             screen.refresh()
+        if cli_message is not None:
+            web_sync(cli_message, bump=True)
+            cli_message = None
+        elif cmd and have_data:
             web_sync()
 
         # --- clear screen on resize ---
@@ -6007,6 +6504,19 @@ if __name__=='__main__':
                           learning_done, learning_phase, up_seen,
                           args.disable_logging, logfile_file_name,
                           confirm, down_streak)
+        if args.disable_logging:
+            _new_lf = rotate_log_if_needed(logfile_file_name, int(args.log_max_size),
+                                           int(args.log_max_files), tz_offset)
+            if _new_lf != logfile_file_name:
+                logfile_file_name  = _new_lf
+                _logfile_file_name = _new_lf
+                write_log_info(args.disable_logging, logfile_file_name,
+                              build_cli_snapshot(args, backoff, timeout, retries,
+                                                 down_retries, flap_window, confirm,
+                                                 down_slices, full_sweep, tz_offset), tz_offset)
+        if pending_add_hosts and pending_add_hosts <= set(host_state):
+            pending_add_hosts.clear()
+            web_sync('done', bump=True)
         phase['state'] = time.time() - _t
         _t = time.time()
 
