@@ -1,4 +1,4 @@
-# eping.py 3.18
+# eping.py 3.19
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -236,10 +236,11 @@ Serves a single self-contained page; no external resources are loaded.
   row 2,
   in order and separated by `|`: the match filter field with SET / CLEAR, the
   host field with ADD / DELETE, the comment field with COMMENT, then ADD FILE and
-  GENERATE REPORT (web gui only - see *GENERATE REPORT* below) at the end. All work
-  exactly as the matching CLI keys (`U`, `P`, `I`, `G`, `O`, `T`, `A`, `D`, `F`, `L`,
-  `E`), except the address mode select, DOWNLOAD and GENERATE REPORT, which are web
-  gui only and have no matching CLI key (see below for the address mode select).
+  the GENERATE REPORT select (web gui only - see *GENERATE REPORT* below) at the
+  end. All work exactly as the matching CLI keys (`U`, `P`, `I`, `G`, `O`, `T`,
+  `A`, `D`, `F`, `L`, `E`), except the address mode select, DOWNLOAD and GENERATE
+  REPORT, which are web gui only and have no matching CLI key (see below for the
+  address mode select).
   The host field feeds both ADD and DELETE — type a value and press the matching
   button; ENTER triggers the button used last (ADD by default), ESC clears the field.
 - **Keyboard shortcuts mirror the CLI keys**, without a modifier key and only
@@ -361,7 +362,7 @@ These are the same bounds enforced at CLI startup for the matching flags (see
 | GET | `/api/download/logfile` | — | the active CSV log, zipped (DOWNLOAD > ACTIVE LOGFILE); `404` while logging is off |
 | GET | `/api/download/choose_logfile?name=...` | — | one or more `name=` files from `/api/logfiles`, bundled into a single ZIP (DOWNLOAD > CHOOSE FILE) |
 | GET | `/api/report` | — | the last `GENERATE REPORT` HTML result, served inline; `404` until one has completed |
-| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|run_report\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*); `run_report` starts a background `GENERATE REPORT` run (see below) |
+| POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|run_report\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*); `run_report` starts a background `GENERATE REPORT` run - `value` empty analyses the active logfile, or a `.csv` filename from `/api/logfiles` (CHOOSE LOGFILE) to analyse that one instead |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
 | POST | `/api/save_report` | `text/html` (the report page's own DOM) | persists the report's current state to disk in the working directory as `<logfile-base>_report_saved_<timestamp>.html` - the report page's own SAVE button, see *GENERATE REPORT* |
 
@@ -548,10 +549,15 @@ isn't one.
 
 ## GENERATE REPORT (web gui)
 
-`GENERATE REPORT`, next to `ADD FILE`, runs `epinga.py` on the active CSV log and
-opens the resulting HTML report in a new browser tab - without leaving eping.py or
-touching a terminal. It needs logging to be on and the logfile to be non-empty;
-otherwise the tab opens and immediately closes with an error in the footer.
+`GENERATE REPORT`, next to `ADD FILE`, is a dropdown with two entries. `ACTIVE
+LOGFILE` runs `epinga.py` on the active CSV log, same as before; it needs logging
+to be on and the logfile to be non-empty, otherwise the tab opens and immediately
+closes with an error in the footer. `CHOOSE LOGFILE` opens a picker listing every
+`.csv` file in the working directory (single pick, radio buttons - unlike DOWNLOAD
+> CHOOSE FILE's checkboxes, a report always analyses exactly one file) and runs
+`epinga.py` on whichever one is chosen instead, active or not. Either way the
+resulting HTML report opens in a new browser tab - without leaving eping.py or
+touching a terminal.
 
 epinga.py runs in a background thread (`stdin` closed, `--no-version-check`, `-q`,
 `--html <logfile-base>_report.html`), so a large logfile doesn't block the fping
