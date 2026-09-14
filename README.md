@@ -1,4 +1,4 @@
-# eping.py 3.49
+# eping.py 3.50
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
