@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.47'
+VERSION = '3.48'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -6779,7 +6779,7 @@ if __name__=='__main__':
                     active_hosts_list = (apply_prefer_ip(base_list, int(args.dns_ttl)) if prefer_ip
                                          else apply_prefer_hostname(base_list, int(args.dns_ttl))
                                          if prefer_hostname else base_list)
-                    message = 'address mode: ' + ADDR_MODE_LABELS[addr_mode]
+                    message = 'address mode: ' + ADDR_MODE_LABELS[target_mode]
             elif not (0 <= target_mode < len(ADDR_MODE_LABELS)):
                 message = 'invalid address mode'
             else:
