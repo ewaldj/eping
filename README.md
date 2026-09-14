@@ -1,4 +1,4 @@
-# eping.py 3.50
+# eping.py 3.51
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -281,7 +281,7 @@ value: `key=value`. `reset_log` value: logging off - optional custom file name (
 auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
 custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
 JSON body field `values`: `[...]` to merge and analyse multiple `.csv` files as one
-(max 25, `REPORT_MAX_FILES`). `save_hosts_file` value: optional target file name (blank
+(max 25). `save_hosts_file` value: optional target file name (blank
 = active `-f` hostfile, or `eping-hosts.txt` if none).
 
 `-wv` answers `403` to `POST /api/command`/`/api/upload`; `-wvc`/`-web` allow both. No
@@ -417,9 +417,10 @@ On stop, with logging on and a non-empty logfile, eping.py asks:
 Run an analysis of this logfile with epinga.py now? [y/N]:
 ```
 
-`y` (case-insensitive) runs `epinga.py -f <logfile>` in-process before exit; anything
-else skips it. No prompt if stdin unavailable, logging off, or logfile empty/missing.
-Resolves `epinga.py`: copy next to `eping.py` preferred, else `PATH`.
+`y` (case-insensitive) runs `epinga.py -f <logfile>` before exit; anything else skips
+it. Only asked on a terminal-driven exit (CLI `[E]`/Ctrl-C, or `-wv`/`-wvc`'s own
+keyboard `[E]`/Ctrl-C); exiting via a browser's EXIT button never asks. No prompt if
+logging is off or the logfile is empty/missing.
 
 ## GENERATE REPORT (web gui) / ANALYSE NOW (CLI `N`)
 
@@ -428,7 +429,7 @@ running - not just at exit. Web: GENERATE REPORT dropdown, two entries - `ACTIVE
 LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
 closes and a footer error is shown), `CHOOSE LOGFILE` picks one or more `.csv` files in
 the working dir - table (name/size/date), "select all" checkbox, nothing preselected;
-up to 25 files per report (`REPORT_MAX_FILES`), checking a 26th is refused client-side.
+up to 25 files per report, checking a 26th is refused.
 More than one selected file is merged chronologically (by mtime) into one temporary
 CSV, analysed as a single logfile, then the temp file is removed. Result opens in a new
 tab; if a selected file was invalid or has meanwhile been removed (e.g. by log rotation
@@ -442,17 +443,13 @@ the report, and *Called from eping.py* under epinga.py for the invocation.
 
 Read-only viewer for one or more `.csv`/`.txt` files in the working dir - FILE
 OPERATIONS > VIEW FILE FROM SERVER, table picker (name/size/date), "select all". Each
-selected file opens in its own tab: raw content in a `<pre>`, COPY (clipboard) and
-DOWNLOAD buttons, no editing. The whole page is rendered server-side per file
-(`GET /api/view_file?name=...`), not built client-side - every browser blocks a script
-opening more than one tab per click, so opening several files at once can't chain
-several `window.open()` calls from a single click. Instead, a file beyond the first is
-opened by clicking a plain link rendered inside the previous tab (a centered "N more
-file(s) selected / OPEN NEXT FILE" box) - ordinary browser navigation, not a
-script-triggered popup, so it isn't subject to that restriction. Max 200MB per file
-(`VIEW_FILE_MAX_BYTES`) - larger files are refused with a message pointing at DOWNLOAD
-instead. The picker greys out and disables oversized files, labeled "TOO LARGE", with
-the current limit shown in the modal text.
+selected file opens in its own tab: raw content, COPY (clipboard) and DOWNLOAD buttons,
+no editing. Selecting more than one file opens the first tab right away; that tab shows
+a centered "N more file(s) selected / OPEN NEXT FILE" box to open the next one, and so
+on (browsers only allow one new tab per click, so the rest open one click at a time).
+Max 200MB per file - larger files are refused with a message pointing at DOWNLOAD
+instead, and the picker greys those files out, labeled "TOO LARGE", with the current
+limit shown in the modal text.
 
 ## Address modes (PREFER HOSTNAME / SWITCH TO IP ONLY / GET NAMES)
 
