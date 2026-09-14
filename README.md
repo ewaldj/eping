@@ -1,4 +1,4 @@
-# eping.py 3.51
+# eping.py 3.52
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -289,8 +289,10 @@ authentication. Default bind `0.0.0.0` — use `-bind 127.0.0.1` outside trusted
 
 ## How a scan round works
 
-1. Hostnames resolved once (16 parallel), cached `-dns` seconds. Same-address names
-   share one probe. Unresolvable → NO-DNS, no fping call. `-dns 0` = fping-side resolve.
+1. Hostnames resolved once (32 parallel), cached around `-dns` seconds (randomized a
+   bit so a large batch resolved together doesn't all expire - and need re-resolving -
+   in the same round later). Same-address names share one probe. Unresolvable → NO-DNS,
+   no fping call. `-dns 0` = fping-side resolve.
 2. UP/new hosts get full `-re` retries; confirmed-DOWN hosts get `-dr` retries. Every
    `-fs`-th round probes everything with full retries.
 3. Only 1/`-ds` of DOWN hosts probed per round, strided.
