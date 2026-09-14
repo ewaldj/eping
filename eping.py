@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.29'
+VERSION = '3.31'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2068,6 +2068,14 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
            margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
            padding:6px 10px;box-sizing:border-box">
         <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr id="chooseLogHead" style="font-size:11px;color:var(--dim)">
+              <th style="width:20px"></th>
+              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
+              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
+              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
+            </tr>
+          </thead>
           <tbody id="chooseLogList"></tbody>
         </table>
       </div>
@@ -2096,6 +2104,14 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
            margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
            padding:6px 10px;box-sizing:border-box">
         <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr id="deleteFilesHead" style="font-size:11px;color:var(--dim)">
+              <th style="width:20px"></th>
+              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
+              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
+              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
+            </tr>
+          </thead>
           <tbody id="deleteFilesList"></tbody>
         </table>
       </div>
@@ -2119,6 +2135,14 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
            margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
            padding:6px 10px;box-sizing:border-box">
         <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr id="addFromServerHead" style="font-size:11px;color:var(--dim)">
+              <th style="width:20px"></th>
+              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
+              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
+              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
+            </tr>
+          </thead>
           <tbody id="addFromServerList"></tbody>
         </table>
       </div>
@@ -2487,8 +2511,34 @@ function startIframeDownload(src, label){
   setTimeout(function(){ finish(true); }, 60000);   // safety net, see comment above
   note('downloading ' + label + ' ...', true);
 }
+/* ---- shared column sort for file-picker tables (CHOOSE FILE / DELETE FILES / ADD FROM SERVER) ---- */
+function sortFileList(files, state){
+  var key = state.key, dir = state.dir;
+  var out = files.slice();
+  out.sort(function(a, b){
+    var av = a[key], bv = b[key];
+    if(key === 'name'){ av = av.toLowerCase(); bv = bv.toLowerCase(); }
+    var cmp = av < bv ? -1 : (av > bv ? 1 : 0);
+    return dir === 'desc' ? -cmp : cmp;
+  });
+  return out;
+}
+function wireFileSortHead(headEl, state, renderFn){
+  Array.prototype.forEach.call(headEl.querySelectorAll('th[data-sort]'), function(th){
+    th.onclick = function(){
+      var key = this.dataset.sort;
+      state.dir = (state.key === key) ? (state.dir === 'asc' ? 'desc' : 'asc') : (key === 'name' ? 'asc' : 'desc');
+      state.key = key;
+      renderFn();
+    };
+    th.querySelector('.sortArrow').textContent =
+      (state.key === th.dataset.sort) ? (state.dir === 'asc' ? ' \u25B2' : ' \u25BC') : '';
+  });
+}
+
 var chooseLogFiles = [];                          // raw list from the last /api/logfiles fetch
 var chooseLogExts   = {csv: true, txt: true, html: true};   // filter toggle state
+var chooseLogSort    = {key: 'mtime', dir: 'desc'};          // matches /api/logfiles' own order
 function formatFileDate(ts){
   if(!ts) return '';
   var d = new Date(ts * 1000);
@@ -2509,8 +2559,10 @@ function chooseLogRenderList(){
     var ext = f.name.split('.').pop().toLowerCase();
     return !!chooseLogExts[ext];
   });
+  visible = sortFileList(visible, chooseLogSort);
   list.innerHTML = '';
   all.checked = false;
+  wireFileSortHead(document.getElementById('chooseLogHead'), chooseLogSort, chooseLogRenderList);
   if(!visible.length){
     list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no matching files</td></tr>';
     all.disabled = true;
@@ -2578,6 +2630,7 @@ document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
    FILE's DELETE button up to v3.25 ---- */
 var deleteFilesFiles = [];
 var deleteFilesExts  = {csv: true, txt: true, html: true};
+var deleteFilesSort  = {key: 'mtime', dir: 'desc'};
 var deleteFilesModal = document.getElementById('deleteFilesModal');
 function deleteFilesOpen(){ return deleteFilesModal.style.display !== 'none'; }
 function closeDeleteFiles(){ deleteFilesModal.style.display = 'none'; }
@@ -2592,8 +2645,10 @@ function deleteFilesRenderList(){
     var ext = f.name.split('.').pop().toLowerCase();
     return !!deleteFilesExts[ext];
   });
+  visible = sortFileList(visible, deleteFilesSort);
   list.innerHTML = '';
   all.checked = false;
+  wireFileSortHead(document.getElementById('deleteFilesHead'), deleteFilesSort, deleteFilesRenderList);
   if(!visible.length){
     list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no matching files</td></tr>';
     all.disabled = true;
@@ -2602,13 +2657,16 @@ function deleteFilesRenderList(){
   }
   visible.forEach(function(f){
     var tr = document.createElement('tr');
-    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    tr.style.cssText = f.active
+      ? 'font-size:12px;opacity:.45;cursor:not-allowed'
+      : 'cursor:pointer;font-size:12px';
     var tdCb = document.createElement('td');
     tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
     var cb = document.createElement('input');
     cb.type      = 'checkbox';
     cb.className = 'deleteFilesCb';
     cb.value     = f.name;
+    if(f.active) cb.disabled = true;   // active logfile - server refuses deleting it, see /api/delete_logfile
     tdCb.appendChild(cb);
     var tdName = document.createElement('td');
     tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
@@ -2623,7 +2681,9 @@ function deleteFilesRenderList(){
     tr.appendChild(tdName);
     tr.appendChild(tdSize);
     tr.appendChild(tdDate);
-    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateDeleteFilesControls(); };
+    if(!f.active){
+      tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateDeleteFilesControls(); };
+    }
     list.appendChild(tr);
   });
   all.disabled = false;
@@ -2653,7 +2713,9 @@ Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesExtBtn'), fu
 });
 document.getElementById('deleteFilesSelectAll').onchange = function(){
   var checked = this.checked;
-  Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesCb'), function(cb){ cb.checked = checked; });
+  Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesCb'), function(cb){
+    if(!cb.disabled) cb.checked = checked;
+  });
   updateDeleteFilesControls();
 };
 document.getElementById('deleteFilesBtn').onclick = function(){
@@ -2980,6 +3042,7 @@ uploadServerFileInput.addEventListener('change', function(){
 
 /* ---- add hosts from a .txt file already on the server ---- */
 var addFromServerFiles = [];
+var addFromServerSort  = {key: 'mtime', dir: 'desc'};
 var addFromServerModal = document.getElementById('addFromServerModal');
 function closeAddFromServer(){ addFromServerModal.style.display = 'none'; }
 function addFromServerUpdateControls(){
@@ -2989,15 +3052,17 @@ function addFromServerUpdateControls(){
 function addFromServerRenderList(){
   var list = document.getElementById('addFromServerList');
   var all  = document.getElementById('addFromServerSelectAll');
+  var visible = sortFileList(addFromServerFiles, addFromServerSort);
   list.innerHTML = '';
   all.checked = false;
-  if(!addFromServerFiles.length){
+  wireFileSortHead(document.getElementById('addFromServerHead'), addFromServerSort, addFromServerRenderList);
+  if(!visible.length){
     list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no .txt files found</td></tr>';
     all.disabled = true;
     addFromServerUpdateControls();
     return;
   }
-  addFromServerFiles.forEach(function(f){
+  visible.forEach(function(f){
     var tr = document.createElement('tr');
     tr.style.cssText = 'cursor:pointer;font-size:12px';
     var tdCb = document.createElement('td');
