@@ -100,22 +100,26 @@ DOWN. Columns: hostname/IP, state, RTT (ms), last-change timestamp, change count
 
 | Key | Action |
 |---|---|
-| `U` | cycle view: ALL HOSTS → UP → UP+FLAPPING → ALL HOSTS |
+| `U` | view picker — all 9 views (see *Views and sort orders*) |
 | `M` | match filter — regex on hostname/IP, display only (see *Match filter*) |
 | `A` | add host — IP, hostname, CIDR (/13…/32), or `ip1-ip2` (max 524288) |
 | `D` | delete host — same formats/limits as add |
 | `F` | add hosts from a file |
-| `O` | cycle sort order |
+| `O` | sort order picker — 5 orders (see *Views and sort orders*) |
 | `T` | add comment — timestamped CSV row (logging on only) |
 | `S` | set reference — shown list becomes new base list |
 | `Z` | zero changes — reset CH-TIME/CH NO, states kept |
 | `C` | clear all hosts and state |
-| `P` | toggle PREFER HOSTNAMES |
-| `I` | toggle IP ONLY |
+| `P` | address mode picker — 4 modes (see *Address modes*) |
+| `X` | ADV OPTIONS — live option editing (see *ADV OPTIONS*) |
+| `N` | ANALYSE NOW — run epinga.py against the active logfile in the background (see *GENERATE REPORT*) |
 | `G` | GET NAMES — reverse-DNS raw IPs, one-shot, background |
 | `R` | redraw screen |
 | `L` | reset logging (logging on) / START LOG (logging off) |
 | `E` | exit — `os._exit()` immediately |
+
+`U`, `O` and `P` open a picker dialog (`↑`/`↓` select, ENTER confirms, ESC cancels) -
+same option set as the matching web GUI dropdown.
 
 Dialogs: ENTER confirms, ESC/empty cancels. Key bar shortens on narrow terminals.
 `PLEASE WAIT` box with elapsed counter shown until the first round has results.
@@ -152,12 +156,15 @@ Single self-contained page, no external resources.
 - Font size 6–28px (slider, `A−`/`A+`, `+`/`−` keys), stored in `localStorage`.
 - Column headers sort the list (IPv4-aware).
 - Toolbar, two rows (wraps if narrow):
-  - Row 1: view select (10 views), sort order select, SET REFERENCE, ZERO CHANGES,
+  - Row 1: view select (9 views), sort order select, SET REFERENCE, ZERO CHANGES,
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, RESET LOG, FILE OPERATIONS
     select, EXIT, font size.
   - Row 2: match filter (SET/CLEAR), host field (ADD/DELETE), comment field (COMMENT),
     ADD FILE select, GENERATE REPORT select.
-  - Address mode select, FILE OPERATIONS, GENERATE REPORT are web-gui-only, no CLI key.
+  - View select, sort order select, address mode select and ADV OPTIONS all match the
+    CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS and ADD FILE > FROM CLIENT/
+    FROM SERVER are web-gui-only (no CLI key - CLI already runs on the server's own
+    filesystem).
 - **FILE OPERATIONS** dropdown:
   | Entry | Does |
   |---|---|
@@ -169,11 +176,15 @@ Single self-contained page, no external resources.
   | DELETE FILES | same picker as DOWNLOAD SELECTED FILE, red DELETE button, confirms with file count; active logfile can't be deleted |
 - **ADD FILE** dropdown: `FROM CLIENT` (local file picker) / `FROM SERVER` (picks one
   or more `.txt` files already on the server, adds their hosts).
-- Keyboard shortcuts mirror CLI keys (no modifier, only while no text field has
-  focus): `U` cycles view; `P`/`I`/`G`/`S`/`Z`/`C`/`L`/`E` click the matching button
-  (`E`/`C`/`L` confirm); `O` cycles sort; `A`/`D` focus host field; `M`/`T` focus their
-  field; `F` opens the file picker; `R` forces a status refresh; `+`/`−` font size
-  (works while typing).
+- Keyboard shortcuts (no modifier, only while no text field has focus; own quick
+  variants, not the CLI's picker keys of the same letter): `U` cycles the original 3
+  views (ALL HOSTS → CURRENTLY-UP → UP+FLAPPING → ALL HOSTS), the other 6 need the
+  dropdown; `O` cycles all 5 sort orders one at a time; `P`/`I` toggle PREFER HOSTNAME /
+  SWITCH TO IP ONLY directly, the address mode select reaches all 4 modes; `G`/`S`/`Z`/
+  `C`/`L`/`E` click the matching button (`E`/`C`/`L` confirm); `A`/`D` focus host field;
+  `M`/`T` focus their field; `F` opens the file picker; `R` forces a status refresh;
+  `+`/`−` font size (works while typing). No keyboard shortcut for `X`/ADV OPTIONS or
+  GENERATE REPORT - click required.
 - Host field feeds both ADD/DELETE; ENTER triggers the button used last, ESC clears.
 - Files can also be dropped anywhere on the page (max 16MB, see *Host file format*).
 - Commands acknowledge immediately; a click aborts the running round.
@@ -183,41 +194,43 @@ Single self-contained page, no external resources.
 **Flapping**: last state change within `-fw` minutes (default 72000 = 50 days, off
 unless lowered). `CH NO` counts changes; `Z` resets it.
 
-`U` cycles ALL HOSTS → UP → UP+FLAPPING → ALL HOSTS (CLI + web). Web GUI adds 7 more
-views via dropdown only; `U` skips them. A view also limits what's probed — filtered
-hosts aren't probed until back to ALL HOSTS. Host list snapshotted at switch time. A
-view with no matches is rejected, previous view stays active.
+CLI `U` and web GUI's view select/`U` picker (see *CLI mode*) reach the same 9 views.
+The web GUI's own `U` keyboard shortcut only cycles ALL HOSTS → CURRENTLY-UP →
+UP+FLAPPING → ALL HOSTS (see *Web GUI* keyboard shortcuts). A view also limits what's
+probed — filtered hosts aren't probed until back to ALL HOSTS. Host list snapshotted at
+switch time. A view with no matches is rejected, previous view stays active.
 
-`ALWAYS-UP`/`ALWAYS-DOWN`: never changed state this run (`CH NO` = 0). `EVER-UP`: UP at
-least once this run, regardless of current state. `NO-DNS` counts as DOWN for
-`CURRENTLY-DOWN`/`ALWAYS-DOWN`/`DOWN+FLAPPING`.
+`ALWAYS-UP`/`ALWAYS-DOWN`: never changed state this run (`CH NO` = 0). `NO-DNS` counts
+as DOWN for `CURRENTLY-DOWN`/`ALWAYS-DOWN`/`DOWN+FLAPPING`.
 
-Dropdown order: ALL HOSTS, CURRENTLY-UP, ALWAYS-UP, EVER-UP, UP+FLAPPING,
-FLAPPING-ONLY, ALWAYS-DOWN, CURRENTLY-DOWN, DOWN+FLAPPING, NO-DNS.
+Picker/dropdown order: ALL HOSTS, CURRENTLY-UP, ALWAYS-UP, UP+FLAPPING, FLAPPING-ONLY,
+ALWAYS-DOWN, CURRENTLY-DOWN, DOWN+FLAPPING, NO-DNS.
 
-| View | Contains | Where |
-|---|---|---|
-| ALL HOSTS | everything | CLI + web |
-| CURRENTLY-UP | UP now | CLI + web |
-| ALWAYS-UP | UP, never changed this run | web only |
-| EVER-UP | UP at least once this run | web only |
-| UP+FLAPPING | UP now + flapping | CLI + web |
-| FLAPPING-ONLY | flapping, regardless of state | web only |
-| ALWAYS-DOWN | DOWN/NO-DNS, never changed this run | web only |
-| CURRENTLY-DOWN | DOWN or NO-DNS now | web only |
-| DOWN+FLAPPING | DOWN/NO-DNS now + flapping | web only |
-| NO-DNS | unresolvable now | web only |
+| View | Contains |
+|---|---|
+| ALL HOSTS | everything |
+| CURRENTLY-UP | UP now |
+| ALWAYS-UP | UP, never changed this run |
+| UP+FLAPPING | UP now + flapping |
+| FLAPPING-ONLY | flapping, regardless of state |
+| ALWAYS-DOWN | DOWN/NO-DNS, never changed this run |
+| CURRENTLY-DOWN | DOWN or NO-DNS now |
+| DOWN+FLAPPING | DOWN/NO-DNS now + flapping |
+| NO-DNS | unresolvable now |
 
-`O` cycles 5 sort orders: `ADDRESS` (default), `UP/FLAP/DOWN`, `DOWN/FLAP/UP`,
-`FLAP/UP/DOWN`, `FLAP/DOWN/UP`. FLAP group contains both UP and DOWN flapping hosts;
-NO-DNS counts as DOWN. Inside FLAP: state first (direction per mode), then change
-count (highest first), then address. Both view and order apply immediately, order
-re-evaluated every round.
+CLI `O` and web GUI's sort select/`O` picker reach the same 5 sort orders directly; the
+web GUI's own `O` keyboard shortcut cycles them one at a time. `ADDRESS` (default),
+`UP/FLAP/DOWN`, `DOWN/FLAP/UP`, `FLAP/UP/DOWN`, `FLAP/DOWN/UP`. FLAP group contains both
+UP and DOWN flapping hosts; NO-DNS counts as DOWN. Inside FLAP: state first (direction
+per mode), then change count (highest first), then address. Both view and order apply
+immediately, order re-evaluated every round.
 
 ### ADV OPTIONS
 
-Web GUI only. Modal, every option as slider + text field, applied live. RESET TO
-DEFAULT restores startup values; APPLY re-sends every field.
+Web GUI (button) and CLI (`X` key). Web: modal, every option as slider + text field,
+applied live; RESET TO DEFAULT restores startup values, APPLY re-sends every field. CLI:
+same 16 options/ranges in a dialog - `↑`/`↓` select, `+`/`-` step, ENTER to type a value
+directly, `D` resets the selected option to its default, `R` resets all, ESC/`X` closes.
 
 | Option | Range | 0/-1 means |
 |---|---|---|
@@ -395,30 +408,35 @@ Run an analysis of this logfile with epinga.py now? [y/N]:
 else skips it. No prompt if stdin unavailable, logging off, or logfile empty/missing.
 Resolves `epinga.py`: copy next to `eping.py` preferred, else `PATH`.
 
-## GENERATE REPORT (web gui)
+## GENERATE REPORT (web gui) / ANALYSE NOW (CLI `N`)
 
-Dropdown, two entries. `ACTIVE LOGFILE`: analyses the active CSV log with epinga.py
-(needs logging on, non-empty logfile, else the tab opens/closes with a footer error).
-`CHOOSE LOGFILE`: picker lists every `.csv` in the working dir (single pick), analyses
-that one. Result opens in a new tab. See *epinga.py* below for the report, and *Called
+Runs epinga.py against a logfile in the background while eping.py keeps running - not
+just at exit. Web: GENERATE REPORT dropdown, two entries - `ACTIVE LOGFILE` analyses the
+active CSV log (needs logging on, non-empty logfile, else the tab opens/closes with a
+footer error), `CHOOSE LOGFILE` picks any `.csv` in the working dir (single pick).
+Result opens in a new tab. CLI: `N` always analyses the active logfile (needs logging
+on, non-empty logfile, else a notice is shown); result path/error shown once done.
+Only one run at a time either way. See *epinga.py* below for the report, and *Called
 from eping.py* under epinga.py for the invocation.
 
-## Address modes (PREFER HOSTNAMES / IP ONLY / GET NAMES)
+## Address modes (PREFER HOSTNAME / SWITCH TO IP ONLY / GET NAMES)
 
-`PREFER HOSTNAMES`/`P` (`-ph`): drops a raw-IP host from pinging when another entry
-resolves to the same address. Toggling off restores the full list. Redundancy check
-cached `-dns` seconds.
+`PREFER HOSTNAME` (`-ph`): drops a raw-IP host from pinging when another entry resolves
+to the same address. Redundancy check cached `-dns` seconds. `PREFER IP ADDRESS`: the
+mirror - drops a hostname entry once its resolved address is already covered by a
+raw-IP entry. Both non-destructive, restored by switching to another mode.
 
-`IP ONLY`/`I` (`-ipo`): resolves every hostname to its address (v4/v6 per `-4`/`-6`,
-A preferred by default) and renames it in place (history/uptime carry over). Toggling
-off restores original hostnames. CLI: a hostname whose address collides with another
-host is dropped and not restored. Web GUI's `SWITCH TO IP ONLY`: colliding/unresolvable
-hosts are hidden (not pinged) while active, restored automatically when switching away.
+`SWITCH TO IP ONLY` (`-ipo`): resolves every hostname to its address (v4/v6 per
+`-4`/`-6`, A preferred by default) and renames it in place (history/uptime carry over).
+CLI: a hostname whose address collides with another host is dropped and not restored.
+Web GUI: colliding/unresolvable hosts are hidden (not pinged) while active, restored
+automatically when switching away.
 
-CLI: two independent toggles (`P`/`I`). Web GUI: one dropdown, four exclusive entries —
-`AS PROVIDED`, `PREFER HOSTNAME`, `PREFER IP ADDRESS` (mirror of PREFER HOSTNAME),
-`SWITCH TO IP ONLY`. Leaving `SWITCH TO IP ONLY` restores hostnames before applying the
-new mode.
+CLI `P` and the web GUI's address mode select/`P` picker reach the same 4 exclusive
+modes: `HOSTNAME & IP` (default, no dedup), `PREFER HOSTNAME`, `PREFER IP ADDRESS`,
+`SWITCH TO IP ONLY`. The web GUI additionally has its own `P`/`I` keyboard shortcuts
+that toggle PREFER HOSTNAME / SWITCH TO IP ONLY directly (see *Web GUI*). Leaving
+`SWITCH TO IP ONLY` restores hostnames before applying the new mode.
 
 `GET NAMES`/`G` (`-gn`): reverse-DNS every raw IP with no hostname counterpart, renames
 on a PTR match (history/uptime carry over). Stays an IP if: no PTR record, name
@@ -496,11 +514,13 @@ Output: `<base>_report.txt` and `<base>_report.html` (`--html FILE` overrides).
 
 ## Called from eping.py
 
-`GENERATE REPORT` (web gui) runs epinga.py in a background thread: `stdin` closed,
-`--no-version-check -q --html <logfile-base>_report.html`. Blank tab opens right away,
-navigates to the report once done (1s poll). One run at a time. Never overwrites -
-repeat run for the same logfile gets `_report-1.html`, `_report-2.html`, etc. Also
-used by *Run analysis on exit* (`epinga.py -f <logfile>`, in-process, no thread).
+`GENERATE REPORT` (web gui) and `N`/ANALYSE NOW (CLI) both run epinga.py in a
+background thread: `stdin` closed, `--no-version-check -q --html
+<logfile-base>_report.html`. Web: a blank tab opens right away, navigates to the report
+once done (1s poll). CLI: result path/error shown via a notice once done. Either way,
+one run at a time, never overwrites - repeat run for the same logfile gets
+`_report-1.html`, `_report-2.html`, etc. Also used by *Run analysis on exit*
+(`epinga.py -f <logfile>`, in-process, no thread).
 
 ## HTML report
 
