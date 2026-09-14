@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.38'
+VERSION = '3.47'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -47,6 +47,8 @@ DOWN_SLICES_MAX    = 20
 FULL_SWEEP_MAX     = 50       # 0 = disabled (never sweep)
 DNS_TTL_MAX        = 3600
 DOWNLOAD_FILE_EXTS = ('.csv', '.txt', '.html')  # CHOOSE FILE picker - listed types
+VIEW_FILE_EXTS     = ('.csv', '.txt')           # VIEW FILE FROM SERVER - listed types
+VIEW_FILE_MAX_BYTES = 20 * 1024 * 1024   # rendered inline in one response - must fit in memory
 RUNTIME_UNAVAILABLE = 'n/a'  # shown instead of a stale/misleading RUNTIME value - see
                              # run_background_pings(): background rounds during a dialog
                              # advance RUNS but never update RUNTIME, so the figure would
@@ -146,6 +148,7 @@ WEB_MAX_UPLOAD     = 16 * 1024 * 1024   # max size of an uploaded host file
 import os
 import re
 import sys
+import html
 import csv
 import glob
 import math
@@ -1933,6 +1936,8 @@ web_state = {
     'version'          : VERSION,
     'update_available' : False,
     'datetime'         : '',
+    'hostfile_name'    : '',      # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER target,
+    'hostfile_active'  : False,   # '' / False if eping.py was started with -df
     'rows'             : [],
     'host_list_shown'  : [],   # DOWNLOAD > SHOWN HOSTS - currently displayed hosts
     'host_list_all'    : [],   # DOWNLOAD > ALL HOSTS - the full reference list
@@ -2136,6 +2141,19 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="saveHostsModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <h3>SAVE HOSTS FILE ON SERVER</h3>
+      <p id="saveHostsText">Save the currently shown hosts to the server?</p>
+      <input type="text" id="saveHostsNameInput" maxlength="255"
+             placeholder="file name (blank = eping-hosts.txt), .txt added automatically"
+             style="width:100%;box-sizing:border-box;margin-bottom:12px">
+      <div class="modal-buttons">
+        <button id="modalBtnSaveHostsConfirm" class="danger">SAVE (Y)</button>
+        <button id="modalBtnSaveHostsCancel">CANCEL (ESC)</button>
+      </div>
+    </div>
+  </div>
   <div id="stoppedModal" class="modal-overlay" style="display:none">
     <div class="modal-box">
       <h3 style="color:var(--down)">EPING.PY STOPPED</h3>
@@ -2183,6 +2201,37 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <div class="modal-buttons">
         <button id="modalBtnChooseLogDownload">DOWNLOAD</button>
         <button id="modalBtnChooseLogCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
+  <div id="viewFileModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide xwide">
+      <h3>VIEW FILE</h3>
+      <p>Pick one or more *.txt/*.csv files - each opens read-only in its own new tab
+         (raw content, with COPY and DOWNLOAD buttons).</p>
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+          <input type="checkbox" id="viewFileSelectAll"> select all
+        </label>
+      </div>
+      <div style="width:100%;max-height:220px;overflow-y:auto;
+           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
+           padding:6px 10px;box-sizing:border-box">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr id="viewFileHead" style="font-size:11px;color:var(--dim)">
+              <th style="width:20px"></th>
+              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
+              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
+              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="viewFileList"></tbody>
+        </table>
+      </div>
+      <div class="modal-buttons">
+        <button id="modalBtnViewFileOpen">VIEW</button>
+        <button id="modalBtnViewFileCancel">CANCEL</button>
       </div>
     </div>
   </div>
@@ -2254,13 +2303,30 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div id="chooseReportModal" class="modal-overlay" style="display:none">
-    <div class="modal-box wide">
+    <div class="modal-box wide xwide">
       <h3>CHOOSE LOGFILE</h3>
-      <p>Pick one or more *.csv log files to analyse with epinga.py as one combined report.
-         Files from the same size-rotation chain are auto-selected - uncheck any you don't want.</p>
-      <div id="chooseReportList" style="width:100%;max-height:220px;overflow-y:auto;
+      <p>Pick one or more *.csv log files to analyse with epinga.py as one combined report -
+         max <span id="chooseReportMax"></span> files per report.</p>
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+          <input type="checkbox" id="chooseReportSelectAll"> select all
+        </label>
+      </div>
+      <div style="width:100%;max-height:220px;overflow-y:auto;
            margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
-           padding:6px 10px;box-sizing:border-box"></div>
+           padding:6px 10px;box-sizing:border-box">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr id="chooseReportHead" style="font-size:11px;color:var(--dim)">
+              <th style="width:20px"></th>
+              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
+              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
+              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
+            </tr>
+          </thead>
+          <tbody id="chooseReportList"></tbody>
+        </table>
+      </div>
       <div class="modal-buttons">
         <button id="modalBtnChooseReportGenerate">GENERATE</button>
         <button id="modalBtnChooseReportCancel">CANCEL</button>
@@ -2337,14 +2403,16 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
-      <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, or delete files from it">
+      <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
+        <option value="save_hosts_file">SAVE HOSTS FILE ON SERVER</option>
+        <option value="upload_file">UPLOAD FILE TO SERVER</option>
         <option value="hosts_all">DOWNLOAD ALL HOSTS</option>
-        <option value="hosts_shown">DOWNLOAD SHOWN HOSTS</option>
+        <option value="hosts_shown">DOWNLOAD ACTIVE HOSTS</option>
         <option value="logfile">DOWNLOAD ACTIVE LOGFILE</option>
-        <option value="choose_logfile">DOWNLOAD SELECTED FILE</option>
-        <option value="upload_file">UPLOAD FILE</option>
-        <option value="delete_files">DELETE FILES</option>
+        <option value="choose_logfile">DOWNLOAD SELECTED FILES</option>
+        <option value="delete_files">DELETE FILES FROM SERVER</option>
+        <option value="view_file">VIEW FILE FROM SERVER</option>
       </select>
       <input type="file" id="uploadServerFileInput" accept=".txt,.csv,text/csv,text/plain" style="display:none">
       <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
@@ -2515,6 +2583,7 @@ var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', so
                set_option:'applying option ...',
                reset_options:'resetting options ...',
                run_report:'generating report ...',
+               save_hosts_file:'saving hosts file ...',
                exit:'stopping eping ...'};
 var pending = false, lastMsgSeq = null;
 var pendingAddrMode   = null;   // see selAddrMode onchange / poll() below
@@ -2728,6 +2797,99 @@ document.getElementById('chooseLogSelectAll').onchange = function(){
 };
 document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
 
+/* ---- VIEW FILE (FILE OPERATIONS > VIEW FILE FROM SERVER) - read-only, one
+   new tab per selected *.txt/*.csv file, raw content + COPY/DOWNLOAD ---- */
+var viewFileFiles = [];
+var viewFileSort  = {key: 'mtime', dir: 'desc'};
+var viewFileModal = document.getElementById('viewFileModal');
+function viewFileOpen(){ return viewFileModal.style.display !== 'none'; }
+function closeViewFile(){ viewFileModal.style.display = 'none'; }
+function viewFileRenderList(){
+  var list = document.getElementById('viewFileList');
+  var all  = document.getElementById('viewFileSelectAll');
+  var visible = sortFileList(viewFileFiles, viewFileSort);
+  list.innerHTML = '';
+  all.checked = false;
+  wireFileSortHead(document.getElementById('viewFileHead'), viewFileSort, viewFileRenderList);
+  if(!visible.length){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no *.txt/*.csv files found</td></tr>';
+    all.disabled = true;
+    return;
+  }
+  visible.forEach(function(f){
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    var tdCb = document.createElement('td');
+    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
+    var cb = document.createElement('input');
+    cb.type      = 'checkbox';
+    cb.className = 'viewFileCb';
+    cb.value     = f.name;
+    tdCb.appendChild(cb);
+    var tdName = document.createElement('td');
+    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
+    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
+    var tdSize = document.createElement('td');
+    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdSize.textContent = humanBytes(f.size);
+    var tdDate = document.createElement('td');
+    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdDate.textContent = formatFileDate(f.mtime);
+    tr.appendChild(tdCb);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSize);
+    tr.appendChild(tdDate);
+    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } };
+    list.appendChild(tr);
+  });
+  all.disabled = false;
+}
+function openViewFile(){
+  var list = document.getElementById('viewFileList');
+  var all  = document.getElementById('viewFileSelectAll');
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  all.checked  = false;
+  all.disabled = true;
+  viewFileModal.style.display = 'flex';
+  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
+    viewFileFiles = (j.files || []).filter(function(f){
+      var ext = f.name.split('.').pop().toLowerCase();
+      return ext === 'csv' || ext === 'txt';
+    });
+    viewFileRenderList();
+  }).catch(function(){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
+  });
+}
+document.getElementById('viewFileSelectAll').onchange = function(){
+  var checked = this.checked;
+  Array.prototype.forEach.call(document.querySelectorAll('.viewFileCb'), function(cb){ cb.checked = checked; });
+};
+document.getElementById('modalBtnViewFileCancel').onclick = closeViewFile;
+
+// VIEW FILE FROM SERVER opens api/view_file?name=...&queue=...&queue=... - a
+// server-rendered page (see render_view_file_page() in eping.py), not a
+// client-built one. Only the FIRST file is opened from here (one genuine
+// click = one window.open(), always allowed); every file after that is
+// opened by the user clicking a plain <a target="_blank"> link INSIDE that
+// page, which every browser treats as ordinary navigation. Earlier attempts
+// used window.open() from a click inside the previous tab (Chrome/Firefox
+// block that - only Safari allowed it) and a window.opener callback back to
+// this window (same result: blocked everywhere but Safari) - a real anchor
+// is what actually works across browsers, so the whole client-side queue/
+// popup dance is gone.
+document.getElementById('modalBtnViewFileOpen').onclick = function(){
+  var boxes = document.querySelectorAll('.viewFileCb:checked');
+  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+  if(!names.length) return;
+  closeViewFile();
+  var qs = 'name=' + encodeURIComponent(names[0]);
+  for(var i = 1; i < names.length; i++) qs += '&queue=' + encodeURIComponent(names[i]);
+  if(!window.open('/api/view_file?' + qs, '_blank')){
+    note('tab blocked by the browser’s popup blocker', false);
+  }
+};
+
 /* ---- DELETE FILES (FILE ACTIONS > DELETE FILES) - own modal, was CHOOSE
    FILE's DELETE button up to v3.25 ---- */
 var deleteFilesFiles = [];
@@ -2855,6 +3017,9 @@ document.getElementById('modalBtnChooseLogDownload').onclick = function(){
 };
 var resetLogModal = document.getElementById('resetLogModal');
 var loggingOn = false;   // kept in sync from every status poll, see render()
+var hostfileActive  = false;   // FILE OPERATIONS > SAVE HOSTS FILE ON SERVER -
+var hostfileName    = '';      // all three kept in sync from every status poll,
+var shownHostsCount = 0;       // see render()
 var reportWindow = null; // blank tab opened by GENERATE REPORT, filled in once ready - see poll()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
 function closeResetLog(){ resetLogModal.style.display = 'none'; }
@@ -2890,6 +3055,36 @@ function runResetLog(action){
   if(!loggingOn){ post('reset_log', name); return; }
   post('reset_log', action === 'new' && name ? 'new=' + name : action);
 }
+
+/* ---- FILE OPERATIONS > SAVE HOSTS FILE ON SERVER ---- */
+var saveHostsModal = document.getElementById('saveHostsModal');
+function saveHostsOpen(){ return saveHostsModal.style.display !== 'none'; }
+function closeSaveHosts(){ saveHostsModal.style.display = 'none'; }
+function openSaveHosts(){
+  var input = document.getElementById('saveHostsNameInput');
+  var text  = document.getElementById('saveHostsText');
+  input.value = '';
+  if(hostfileActive){
+    input.style.display = 'none';
+    text.innerHTML = 'Overwrite <b>' + esc(hostfileName) + '</b> on the server with the '
+      + shownHostsCount + ' host(s) currently shown?';
+  } else {
+    input.style.display = '';
+    text.innerHTML = 'eping.py was started without a hosts file. Save the '
+      + shownHostsCount + ' host(s) currently shown as a new file on the server:';
+  }
+  saveHostsModal.style.display = 'flex';
+  if(!hostfileActive) input.focus();
+}
+function runSaveHostsFile(){
+  // value is only used server-side when no hostfile is active (see
+  // sanitize_hostfile_save_name()) - ignored otherwise
+  var name = document.getElementById('saveHostsNameInput').value.trim();
+  closeSaveHosts();
+  post('save_hosts_file', name);
+}
+document.getElementById('modalBtnSaveHostsConfirm').onclick = runSaveHostsFile;
+document.getElementById('modalBtnSaveHostsCancel').onclick  = closeSaveHosts;
 
 // key, label, unit, sliderMin, sliderMax, step, longDesc (full mouseover tooltip),
 // shortDesc (few words, shown inline next to the label).
@@ -3288,6 +3483,10 @@ var REPORT_WAIT_HTML = '<!doctype html><html><head><meta charset="UTF-8">'
   + 'Generating report with epinga.py &hellip;<br>'
   + '<small style="color:#5d6b5d">please wait - this tab will update automatically</small>'
   + '</div></body></html>';
+// must match REPORT_MAX_FILES in eping.py - do_POST silently truncates beyond
+// this, so the picker below enforces the same cap instead of letting the user
+// select more and lose files without any indication.
+var REPORT_MAX_FILES = 25;
 function runReport(values){
   // window.open() must happen synchronously in the click handler or browsers
   // treat it as a popup and block it - open a blank tab now, fill it in once
@@ -3303,7 +3502,24 @@ function runReport(values){
   var body = Array.isArray(values) ? {cmd: 'run_report', values: values}
                                     : {cmd: 'run_report', value: values || ''};
   fetch('api/command', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)}).then(function(r){ return r.json(); });
+    body: JSON.stringify(body)})
+    .then(function(r){ return r.json().then(function(j){ return {ok: r.ok && j.ok, err: j.error}; }); })
+    .then(function(res){
+      // a rejected request (bad/now-missing filename, e.g. pruned by a size
+      // rotation between picking it and clicking GENERATE) never flips
+      // web_state['report'] to 'error' server-side - without this, the blank
+      // tab above would sit on "please wait" forever with no explanation.
+      if(!res.ok){
+        if(reportWindow && !reportWindow.closed) reportWindow.close();
+        reportWindow = null;
+        note('report failed: ' + (res.err || 'request rejected'), false);
+      }
+    })
+    .catch(function(){
+      if(reportWindow && !reportWindow.closed) reportWindow.close();
+      reportWindow = null;
+      note('report failed: request error', false);
+    });
 }
 document.getElementById('selGenReport').onchange = function(){
   var what = this.value;
@@ -3311,54 +3527,84 @@ document.getElementById('selGenReport').onchange = function(){
   if(what === 'active'){ runReport(''); }
   else if(what === 'choose'){ openChooseReport(); }
 };
-// Rotation chain grouping key for GENERATE REPORT's multi-select - matches
-// rotated_logfile_name()'s 'eping-log_<timestamp>[-N].csv' scheme server-side.
-// Returns the shared original timestamp, or null if name isn't part of one.
-function reportChainKey(name){
-  var m = /^eping-log_(\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2})(?:-\d+)?\.csv$/.exec(name);
-  return m ? m[1] : null;
+var chooseReportFiles = [];
+var chooseReportSort  = {key: 'mtime', dir: 'desc'};
+var chooseReportModal = document.getElementById('chooseReportModal');
+function updateChooseReportControls(){
+  var boxes   = document.querySelectorAll('.chooseReportCb');
+  var checked = document.querySelectorAll('.chooseReportCb:checked');
+  Array.prototype.forEach.call(boxes, function(cb){
+    if(!cb.checked) cb.disabled = checked.length >= REPORT_MAX_FILES;
+  });
+  document.getElementById('modalBtnChooseReportGenerate').disabled = !checked.length;
+}
+function chooseReportRenderList(){
+  var list = document.getElementById('chooseReportList');
+  var all  = document.getElementById('chooseReportSelectAll');
+  var visible = sortFileList(chooseReportFiles, chooseReportSort);
+  list.innerHTML = '';
+  all.checked = false;
+  wireFileSortHead(document.getElementById('chooseReportHead'), chooseReportSort, chooseReportRenderList);
+  if(!visible.length){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no *.csv files found</td></tr>';
+    all.disabled = true;
+    return;
+  }
+  visible.forEach(function(f){
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    var tdCb = document.createElement('td');
+    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
+    var cb = document.createElement('input');
+    cb.type      = 'checkbox';
+    cb.className = 'chooseReportCb';
+    cb.value     = f.name;
+    cb.onchange  = updateChooseReportControls;
+    tdCb.appendChild(cb);
+    var tdName = document.createElement('td');
+    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
+    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
+    var tdSize = document.createElement('td');
+    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdSize.textContent = humanBytes(f.size);
+    var tdDate = document.createElement('td');
+    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdDate.textContent = formatFileDate(f.mtime);
+    tr.appendChild(tdCb);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSize);
+    tr.appendChild(tdDate);
+    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateChooseReportControls(); };
+    list.appendChild(tr);
+  });
+  all.disabled = false;
+  updateChooseReportControls();
 }
 function openChooseReport(){
   var list = document.getElementById('chooseReportList');
-  list.innerHTML = '<div style="color:var(--dim);font-size:12px">loading ...</div>';
+  var all  = document.getElementById('chooseReportSelectAll');
+  document.getElementById('chooseReportMax').textContent = REPORT_MAX_FILES;
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  all.checked  = false;
+  all.disabled = true;
   chooseReportModal.style.display = 'flex';
   fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
-    var files = (j.files || []).filter(function(f){
+    chooseReportFiles = (j.files || []).filter(function(f){
       return f.name.split('.').pop().toLowerCase() === 'csv';
     });
-    list.innerHTML = '';
-    if(!files.length){
-      list.innerHTML = '<div style="color:var(--dim);font-size:12px">no *.csv files found</div>';
-      return;
-    }
-    var firstCb = null;
-    files.forEach(function(f, i){
-      var row = document.createElement('label');
-      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;cursor:pointer;white-space:nowrap';
-      var cb = document.createElement('input');
-      cb.type      = 'checkbox';
-      cb.className = 'chooseReportCb';
-      cb.value     = f.name;
-      if(i === 0){ cb.checked = true; firstCb = cb; }   // most recent file (list is newest-first) preselected
-      cb.onchange = function(){
-        if(!cb.checked) return;                          // unchecking never forces siblings off
-        var key = reportChainKey(f.name);
-        if(!key) return;
-        Array.prototype.forEach.call(document.querySelectorAll('.chooseReportCb'), function(other){
-          if(other !== cb && reportChainKey(other.value) === key) other.checked = true;
-        });
-      };
-      row.appendChild(cb);
-      row.appendChild(document.createTextNode(
-        f.name + (f.active ? '  (ACTIVE)' : '') + '  -  ' + humanBytes(f.size)));
-      list.appendChild(row);
-    });
-    if(firstCb) firstCb.onchange();   // auto-select the preselected file's rotation siblings too
+    chooseReportRenderList();
   }).catch(function(){
-    list.innerHTML = '<div style="color:var(--dim);font-size:12px">failed to list files</div>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
   });
 }
-var chooseReportModal = document.getElementById('chooseReportModal');
+document.getElementById('chooseReportSelectAll').onchange = function(){
+  var checked = this.checked;
+  var boxes = document.querySelectorAll('.chooseReportCb');
+  Array.prototype.forEach.call(boxes, function(cb, i){
+    cb.checked = checked && i < REPORT_MAX_FILES;
+  });
+  updateChooseReportControls();
+};
 document.getElementById('modalBtnChooseReportCancel').onclick = function(){
   chooseReportModal.style.display = 'none';
 };
@@ -3376,7 +3622,9 @@ document.getElementById('selDownload').onchange = function(){
   if(!what) return;
   if(what === 'choose_logfile'){ openChooseLog(); return; }
   if(what === 'delete_files'){ openDeleteFiles(); return; }
+  if(what === 'view_file'){ openViewFile(); return; }
   if(what === 'upload_file'){ uploadServerFileInput.click(); return; }
+  if(what === 'save_hosts_file'){ openSaveHosts(); return; }
   if(what === 'logfile'){
     // hidden iframe, not fetch+blob and not a real <a> click - the log can be
     // large, and fetch+blob buffers the whole response in JS before the
@@ -3452,8 +3700,22 @@ document.addEventListener('keydown', function(e){
     }
     return;   // any other key is ignored, the modal stays open
   }
+  if(saveHostsOpen()){
+    if(e.key === 'Escape'){ closeSaveHosts(); e.preventDefault(); return; }
+    if(document.activeElement && document.activeElement.id === 'saveHostsNameInput'){
+      if(e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
+      return;   // any other key types normally into the name field
+    }
+    var sk = e.key.toLowerCase();
+    if(sk === 'y' || e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
+    return;
+  }
   if(chooseLogOpen()){
     if(e.key === 'Escape'){ closeChooseLog(); e.preventDefault(); }
+    return;
+  }
+  if(viewFileOpen()){
+    if(e.key === 'Escape'){ closeViewFile(); e.preventDefault(); }
     return;
   }
   if(deleteFilesOpen()){
@@ -3694,6 +3956,9 @@ function poll(){
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
+    hostfileActive = !!s.hostfile_active;
+    hostfileName   = s.hostfile_name || '';
+    shownHostsCount = (s.host_list_shown || []).length;
     var brl = document.getElementById('btnResetLog');
     brl.textContent = loggingOn ? 'RESET LOG' : 'START LOG';
     brl.title = loggingOn
@@ -3829,6 +4094,91 @@ def merge_logfiles(paths):
     return tmp_path
 
 
+def render_view_file_page(name, content, queue_names):
+    """VIEW FILE FROM SERVER - server-rendered viewer page for GET /api/view_file.
+
+    Raw content (read-only), COPY/DOWNLOAD buttons, and - when queue_names is
+    non-empty - a plain <a target="_blank"> link to open the next selected file.
+    Deliberately NOT a JS window.open() call: every browser trusts a real
+    anchor click as ordinary navigation and opens the new tab, whereas a
+    script-triggered popup - even one opened from a genuine click a moment
+    earlier, even chained back through window.opener from a previously opened
+    tab - gets blocked by Chrome and Firefox (Safari was the only one that
+    accepted it, which is exactly why this page exists: real anchors are what
+    consistently works everywhere).
+    """
+    next_banner = ''
+    if queue_names:
+        next_name = queue_names[0]
+        rest      = queue_names[1:]
+        qs = 'name=' + urllib.parse.quote(next_name, safe='')
+        for q in rest:
+            qs += '&queue=' + urllib.parse.quote(q, safe='')
+        next_banner = (
+            '<div class="nextWrap"><div class="nextBox">'
+            '<span>' + str(len(queue_names)) + ' more file(s) selected</span>'
+            # absolute path, not relative - this page's own URL is already
+            # under /api/, so a relative 'api/view_file' would resolve to the
+            # wrong, doubled /api/api/view_file
+            '<a id="next" class="next" href="/api/view_file?' + qs + '" '
+            'target="_blank" rel="noopener">OPEN NEXT FILE</a>'
+            '</div></div>')
+    return (
+        '<!doctype html><html><head><meta charset="UTF-8"><title>' + html.escape(name) + '</title><style>'
+        'body{margin:0;background:#0b0f0b;color:#c8d6c8;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'
+        '"DejaVu Sans Mono",monospace;font-size:13px}'
+        '.bar{position:sticky;top:0;background:#141914;padding:8px 12px;display:flex;gap:8px;'
+        'align-items:center;flex-wrap:wrap;border-bottom:1px solid #263026;z-index:1}'
+        '.bar b{margin-right:auto;font-size:13px;color:#c8d6c8;word-break:break-all}'
+        'button{background:#1c231c;color:#c8d6c8;border:1px solid #2e3a2e;border-radius:4px;'
+        'padding:5px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-block}'
+        'button:hover{background:#263026}'
+        'pre{margin:0;padding:12px;white-space:pre-wrap;word-break:break-word}'
+        # centered, fixed overlay - same placement as the eping.py window's
+        # own selection prompts, just relocated into this tab (see comment
+        # on render_view_file_page() above for why it lives here at all)
+        '.nextWrap{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2}'
+        '.nextBox{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px 20px;'
+        'background:#141914;color:#c8d6c8;border:1px solid #2e3a2e;border-radius:6px;'
+        'box-shadow:0 4px 24px rgba(0,0,0,.5);font-size:12px;text-align:center}'
+        '.next{background:#1c231c;border:1px solid #3a5a3a;color:#9fe89f;border-radius:4px;'
+        'padding:5px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-block}'
+        '.next:hover{background:#263026}'
+        '</style></head><body>'
+        '<div class="bar"><b>' + html.escape(name) + '</b>'
+        '<button id="btnCopy" type="button">COPY</button>'
+        '<button id="btnDownload" type="button">DOWNLOAD</button>'
+        '</div>'
+        + next_banner +
+        '<pre id="content">' + html.escape(content) + '</pre>'
+        '<script>'
+        'var NAME = ' + json.dumps(name) + ';'
+        'document.getElementById("btnCopy").onclick = function(){'
+        '  var btn = this, text = document.getElementById("content").textContent;'
+        '  function done(ok){ btn.textContent = ok ? "COPIED" : "COPY FAILED"; '
+        '    setTimeout(function(){ btn.textContent = "COPY"; }, 1500); }'
+        '  if(navigator.clipboard && navigator.clipboard.writeText){'
+        '    navigator.clipboard.writeText(text).then(function(){ done(true); }).catch(function(){ done(false); });'
+        '  } else {'
+        '    var ta = document.createElement("textarea"); ta.value = text;'
+        '    ta.style.position = "fixed"; ta.style.opacity = "0";'
+        '    document.body.appendChild(ta); ta.select();'
+        '    var ok = false; try{ ok = document.execCommand("copy"); }catch(e){}'
+        '    document.body.removeChild(ta); done(ok);'
+        '  }'
+        '};'
+        'document.getElementById("btnDownload").onclick = function(){'
+        '  var text = document.getElementById("content").textContent;'
+        '  var blob = new Blob([text], {type: "text/plain;charset=utf-8"});'
+        '  var url = URL.createObjectURL(blob);'
+        '  var a = document.createElement("a"); a.href = url; a.download = NAME;'
+        '  document.body.appendChild(a); a.click(); document.body.removeChild(a);'
+        '  URL.revokeObjectURL(url);'
+        '};'
+        '</script></body></html>'
+    )
+
+
 def generate_epinga_report(logpaths):
     """Run epinga.py against one or more logfiles and produce an HTML report -
     core logic shared by the web gui's GENERATE REPORT (run_epinga_report, below)
@@ -3933,6 +4283,45 @@ def safe_cwd_filename(name, exts):
     if name in ('.', '..') or not name.lower().endswith(exts):
         return False
     return not os.path.islink(name)
+
+
+def hostfile_save_target(args):
+    """The file FILE OPERATIONS > SAVE HOSTS FILE ON SERVER overwrites - the
+    first -f/--hostfile path if eping.py was started with one, else None (no
+    hostfile is active - the caller falls back to sanitize_hostfile_save_name()
+    to ask for a name instead)."""
+    if args.disable_hostfile:
+        return None
+    paths = split_hostfile_list(args.hostfile)
+    return paths[0] if paths else None
+
+
+def sanitize_hostfile_save_name(name):
+    """Turn a user-typed 'save hosts file' name into a safe .txt filename, or
+    None if unusable - used when hostfile_save_target() returned None (eping.py
+    was started with -df, nothing to overwrite). Blank defaults to
+    'eping-hosts.txt'; '.txt' is appended once (not doubled if already given);
+    rejects path separators/traversal via safe_cwd_filename(). Existing files
+    ARE allowed - this command's whole purpose is (over)writing a hosts file,
+    and the client already asks for confirmation before sending the request.
+    """
+    name = (name or '').strip()
+    if not name:
+        name = 'eping-hosts.txt'
+    elif not name.lower().endswith('.txt'):
+        name += '.txt'
+    return name if safe_cwd_filename(name, ('.txt',)) else None
+
+
+def save_hosts_file(path, hosts):
+    """Overwrite path with one host per line (LF) - FILE OPERATIONS > SAVE
+    HOSTS FILE ON SERVER. Returns True on success, False on any OSError."""
+    try:
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(''.join(h + '\n' for h in hosts))
+        return True
+    except OSError:
+        return False
 
 
 WEB_COMMANDS_MAX = 1000   # queued browser commands before the server answers 429
@@ -4123,6 +4512,33 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 zip_name = ('eping-logfiles_' + str(len(files)) + '_'
                            + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S'))
             self._stream_zip(files, zip_name, compress=not nozip)
+        elif path in ('/api/view_file', 'api/view_file'):
+            # VIEW FILE FROM SERVER - a real, server-rendered page (not a JS
+            # fetch+document.write dance) so that opening file 2, 3, ... via
+            # the OPEN NEXT FILE link is plain browser navigation, not a
+            # script-triggered popup - see render_view_file_page().
+            qs      = urllib.parse.urlsplit(self.path).query
+            qparams = urllib.parse.parse_qs(qs)
+            name    = (qparams.get('name') or [''])[0]
+            queue   = [q for q in qparams.get('queue') or [] if safe_cwd_filename(q, VIEW_FILE_EXTS)]
+            if not name or not safe_cwd_filename(name, VIEW_FILE_EXTS):
+                self._respond(400, 'text/plain; charset=utf-8', 'invalid filename')
+                return
+            if not os.path.isfile(name):
+                self._respond(404, 'text/plain; charset=utf-8', 'file not found: ' + name)
+                return
+            try:
+                if os.path.getsize(name) > VIEW_FILE_MAX_BYTES:
+                    self._respond(413, 'text/plain; charset=utf-8',
+                                  'file too large to view inline (max '
+                                  + str(VIEW_FILE_MAX_BYTES // (1024 * 1024)) + ' MB) - use DOWNLOAD instead')
+                    return
+                with open(name, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+            except OSError as e:
+                self._respond(404, 'text/plain; charset=utf-8', 'file not readable: ' + str(e))
+                return
+            self._respond(200, 'text/html; charset=utf-8', render_view_file_page(name, content, queue))
         elif path in ('/api/report', 'api/report'):
             # GENERATE REPORT result - the epinga.py HTML report from the last
             # completed run_epinga_report(), served inline (not as a download)
@@ -4296,7 +4712,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report'):
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report', 'save_hosts_file'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         if cmd == 'run_report':
@@ -5076,6 +5492,24 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message = 'failed to create new logfile'
                     else:
                         message = 'reset cancelled'
+            elif cmd == 'save_hosts_file':
+                # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - client already
+                # asked for confirmation; value is only used as the custom name
+                # when no hostfile was active (see sanitize_hostfile_save_name())
+                target = hostfile_save_target(args)
+                if target is None:
+                    target = sanitize_hostfile_save_name(value)
+                if target is None:
+                    message = 'invalid file name - hosts file not saved'
+                else:
+                    with web_lock:
+                        shown_now = list(web_state.get('host_list_shown') or [])
+                    if save_hosts_file(target, shown_now):
+                        message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       'SAVE HOSTS FILE: ' + target, tz_offset)
+                    else:
+                        message = 'failed to save hosts file'
             elif cmd == 'set_option':
                 # ADV OPTIONS feedback is inline in the modal (revert + flash on
                 # rejection, see advCheckApplied() client-side), not the footer -
@@ -5771,6 +6205,12 @@ if __name__=='__main__':
         _update_available = is_newer_version(remote_version, VERSION)
         with web_lock:
             web_state['version'] = version
+            # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - static for the run,
+            # tells the client whether to show a confirm-only or a name-prompt
+            # dialog (see hostfile_save_target())
+            _save_target = hostfile_save_target(args)
+            web_state['hostfile_name']   = _save_target or ''
+            web_state['hostfile_active'] = _save_target is not None
         def _web_sigint(sig, frame):
             # same as the web GUI's own EXIT button - tell the browser right away
             with web_lock:
@@ -6562,6 +7002,28 @@ if __name__=='__main__':
                 notice('RESET CANCELLED', 3)
                 message = 'reset cancelled'
 
+        elif bcmd == 'save_hosts_file':
+            # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - client already asked
+            # for confirmation; bval is only used as the custom name when no
+            # hostfile was active (see sanitize_hostfile_save_name())
+            target = hostfile_save_target(args)
+            if target is None:
+                target = sanitize_hostfile_save_name(bval)
+            if target is None:
+                notice('INVALID FILE NAME - HOSTS FILE NOT SAVED', 3)
+                message = 'invalid file name - hosts file not saved'
+            else:
+                with web_lock:
+                    shown_now = list(web_state.get('host_list_shown') or [])
+                if save_hosts_file(target, shown_now):
+                    notice('SAVED ' + str(len(shown_now)) + ' HOST(S) TO ' + target, 2)
+                    message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   'SAVE HOSTS FILE: ' + target, tz_offset)
+                else:
+                    notice('FAILED TO SAVE HOSTS FILE', 3)
+                    message = 'failed to save hosts file'
+
         elif bcmd == 'set_option':
             key, _, raw = str(bval).partition('=')
             ok, val, msg = apply_adv_option(key, raw, args)
@@ -6707,6 +7169,9 @@ if __name__=='__main__':
         with web_lock:
             web_state['version']  = version
             web_state['readonly'] = web_readonly
+            _save_target = hostfile_save_target(args)
+            web_state['hostfile_name']   = _save_target or ''
+            web_state['hostfile_active'] = _save_target is not None
         start_web_server(args.web_bind, int(args.web_port))
 
     def web_sync(msg='', bump=False):
