@@ -1,4 +1,4 @@
-# eping.py 3.55
+# eping.py 3.56
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -168,7 +168,7 @@ Single self-contained page, no external resources.
 - **FILE OPERATIONS** dropdown, in this order:
   | Entry | Does |
   |---|---|
-  | SAVE HOSTS FILE ON SERVER | confirmation, then overwrites the currently displayed hosts into the active `-f` hostfile (first one, if eping.py was started with one); no active hostfile → asks for a name, `.txt` appended once |
+  | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched |
   | UPLOAD FILE TO SERVER | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
   | DOWNLOAD ALL HOSTS | full reference list, plain text |
   | DOWNLOAD ACTIVE HOSTS | currently displayed hosts (view/address mode/filter applied), plain text |

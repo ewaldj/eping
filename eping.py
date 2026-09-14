@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.55'
+VERSION = '3.56'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2161,7 +2161,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <p id="saveHostsText">Save the currently shown hosts to the server?</p>
       <input type="text" id="saveHostsNameInput" maxlength="255"
              placeholder="file name (blank = eping-hosts.txt), .txt added automatically"
-             style="width:100%;box-sizing:border-box;margin-bottom:12px">
+             style="width:100%;box-sizing:border-box;margin-bottom:12px" autocomplete="off">
       <div class="modal-buttons">
         <button id="modalBtnSaveHostsConfirm" class="danger">SAVE (Y)</button>
         <button id="modalBtnSaveHostsCancel">CANCEL (ESC)</button>
@@ -3087,21 +3087,25 @@ function openSaveHosts(){
   var input = document.getElementById('saveHostsNameInput');
   var text  = document.getElementById('saveHostsText');
   input.value = '';
+  input.style.display = '';
   if(hostfileActive){
-    input.style.display = 'none';
     text.innerHTML = 'Overwrite <b>' + esc(hostfileName) + '</b> on the server with the '
-      + shownHostsCount + ' host(s) currently shown?';
+      + shownHostsCount + ' host(s) currently shown - or type a new name below to '
+      + 'save as a different file instead:';
+    input.placeholder = 'blank = overwrite ' + hostfileName + ', or new file name (.txt added automatically)';
   } else {
-    input.style.display = '';
     text.innerHTML = 'eping.py was started without a hosts file. Save the '
       + shownHostsCount + ' host(s) currently shown as a new file on the server:';
+    input.placeholder = 'file name (blank = eping-hosts.txt), .txt added automatically';
   }
   saveHostsModal.style.display = 'flex';
-  if(!hostfileActive) input.focus();
+  input.focus();
 }
 function runSaveHostsFile(){
-  // value is only used server-side when no hostfile is active (see
-  // sanitize_hostfile_save_name()) - ignored otherwise
+  // a typed name always means "save as this (possibly new) file" server-side,
+  // even with a hostfile already active - blank means "overwrite the active
+  // hostfile" when one is active, or the default eping-hosts.txt otherwise
+  // (see sanitize_hostfile_save_name())
   var name = document.getElementById('saveHostsNameInput').value.trim();
   closeSaveHosts();
   post('save_hosts_file', name);
@@ -5555,11 +5559,17 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         message = 'reset cancelled'
             elif cmd == 'save_hosts_file':
                 # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - client already
-                # asked for confirmation; value is only used as the custom name
-                # when no hostfile was active (see sanitize_hostfile_save_name())
-                target = hostfile_save_target(args)
-                if target is None:
-                    target = sanitize_hostfile_save_name(value)
+                # asked for confirmation. A typed name always saves as that
+                # (possibly new) file, even with a hostfile already active;
+                # blank overwrites the active hostfile, or falls back to the
+                # default name if none is active (sanitize_hostfile_save_name())
+                _save_name = str(value).strip()
+                if _save_name:
+                    target = sanitize_hostfile_save_name(_save_name)
+                else:
+                    target = hostfile_save_target(args)
+                    if target is None:
+                        target = sanitize_hostfile_save_name(value)
                 if target is None:
                     message = 'invalid file name - hosts file not saved'
                 else:
@@ -7068,11 +7078,17 @@ if __name__=='__main__':
 
         elif bcmd == 'save_hosts_file':
             # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - client already asked
-            # for confirmation; bval is only used as the custom name when no
-            # hostfile was active (see sanitize_hostfile_save_name())
-            target = hostfile_save_target(args)
-            if target is None:
-                target = sanitize_hostfile_save_name(bval)
+            # for confirmation. A typed name always saves as that (possibly new)
+            # file, even with a hostfile already active; blank overwrites the
+            # active hostfile, or falls back to the default name if none is
+            # active (sanitize_hostfile_save_name())
+            _save_name = str(bval).strip()
+            if _save_name:
+                target = sanitize_hostfile_save_name(_save_name)
+            else:
+                target = hostfile_save_target(args)
+                if target is None:
+                    target = sanitize_hostfile_save_name(bval)
             if target is None:
                 notice('INVALID FILE NAME - HOSTS FILE NOT SAVED', 3)
                 message = 'invalid file name - hosts file not saved'
