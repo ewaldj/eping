@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.49'
+VERSION = '3.50'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -6776,9 +6776,12 @@ if __name__=='__main__':
                 prefer_hostname = (target_mode == 1)
                 prefer_ip       = (target_mode == 2)
                 if target_mode == 3:
-                    ip_only_map, io_msg = apply_ip_only_on(
+                    # non-dropping web variant - same as pure -web mode; the
+                    # CLI [I] key keeps the drop-on-collision apply_ip_only_on
+                    ip_only_map, io_msg = apply_ip_only_on_web(
                         original_hosts_list, active_hosts_list, host_state,
                         up_seen, down_streak, int(args.dns_ttl))
+                    active_hosts_list = [h for h in active_hosts_list if is_ip_host(h)]
                     ip_only_mode = True
                     notice(io_msg.upper(), 2)
                     message = io_msg
