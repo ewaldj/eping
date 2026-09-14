@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.32'
+VERSION = '3.35'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2937,15 +2937,21 @@ function openAdvOptions(){
 function closeAdvOptions(){ advOptionsModal.style.display = 'none'; }
 function advOptionsOpen(){ return advOptionsModal.style.display !== 'none'; }
 
-var stoppedModal    = document.getElementById('stoppedModal');
-var stoppedMsg       = document.getElementById('stoppedMsg');
-var stoppedDismissed = false;   // user closed it - don't keep popping it back up
-var reconnectTimer   = null;    // auto-retry while unreachable - see openStoppedModal()
+var stoppedModal        = document.getElementById('stoppedModal');
+var stoppedMsg           = document.getElementById('stoppedMsg');
+var stoppedDismissed     = false;   // user closed it - don't keep popping it back up
+var stoppedByUnreachable = false;   // set in poll()'s catch() - cleared once poll() succeeds again
+var reconnectTimer       = null;    // graceful-stop case only - poll() itself stops retrying, see below
 function openStoppedModal(text){
   if(stoppedDismissed) return;
   stoppedMsg.textContent = text;
   stoppedModal.style.display = 'flex';
-  if(!reconnectTimer) reconnectTimer = setInterval(function(){ location.reload(); }, 5000);
+}
+function startReconnectTimer(){
+  if(reconnectTimer || stoppedDismissed) return;
+  reconnectTimer = setInterval(function(){
+    fetch('api/status').then(function(){ location.reload(); }).catch(function(){});   // still down - try again in 5s
+  }, 5000);
 }
 document.getElementById('modalBtnReload').onclick = function(){ location.reload(); };
 document.getElementById('modalBtnCloseStopped').onclick = function(){
@@ -3594,16 +3600,21 @@ function poll(){
     render(s.rows);
 
     document.body.classList.remove('off');   // reachable again - undo a previous catch()
-    if(reconnectTimer){ clearInterval(reconnectTimer); reconnectTimer = null; }
+    if(stoppedByUnreachable){   // was showing "not reachable" - close it in place, no reload
+      stoppedByUnreachable = false;
+      stoppedModal.style.display = 'none';
+    }
     if(s.stopped){ stopped = true;
       document.body.classList.add('off');
       openStoppedModal('eping.py stopped - THX for using eping.py');
+      startReconnectTimer();   // poll() itself won't retry any more once 'stopped' is set
     }
   }).catch(function(){
     // covers every way the process can go away without telling us first (kill -9,
     // a crash, the terminal closing) - the graceful exits (Ctrl+C, [E], EXIT button)
     // already set s.stopped above before the socket disappears, this is the backstop
     document.body.classList.add('off');
+    stoppedByUnreachable = true;
     openStoppedModal('eping.py is not reachable - the process stopped or the connection was lost.');
   });
 }
