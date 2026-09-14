@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.52'
+VERSION = '3.53'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -4474,6 +4474,15 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             # the majority of the per-poll size. web_state itself keeps them intact.
             snapshot.pop('host_list_shown', None)
             snapshot.pop('host_list_all', None)
+            # 'datetime' is otherwise only refreshed by web_publish() once a round
+            # completes - on a long round (many hosts) the clock would sit still
+            # for that whole time. Recomputed here on every poll instead, so it
+            # ticks every second regardless of round length.
+            try:
+                _tz = int(snapshot.get('options', {}).get('tz_offset', 0) or 0)
+            except (TypeError, ValueError):
+                _tz = 0
+            snapshot['datetime'] = now_local(_tz).strftime("%d/%m/%Y %H:%M:%S")
             body = json.dumps(snapshot)      # serialize outside the lock - no stall of the ping loop
             self._respond(200, 'application/json; charset=utf-8', body)
         elif path in ('/api/logfiles', 'api/logfiles'):
