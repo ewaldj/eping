@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.19'
+VERSION = '3.22'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1960,6 +1960,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box.wide::-webkit-scrollbar{width:12px}
   .modal-box.wide::-webkit-scrollbar-track{background:var(--panel)}
   .modal-box.wide::-webkit-scrollbar-thumb{background:var(--ctrl-line);border-radius:6px}
+  .modal-box.xwide{width:900px}
   .adv-row{display:flex;flex-direction:column;gap:3px;margin:0 0 12px}
   .adv-row label{font-size:11px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
   .adv-row label .adv-desc{color:var(--dim);font-weight:400;letter-spacing:normal}
@@ -2037,7 +2038,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div id="chooseLogModal" class="modal-overlay" style="display:none">
-    <div class="modal-box wide">
+    <div class="modal-box wide xwide">
       <h3>CHOOSE FILE</h3>
       <p>Pick one or more files in this eping.py's working directory to download<br>
         - selecting more than one bundles them into a single ZIP.</p>
@@ -2046,12 +2047,22 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <button type="button" class="chooseLogExtBtn on" data-ext="txt">.TXT</button>
         <button type="button" class="chooseLogExtBtn on" data-ext="html">.HTML</button>
       </div>
-      <label style="display:flex;align-items:center;gap:6px;margin-bottom:8px;color:var(--fg);font-size:12px;cursor:pointer">
-        <input type="checkbox" id="chooseLogSelectAll"> select all
-      </label>
-      <div id="chooseLogList" style="width:100%;max-height:220px;overflow-y:auto;
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+          <input type="checkbox" id="chooseLogSelectAll"> select all
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer"
+               title="skip ZIP compression - faster for large files, no CPU cost on the server">
+          <input type="checkbox" id="chooseLogNoZip"> no compression
+        </label>
+      </div>
+      <div style="width:100%;max-height:220px;overflow-y:auto;
            margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
-           padding:6px 10px;box-sizing:border-box"></div>
+           padding:6px 10px;box-sizing:border-box">
+        <table style="width:100%;border-collapse:collapse">
+          <tbody id="chooseLogList"></tbody>
+        </table>
+      </div>
       <div class="modal-buttons">
         <button id="modalBtnChooseLogDownload">DOWNLOAD</button>
         <button id="modalBtnChooseLogCancel">CANCEL</button>
@@ -2412,6 +2423,19 @@ function startIframeDownload(src, label){
 }
 var chooseLogFiles = [];                          // raw list from the last /api/logfiles fetch
 var chooseLogExts   = {csv: true, txt: true, html: true};   // filter toggle state
+function formatFileDate(ts){
+  if(!ts) return '';
+  var d = new Date(ts * 1000);
+  function p(n){ return (n < 10 ? '0' : '') + n; }
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
+       + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function updateNoZipState(){
+  var count  = document.querySelectorAll('.chooseLogCb:checked').length;
+  var noZip  = document.getElementById('chooseLogNoZip');
+  noZip.disabled = count > 1;
+  if(noZip.disabled) noZip.checked = false;
+}
 function chooseLogRenderList(){
   var list = document.getElementById('chooseLogList');
   var all  = document.getElementById('chooseLogSelectAll');
@@ -2422,28 +2446,43 @@ function chooseLogRenderList(){
   list.innerHTML = '';
   all.checked = false;
   if(!visible.length){
-    list.innerHTML = '<div style="color:var(--dim);font-size:12px">no matching files</div>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no matching files</td></tr>';
     all.disabled = true;
     return;
   }
   visible.forEach(function(f){
-    var row = document.createElement('label');
-    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;cursor:pointer;white-space:nowrap';
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    var tdCb = document.createElement('td');
+    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
     var cb = document.createElement('input');
     cb.type      = 'checkbox';
     cb.className = 'chooseLogCb';
     cb.value     = f.name;
-    row.appendChild(cb);
-    row.appendChild(document.createTextNode(
-      f.name + (f.active ? '  (ACTIVE)' : '') + '  -  ' + humanBytes(f.size)));
-    list.appendChild(row);
+    tdCb.appendChild(cb);
+    var tdName = document.createElement('td');
+    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
+    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
+    var tdSize = document.createElement('td');
+    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdSize.textContent = humanBytes(f.size);
+    var tdDate = document.createElement('td');
+    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdDate.textContent = formatFileDate(f.mtime);
+    tr.appendChild(tdCb);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSize);
+    tr.appendChild(tdDate);
+    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateNoZipState(); };
+    list.appendChild(tr);
   });
   all.disabled = false;
+  updateNoZipState();
 }
 function openChooseLog(){
   var list = document.getElementById('chooseLogList');
   var all  = document.getElementById('chooseLogSelectAll');
-  list.innerHTML = '<div style="color:var(--dim);font-size:12px">loading ...</div>';
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
   all.checked  = false;
   all.disabled = true;
   chooseLogModal.style.display = 'flex';
@@ -2451,7 +2490,7 @@ function openChooseLog(){
     chooseLogFiles = j.files || [];
     chooseLogRenderList();
   }).catch(function(){
-    list.innerHTML = '<div style="color:var(--dim);font-size:12px">failed to list files</div>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
   });
 }
 Array.prototype.forEach.call(document.querySelectorAll('.chooseLogExtBtn'), function(btn){
@@ -2465,6 +2504,7 @@ Array.prototype.forEach.call(document.querySelectorAll('.chooseLogExtBtn'), func
 document.getElementById('chooseLogSelectAll').onchange = function(){
   var checked = this.checked;
   Array.prototype.forEach.call(document.querySelectorAll('.chooseLogCb'), function(cb){ cb.checked = checked; });
+  updateNoZipState();
 };
 document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
 document.getElementById('modalBtnChooseLogDownload').onclick = function(){
@@ -2473,6 +2513,7 @@ document.getElementById('modalBtnChooseLogDownload').onclick = function(){
   if(!names.length) return;
   closeChooseLog();
   var qs = names.map(function(n){ return 'name=' + encodeURIComponent(n); }).join('&');
+  if(document.getElementById('chooseLogNoZip').checked) qs += '&nozip=1';
   var label = names.length === 1 ? names[0] : (names.length + ' file(s)');
   startIframeDownload('api/download/choose_logfile?' + qs, label);
 };
@@ -3235,7 +3276,12 @@ def generate_epinga_report(logpath):
     epinga_path = find_epinga_path()
     if not epinga_path:
         return None, 'epinga.py not found next to eping.py or in PATH'
+    # never overwrite a previous report for this logfile - suffix -1, -2, ...
     report_path = os.path.splitext(logpath)[0] + '_report.html'
+    suffix = 1
+    while os.path.exists(report_path):
+        report_path = os.path.splitext(logpath)[0] + '_report-' + str(suffix) + '.html'
+        suffix += 1
     try:
         subprocess.run([sys.executable, epinga_path, '-f', logpath, '-q',
                         '--html', report_path, '--no-version-check'],
@@ -3301,7 +3347,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _stream_zip(self, files, zip_name):
+    def _stream_zip(self, files, zip_name, compress=True):
         """Send one or more (path, arcname) pairs as a single ZIP download,
         streamed straight to the socket - zipfile falls back to its own
         non-seekable-stream mode for a plain socket file object (no
@@ -3309,7 +3355,11 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         in memory: RAM stays a few MB regardless of file size or file count
         (tested at ~500MB source: ~12MB peak RSS). Final size isn't known
         ahead of time, so Content-Length is skipped in favour of closing the
-        connection - fine for a one-shot download."""
+        connection - fine for a one-shot download. compress=False (DOWNLOAD >
+        CHOOSE FILE 'no compression') uses ZIP_STORED - no CPU cost, larger
+        file - still a single .zip so multi-file selection stays one download.
+        """
+        ctype = zipfile.ZIP_DEFLATED if compress else zipfile.ZIP_STORED
         self.send_response(200)
         self.send_header('Content-Type', 'application/zip')
         self.send_header('Cache-Control', 'no-store')
@@ -3320,16 +3370,46 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         self.close_connection = True
         try:
             with zipfile.ZipFile(self.wfile, mode='w',
-                                 compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+                                 compression=ctype, compresslevel=6 if compress else None) as zf:
                 for path, arcname in files:
                     zi = zipfile.ZipInfo(arcname, date_time=time.localtime()[:6])
-                    zi.compress_type = zipfile.ZIP_DEFLATED
+                    zi.compress_type = ctype
                     with zf.open(zi, mode='w') as zdst, open(path, 'rb') as src:
                         while True:
                             chunk = src.read(1024 * 1024)
                             if not chunk:
                                 break
                             zdst.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def _stream_file(self, path):
+        """Send a single file exactly as stored, no ZIP wrapper - DOWNLOAD >
+        CHOOSE FILE 'no compression' with exactly one file selected."""
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            self._respond(404, 'text/plain; charset=utf-8', 'file not found')
+            return
+        ctype = {'.csv': 'text/csv', '.txt': 'text/plain',
+                '.html': 'text/html'}.get(os.path.splitext(path)[1].lower(),
+                                          'application/octet-stream')
+        self.send_response(200)
+        self.send_header('Content-Type', ctype + '; charset=utf-8')
+        self.send_header('Content-Length', str(size))
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Connection', 'close')
+        self.send_header('Content-Disposition',
+                         'attachment; filename="' + os.path.basename(path) + '"')
+        self.end_headers()
+        self.close_connection = True
+        try:
+            with open(path, 'rb') as src:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
 
@@ -3362,7 +3442,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 pass
             files.sort(key=lambda f: f['mtime'], reverse=True)
             for f in files:
-                del f['mtime']   # internal sort key only, not needed by the client
+                f['mtime'] = int(f['mtime'])   # seconds - client formats it for display
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'files': files}))
         elif path in ('/api/download/hosts_shown', 'api/download/hosts_shown',
                       '/api/download/hosts_all', 'api/download/hosts_all'):
@@ -3393,8 +3473,10 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 return
             self._stream_zip([(logpath, os.path.basename(logpath))], os.path.basename(logpath))
         elif path in ('/api/download/choose_logfile', 'api/download/choose_logfile'):
-            qs    = urllib.parse.urlsplit(self.path).query
-            names = urllib.parse.parse_qs(qs).get('name') or []
+            qs      = urllib.parse.urlsplit(self.path).query
+            qparams = urllib.parse.parse_qs(qs)
+            names   = qparams.get('name') or []
+            nozip   = bool(qparams.get('nozip'))
             if not names:
                 self._respond(400, 'text/plain; charset=utf-8', 'no filename given')
                 return
@@ -3414,12 +3496,15 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     self._respond(404, 'text/plain; charset=utf-8', 'file not readable: ' + name)
                     return
                 files.append((name, name))
+            if nozip and len(files) == 1:
+                self._stream_file(files[0][0])
+                return
             if len(files) == 1:
                 zip_name = files[0][1]
             else:
                 zip_name = ('eping-logfiles_' + str(len(files)) + '_'
                            + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S'))
-            self._stream_zip(files, zip_name)
+            self._stream_zip(files, zip_name, compress=not nozip)
         elif path in ('/api/report', 'api/report'):
             # GENERATE REPORT result - the epinga.py HTML report from the last
             # completed run_epinga_report(), served inline (not as a download)
@@ -3472,36 +3557,6 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             with web_lock:
                 web_commands.append(('upload', text))
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
-            return
-
-        if path in ('/api/save_report', 'api/save_report'):
-            raw = self._read_body(WEB_MAX_UPLOAD)
-            if raw is None:
-                self._respond(413, 'application/json; charset=utf-8',
-                              json.dumps({'ok': False, 'error': 'report too large'}))
-                return
-            try:
-                html_text = raw.decode('utf-8', 'replace')
-            except Exception:
-                html_text = ''
-            if not html_text.strip():
-                self._respond(400, 'application/json; charset=utf-8',
-                              json.dumps({'ok': False, 'error': 'empty report'}))
-                return
-            with web_lock:
-                logpath = web_state.get('logfile') or ''
-            base  = os.path.splitext(os.path.basename(logpath))[0] if logpath else 'eping'
-            fname = (base + '_report_saved_'
-                    + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S') + '.html')
-            try:
-                with open(fname, 'w', encoding='utf-8') as fh:
-                    fh.write(html_text)
-            except OSError as e:
-                self._respond(500, 'application/json; charset=utf-8',
-                              json.dumps({'ok': False, 'error': str(e)}))
-                return
-            self._respond(200, 'application/json; charset=utf-8',
-                          json.dumps({'ok': True, 'filename': fname}))
             return
 
         if path not in ('/api/command', 'api/command'):
@@ -6029,9 +6084,12 @@ if __name__=='__main__':
         # --- status bar and key bar ---
         # 'HOST UP: n DOWN: n FLAPPING: n' replaces the old, wider
         # 'HOSTS-UP: n   HOSTS-DOWN: n' pair - shorter and adds the flap count.
-        hosts_up   = '{m: <4}'.format(m=hosts_count_up)
-        hosts_down = '{m: <4}'.format(m=hosts_count_down)
-        hosts_flap = str(hosts_count_flap)
+        # Each count is left-padded to 6 digits (the max host count, see
+        # *Host sources*), and every fixed column below is spaced to fit that
+        # width - a narrower count just leaves trailing blanks, same as before.
+        hosts_up   = '{m: <6}'.format(m=hosts_count_up)
+        hosts_down = '{m: <6}'.format(m=hosts_count_down)
+        hosts_flap = '{m: <6}'.format(m=hosts_count_flap)
         screen_output(rows - 1, 1,  'HOSTS: '   + str(num_of_hosts), 1, 1)
         _runtime_txt = ('RUNTIME: ' + run_time if run_time == RUNTIME_UNAVAILABLE
                         else 'RUNTIME: ' + str(run_time) + 's')
@@ -6039,14 +6097,14 @@ if __name__=='__main__':
         screen_output(rows - 1, 35, 'RUNS: '    + str(run_counter), 1, 1)
         screen_output(rows - 1, 50, '| HOST UP: ', 1, 1)
         screen_output(rows - 1, 61, hosts_up, 2, 1)
-        screen_output(rows - 1, 65, 'DOWN: ', 1, 1)
-        screen_output(rows - 1, 71, hosts_down, 3, 1)
-        screen_output(rows - 1, 75, 'FLAPPING: ', 1, 1)
-        screen_output(rows - 1, 85, hosts_flap + ' |', 1, 1)
+        screen_output(rows - 1, 67, 'DOWN: ', 1, 1)
+        screen_output(rows - 1, 73, hosts_down, 3, 1)
+        screen_output(rows - 1, 79, 'FLAPPING: ', 1, 1)
+        screen_output(rows - 1, 89, hosts_flap.rstrip() + ' |', 1, 1)
         if args.disable_logging:
-            screen_output(rows - 1, 93, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
+            screen_output(rows - 1, 99, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
         else:
-            screen_output(rows - 1, 93, 'LOGGING-OFF', 1, 1)
+            screen_output(rows - 1, 99, 'LOGGING-OFF', 1, 1)
         if num_of_hosts > 0 and maxhosts < num_of_hosts:
             tts_text = ' | TERMINAL TOO SMALL '
             screen_output(rows - 1, cols - len(tts_text), tts_text, 3, 2)
