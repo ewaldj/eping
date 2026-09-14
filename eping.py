@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.51'
+VERSION = '3.52'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -58,7 +58,12 @@ LOG_MAX_SIZE_MAX   = 2500     # MB - upper bound; 0 = no limit (rotation disable
 LOG_MAX_FILES_MAX  = 500      # 0 = unlimited kept eping-log_*.csv files
 DNS_CACHE_TTL      = 300      # seconds a resolved hostname stays valid (0 = no caching)
 DNS_FAIL_TTL       = 30       # negative cache: retry unresolvable names sooner
-DNS_RESOLVERS      = 16       # parallel name lookups
+DNS_TTL_JITTER_LO  = 0.5      # effective TTL is randomized to lo..1.0 x the configured
+                               # TTL (see resolve_name) - a big batch of hostnames
+                               # resolved together (e.g. at startup) would otherwise all
+                               # expire in the same round later, forcing a giant
+                               # re-resolve burst through DNS_RESOLVERS threads at once
+DNS_RESOLVERS      = 32       # parallel name lookups
 DNS_PTR_TIMEOUT    = 3.0      # seconds per reverse-DNS lookup for [G] GET NAMES
 
 # --- retry classes ---
@@ -152,6 +157,7 @@ import html
 import csv
 import glob
 import math
+import random
 import time
 import curses
 import signal
@@ -530,8 +536,15 @@ def resolve_name(name, ttl):
             ip = ips[0]     # deterministic (lowest) pick when a name has several records
     except Exception:
         ip = None
+    base_ttl = ttl if ip else min(ttl, DNS_FAIL_TTL)
+    # jitter the effective TTL (DNS_TTL_JITTER_LO..1.0 x base_ttl) so a large batch
+    # of names resolved together (e.g. thousands at startup) doesn't all expire in
+    # the same later round - that would force prepare_targets() to re-resolve all
+    # of them at once through the small DNS_RESOLVERS pool, stalling that round.
+    # Spreading the expiries out keeps re-resolution work small and steady instead.
+    expires_at = now + (random.uniform(DNS_TTL_JITTER_LO, 1.0) * base_ttl if base_ttl > 0 else 0)
     with _dns_lock:
-        _dns_cache[name] = (ip, time.time() + (ttl if ip else min(ttl, DNS_FAIL_TTL)))
+        _dns_cache[name] = (ip, expires_at)
     return ip
 
 def resolve_all_ips(name, family=None):
