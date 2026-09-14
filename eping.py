@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.54'
+VERSION = '3.55'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -5248,6 +5248,11 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     # ADV OPTIONS: snapshot of every startup value, for RESET TO DEFAULT
     start_option_values = adv_option_values(args, down_retries, flap_window,
                                             confirm, down_slices, full_sweep, tz_offset)
+    # published right away - without this the ADV OPTIONS modal shows empty
+    # fields/sliders at their minimum until the first round completes and a
+    # later web_publish()/set_option call fills web_state['options'] in
+    with web_lock:
+        web_state['options'] = start_option_values
     active_hosts_list = list(original_hosts_list)
     filter_mode       = 0
     # web gui only: one mutually-exclusive address mode replaces the separate
@@ -7174,6 +7179,12 @@ if __name__=='__main__':
     # same reasoning as run_web_mode()'s start_option_values.
     start_option_values = adv_option_values(args, down_retries, flap_window,
                                             confirm, down_slices, full_sweep, tz_offset)
+    if args.web_view or args.web_view_control:
+        # published right away - without this the browser's ADV OPTIONS modal
+        # shows empty fields/sliders at their minimum until the first round
+        # completes and web_sync() fills web_state['options'] in
+        with web_lock:
+            web_state['options'] = start_option_values
 
     down_streak = {}
     last_draw_time = 0.0
