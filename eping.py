@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.53'
+VERSION = '3.54'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -7488,6 +7488,16 @@ if __name__=='__main__':
         else:
             scan_box(elapsed, len(active_hosts_list))
         screen.refresh()
+        # -wvc: a command posted by the browser (EXIT included) must cut the round
+        # short too, same as a local keypress below - otherwise it sits in
+        # web_commands until the current round ends on its own, which on a large
+        # host count can take minutes. Mirrors web_progress()'s own check in pure
+        # -web mode; apply_browser_command() picks it up at the top of the next
+        # loop iteration once this round is aborted.
+        if args.web_view_control:
+            with web_lock:
+                if web_commands:
+                    return True
         k = screen.getch()
         if k == -1:
             return False
