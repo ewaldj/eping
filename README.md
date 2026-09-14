@@ -1,4 +1,4 @@
-# eping.py 3.38
+# eping.py 3.47
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -165,15 +165,17 @@ Single self-contained page, no external resources.
     CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS and ADD FILE > FROM CLIENT/
     FROM SERVER are web-gui-only (no CLI key - CLI already runs on the server's own
     filesystem).
-- **FILE OPERATIONS** dropdown:
+- **FILE OPERATIONS** dropdown, in this order:
   | Entry | Does |
   |---|---|
+  | SAVE HOSTS FILE ON SERVER | confirmation, then overwrites the currently displayed hosts into the active `-f` hostfile (first one, if eping.py was started with one); no active hostfile → asks for a name, `.txt` appended once |
+  | UPLOAD FILE TO SERVER | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
   | DOWNLOAD ALL HOSTS | full reference list, plain text |
-  | DOWNLOAD SHOWN HOSTS | currently displayed hosts (view/address mode/filter applied), plain text |
+  | DOWNLOAD ACTIVE HOSTS | currently displayed hosts (view/address mode/filter applied), plain text |
   | DOWNLOAD ACTIVE LOGFILE | active CSV log, zipped; disabled while logging off |
-  | DOWNLOAD SELECTED FILE | picker: every `.csv`/`.txt`/`.html` in the working dir, table (name/size/date), extension filter, "select all", "no compression" checkbox (single-file selection only); multi-select bundles into one ZIP |
-  | UPLOAD FILE | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
-  | DELETE FILES | same picker as DOWNLOAD SELECTED FILE, red DELETE button, confirms with file count; active logfile can't be deleted |
+  | DOWNLOAD SELECTED FILES | picker: every `.csv`/`.txt`/`.html` in the working dir, table (name/size/date), extension filter, "select all", "no compression" checkbox (single-file selection only); multi-select bundles into one ZIP |
+  | DELETE FILES FROM SERVER | same picker as DOWNLOAD SELECTED FILES, red DELETE button, confirms with file count; active logfile can't be deleted |
+  | VIEW FILE FROM SERVER | picker: every `.csv`/`.txt` in the working dir, table (name/size/date), "select all"; opens each picked file read-only, raw content, COPY/DOWNLOAD buttons - see *VIEW FILE FROM SERVER* below |
 - **ADD FILE** dropdown: `FROM CLIENT` (local file picker) / `FROM SERVER` (picks one
   or more `.txt` files already on the server, adds their hosts).
 - Keyboard shortcuts (no modifier, only while no text field has focus; own quick
@@ -264,6 +266,7 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | GET | `/api/download/hosts_shown` | — | shown hosts, `.txt` |
 | GET | `/api/download/logfile` | — | active CSV log, zipped; `404` if logging off |
 | GET | `/api/download/choose_logfile?name=...&nozip=1` | — | one or more files, ZIP (or raw for a single file with `nozip=1`) |
+| GET | `/api/view_file?name=...&queue=...` | — | server-rendered VIEW FILE viewer page for one `.csv`/`.txt` file; repeatable `queue=` params carry the rest of the selection for the page's own "OPEN NEXT FILE" link |
 | POST | `/api/delete_logfile` | `{"names":[...]}` | delete files; active logfile refused |
 | POST | `/api/upload_server_file?name=...` | raw file content | save `.txt`/`.csv` as-is; never overwrites |
 | POST | `/api/add_from_server` | `{"names":[...]}` | add hosts from listed `.txt` files |
@@ -273,11 +276,13 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
 `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
-`set_option`, `reset_options`, `run_report`, `exit`. `set_option` value: `key=value`.
-`reset_log` value: logging off - optional custom file name (blank = auto-generated);
-logging on - `y` (clear) or `new`/`new=<name>` (new file, optional custom name).
-`run_report`: `value` = empty (active logfile) or one `.csv` filename; or JSON body
-field `values`: `[...]` to merge and analyse multiple `.csv` files as one (max 25).
+`set_option`, `reset_options`, `run_report`, `save_hosts_file`, `exit`. `set_option`
+value: `key=value`. `reset_log` value: logging off - optional custom file name (blank =
+auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
+custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
+JSON body field `values`: `[...]` to merge and analyse multiple `.csv` files as one
+(max 25, `REPORT_MAX_FILES`). `save_hosts_file` value: optional target file name (blank
+= active `-f` hostfile, or `eping-hosts.txt` if none).
 
 `-wv` answers `403` to `POST /api/command`/`/api/upload`; `-wvc`/`-web` allow both. No
 authentication. Default bind `0.0.0.0` — use `-bind 127.0.0.1` outside trusted networks.
@@ -421,15 +426,32 @@ Resolves `epinga.py`: copy next to `eping.py` preferred, else `PATH`.
 Runs epinga.py against one or more logfiles in the background while eping.py keeps
 running - not just at exit. Web: GENERATE REPORT dropdown, two entries - `ACTIVE
 LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
-opens/closes with a footer error), `CHOOSE LOGFILE` picks one or more `.csv` files in
-the working dir - picking a file that has `-1`/`-2`/... rotation siblings (see
-*Logging*) auto-selects them too, individually deselectable. More than one selected
-file is merged chronologically (by mtime) into one temporary CSV, analysed as a single
-logfile, then the temp file is removed (max 25 files per report). Result opens in a new
-tab. CLI: `N` always analyses the active logfile only (needs logging on, non-empty
-logfile, else a notice is shown); result path/error shown once done. Only one run at a
-time either way. See *epinga.py* below for the report, and *Called from eping.py* under
-epinga.py for the invocation.
+closes and a footer error is shown), `CHOOSE LOGFILE` picks one or more `.csv` files in
+the working dir - table (name/size/date), "select all" checkbox, nothing preselected;
+up to 25 files per report (`REPORT_MAX_FILES`), checking a 26th is refused client-side.
+More than one selected file is merged chronologically (by mtime) into one temporary
+CSV, analysed as a single logfile, then the temp file is removed. Result opens in a new
+tab; if a selected file was invalid or has meanwhile been removed (e.g. by log rotation
+pruning it between picking and clicking GENERATE), the tab closes and a footer error is
+shown instead of sitting on "please wait" forever. CLI: `N` always analyses the active
+logfile only (needs logging on, non-empty logfile, else a notice is shown); result
+path/error shown once done. Only one run at a time either way. See *epinga.py* below for
+the report, and *Called from eping.py* under epinga.py for the invocation.
+
+## VIEW FILE FROM SERVER (web gui only)
+
+Read-only viewer for one or more `.csv`/`.txt` files in the working dir - FILE
+OPERATIONS > VIEW FILE FROM SERVER, table picker (name/size/date), "select all". Each
+selected file opens in its own tab: raw content in a `<pre>`, COPY (clipboard) and
+DOWNLOAD buttons, no editing. The whole page is rendered server-side per file
+(`GET /api/view_file?name=...`), not built client-side - every browser blocks a script
+opening more than one tab per click, so opening several files at once can't chain
+several `window.open()` calls from a single click. Instead, a file beyond the first is
+opened by clicking a plain link rendered inside the previous tab (a centered "N more
+file(s) selected / OPEN NEXT FILE" box) - ordinary browser navigation, not a
+script-triggered popup, so it isn't subject to that restriction. Max 20MB per file
+(`VIEW_FILE_MAX_BYTES`) - larger files are refused with a message pointing at DOWNLOAD
+instead.
 
 ## Address modes (PREFER HOSTNAME / SWITCH TO IP ONLY / GET NAMES)
 
