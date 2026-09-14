@@ -1,4 +1,4 @@
-# eping.py 3.35
+# eping.py 3.38
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -274,7 +274,10 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
 `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
 `set_option`, `reset_options`, `run_report`, `exit`. `set_option` value: `key=value`.
-`run_report` value: empty = active logfile, or a `.csv` filename.
+`reset_log` value: logging off - optional custom file name (blank = auto-generated);
+logging on - `y` (clear) or `new`/`new=<name>` (new file, optional custom name).
+`run_report`: `value` = empty (active logfile) or one `.csv` filename; or JSON body
+field `values`: `[...]` to merge and analyse multiple `.csv` files as one (max 25).
 
 `-wv` answers `403` to `POST /api/command`/`/api/upload`; `-wvc`/`-web` allow both. No
 authentication. Default bind `0.0.0.0` — use `-bind 127.0.0.1` outside trusted networks.
@@ -356,7 +359,10 @@ TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTA
 `TBD`: suppressed DOWN observations (`-cf`). `IP`: address actually pinged (empty for
 NO-DNS). Log rotates to a new file once it reaches `-lms` MB; a single round's data is
 always written in full to one file, rotation only starts the next round in a new file.
-`-lmf` prunes the oldest files once exceeded.
+`-lmf` prunes the oldest files once exceeded. A size-rotated file reuses the chain's
+original timestamp with an incrementing `-1`/`-2`/... suffix
+(`eping-log_<original-timestamp>-N.csv`); starting a new file manually (`RESET
+LOGGING`/`L`) always gets the current time instead and begins a fresh chain.
 
 `ZERO CHANGES`/`Z`: resets `NO_OF_CHANGES`/`CHANGE_TIMESTAMP` for the running instance;
 log file keeps everything already written.
@@ -367,9 +373,11 @@ these rows automatically.
 
 `RESET LOGGING`/`L`:
 - Logging on: confirmation first (CLI keypress / web modal). `Y` clears all entries,
-  restarts logging into the same file. `N` starts a fresh `eping-log_<timestamp>.csv`,
-  old file untouched. `ESC`/`ENTER` cancels.
-- Logging off: reads `START LOG`, starts a fresh file immediately, no confirmation.
+  restarts logging into the same file. `N` starts a fresh file, old file untouched -
+  optional custom name (blank = auto-generated `eping-log_<timestamp>.csv`); a name
+  that already exists is rejected, nothing is created. `ESC`/`ENTER` cancels.
+- Logging off: same dialog, no clear option - `START LOGGING` starts a fresh file
+  right away, same optional custom name.
 
 ## Web GUI header
 
@@ -410,14 +418,18 @@ Resolves `epinga.py`: copy next to `eping.py` preferred, else `PATH`.
 
 ## GENERATE REPORT (web gui) / ANALYSE NOW (CLI `N`)
 
-Runs epinga.py against a logfile in the background while eping.py keeps running - not
-just at exit. Web: GENERATE REPORT dropdown, two entries - `ACTIVE LOGFILE` analyses the
-active CSV log (needs logging on, non-empty logfile, else the tab opens/closes with a
-footer error), `CHOOSE LOGFILE` picks any `.csv` in the working dir (single pick).
-Result opens in a new tab. CLI: `N` always analyses the active logfile (needs logging
-on, non-empty logfile, else a notice is shown); result path/error shown once done.
-Only one run at a time either way. See *epinga.py* below for the report, and *Called
-from eping.py* under epinga.py for the invocation.
+Runs epinga.py against one or more logfiles in the background while eping.py keeps
+running - not just at exit. Web: GENERATE REPORT dropdown, two entries - `ACTIVE
+LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
+opens/closes with a footer error), `CHOOSE LOGFILE` picks one or more `.csv` files in
+the working dir - picking a file that has `-1`/`-2`/... rotation siblings (see
+*Logging*) auto-selects them too, individually deselectable. More than one selected
+file is merged chronologically (by mtime) into one temporary CSV, analysed as a single
+logfile, then the temp file is removed (max 25 files per report). Result opens in a new
+tab. CLI: `N` always analyses the active logfile only (needs logging on, non-empty
+logfile, else a notice is shown); result path/error shown once done. Only one run at a
+time either way. See *epinga.py* below for the report, and *Called from eping.py* under
+epinga.py for the invocation.
 
 ## Address modes (PREFER HOSTNAME / SWITCH TO IP ONLY / GET NAMES)
 
@@ -480,7 +492,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.26
+# epinga.py 2.27
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
