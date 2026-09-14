@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '2.25'
+version = '2.26'
 
 import re
 import os
@@ -1008,7 +1008,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     </span>
     <span class="bucket-actions"><span id="hostlistCount">0</span>
       <button class="dl-btn" onclick="downloadHostListCsv()"
-              title="download the shown host list as CSV">&#8681; Download CSV</button>
+              title="download the shown host list as CSV">&#8681; Download</button>
       <button class="dl-btn" onclick="copyBucketList(CURRENT_FILTERED, this)"
               title="copy hostnames/IPs of the shown list to clipboard">Copy</button></span>
   </h3>
@@ -1460,7 +1460,7 @@ function compareOneColumn(col, asc, a, b) {{
 }}
 
 // current filtered+sorted host list, kept in sync by applyFilter() - backs
-// the Host List section's Download CSV / Copy buttons (bucket buttons instead
+// the Host List section's Download / Copy buttons (bucket buttons instead
 // take their own bucket's list directly, since those are fixed subsets)
 let CURRENT_FILTERED = [];
 function applyFilter() {{
@@ -1679,7 +1679,11 @@ function renderBuckets() {{
   const wasCollapsed = new Set(
     bkts.map(b => b.suffix).filter(s => {{
       const el = document.getElementById('bucket-' + s);
-      return el && el.classList.contains('collapsed');
+      // first render (el not created yet): default everything collapsed
+      // except DOWN+FLAPPING - Host List stays open too, but that's a
+      // separate, static bucket outside this list.
+      if (!el) return s !== 'downflap';
+      return el.classList.contains('collapsed');
     }})
   );
   document.getElementById('buckets').innerHTML = bkts.map(b => `
@@ -1725,7 +1729,7 @@ const defaultSorted = [...RAW.hosts].sort((a, b) => {{
   return hostCompare(a.name, b.name);
 }});
 // initial render bypasses applyFilter() (no filter/search applied yet) - keep
-// CURRENT_FILTERED/hostlistCount in sync here too, otherwise Download CSV/Copy
+// CURRENT_FILTERED/hostlistCount in sync here too, otherwise Download/Copy
 // stay empty and the count shows 0 until the user first touches the filter
 CURRENT_FILTERED = defaultSorted;
 document.getElementById('hostlistCount').textContent = defaultSorted.length;

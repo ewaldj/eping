@@ -1,4 +1,4 @@
-# eping.py 3.19
+# eping.py 3.22
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -202,12 +202,14 @@ Serves a single self-contained page; no external resources are loaded.
   with a "SCROLL RIGHT FOR MORE" hint shown right-aligned in the HOSTS/RUNTIME/... stats
   bar (only while it's actually needed) - the footer stays hidden otherwise, leaving
   the full window height for the host grid.
-- The footer stats bar shows RUNTIME, HOSTS-UP, HOSTS-DOWN and FLAPPING (count of
-  hosts within the flap window, same rule as `UP+FLAPPING` - see *Views and sort
-  orders*), always for the whole current view regardless of the `M` match filter.
-  RUNTIME briefly shows `n/a` instead of a stale figure while a background round is
-  running during an open dialog (see *CLI mode* - ping checks keep running while a
-  dialog is open) - it fills in again as soon as the next round completes.
+- The footer stats bar shows RUNTIME and HOST UP / DOWN / FLAPPING counts
+  (FLAPPING is hosts within the flap window, same rule as `UP+FLAPPING` - see
+  *Views and sort orders*), always for the whole current view regardless of the
+  `M` match filter; each count column is padded to fit up to 6-digit host counts
+  without overlapping the next label. RUNTIME briefly shows `n/a` instead of a
+  stale figure while a background round is running during an open dialog (see
+  *CLI mode* - ping checks keep running while a dialog is open) - it fills in
+  again as soon as the next round completes.
 - Adding many hosts at once (`ADD`, `ADD FILE` or an upload) shows "added N
   host(s) - please wait, pinging ..." and keeps that message visible - unlike a
   normal message it does not auto-clear after a couple of seconds - until those
@@ -228,11 +230,15 @@ Serves a single self-contained page; no external resources are loaded.
   SHOWN HOSTS saves only what the table currently shows (view, address mode and
   display filter all apply, same as the table); both are plain text, same format
   ADD FILE/upload accept. ACTIVE LOGFILE saves the active CSV log (zipped),
-  disabled while logging is off. CHOOSE FILE opens a picker listing every
-  `.csv`/`.txt`/`.html` file in eping.py's working directory - toggle buttons
-  filter by extension (all three on by default), a checkbox per file plus a
-  "select all" checkbox; picking more than one bundles them into a single ZIP,
-  same as picking one, for a single code path), EXIT, font size (right-aligned);
+  disabled while logging is off. CHOOSE FILE opens a wide picker listing every
+  `.csv`/`.txt`/`.html` file in eping.py's working directory as a table (name,
+  size, date) - toggle buttons filter by extension (all three on by default), a
+  checkbox per file plus a "select all" checkbox, and a "no compression"
+  checkbox (only selectable while a single file is checked - more than one
+  falls back to an uncompressed ZIP instead) that skips the ZIP wrapper
+  entirely for that one file; picking more than one bundles them into a single
+  ZIP, same as picking one, for a single code path), EXIT, font size
+  (right-aligned);
   row 2,
   in order and separated by `|`: the match filter field with SET / CLEAR, the
   host field with ADD / DELETE, the comment field with COMMENT, then ADD FILE and
@@ -360,15 +366,13 @@ These are the same bounds enforced at CLI startup for the matching flags (see
 | GET | `/api/download/hosts_all` | — | the full reference list as a `.txt` download (DOWNLOAD > ALL HOSTS) |
 | GET | `/api/download/hosts_shown` | — | the currently displayed hosts as a `.txt` download (DOWNLOAD > SHOWN HOSTS) |
 | GET | `/api/download/logfile` | — | the active CSV log, zipped (DOWNLOAD > ACTIVE LOGFILE); `404` while logging is off |
-| GET | `/api/download/choose_logfile?name=...` | — | one or more `name=` files from `/api/logfiles`, bundled into a single ZIP (DOWNLOAD > CHOOSE FILE) |
+| GET | `/api/download/choose_logfile?name=...&nozip=1` | — | one or more `name=` files from `/api/logfiles`, bundled into a single ZIP (DOWNLOAD > CHOOSE FILE); `nozip=1` skips the ZIP wrapper for a single file, or uses ZIP_STORED (no compression) for more than one |
 | GET | `/api/report` | — | the last `GENERATE REPORT` HTML result, served inline; `404` until one has completed |
 | POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|run_report\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*); `run_report` starts a background `GENERATE REPORT` run - `value` empty analyses the active logfile, or a `.csv` filename from `/api/logfiles` (CHOOSE LOGFILE) to analyse that one instead |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
-| POST | `/api/save_report` | `text/html` (the report page's own DOM) | persists the report's current state to disk in the working directory as `<logfile-base>_report_saved_<timestamp>.html` - the report page's own SAVE button, see *GENERATE REPORT* |
 
 `-wv` answers `403` to `POST /api/command` and `POST /api/upload` (read-only, see
-*Read-only web view*); `-wvc` and `-web` allow both. `POST /api/save_report` follows
-the same read-only rule. There is no authentication. The default bind address is
+*Read-only web view*); `-wvc` and `-web` allow both. There is no authentication. The default bind address is
 `0.0.0.0` — use `-bind 127.0.0.1` outside trusted networks.
 
 ## How a scan round works
@@ -564,16 +568,9 @@ epinga.py runs in a background thread (`stdin` closed, `--no-version-check`, `-q
 loop or the rest of the web gui - the new tab opens blank right away and is
 navigated to the report once analysis finishes; poll interval is the same 1s as
 the rest of the page. Only one run at a time; a click while one is already running
-is a no-op until it completes.
-
-When the report is served this way (not opened as a local `file://` page), it shows
-a **SAVE** button next to **Download** (see epinga.py's *HTML report* section below)
-that persists the report's current on-screen state (sort/filter/dedup/IP View, same
-as Download) to disk on the eping.py server via `POST /api/save_report`, under its
-own timestamped filename - distinct from the `<logfile-base>_report.html` that
-`GENERATE REPORT` itself overwrites on every run, so a deliberate save is never lost.
-The button briefly turns green on success or red on failure (2s), its label always
-stays "Save".
+is a no-op until it completes. The report file itself is never overwritten - a
+repeat run for the same logfile gets `_report-1.html`, `_report-2.html`, etc.
+instead, so an earlier report is never lost.
 
 `PREFER HOSTNAMES` / `P` (`-ph` to start with it on) drops a raw-IP host from what gets
 pinged as soon as another entry in the list is a hostname resolving to that same
@@ -686,7 +683,7 @@ eping's own work; on 4109 hosts they add up to about 0.12 s.
 - `-dr 0` looks safe on paper but produced flapping hosts in practice — keep the
   default of 1.
 
-# epinga.py 2.24
+# epinga.py 2.26
 
 Analyses an `eping.py` CSV log and produces a terminal summary plus a self-contained
 HTML report (no server, no external assets) with per-host detail, state-change
@@ -755,17 +752,12 @@ toolbar with:
   each pair) with `No deduplication` selected, and `0` with either `Prefer IP
   address` or `Prefer hostname` active - once a mode hides the redundant side,
   nothing left is a duplicate.
-- **Save** / **Download** buttons, right of the Deduplication dropdown - both
-  capture the report exactly as currently shown (theme, dedup mode, sort, filter,
-  collapsed buckets), from the same DOM (`document.documentElement.outerHTML`).
-  **Download** saves it as a standalone `<base>_report.html` file client-side (a
-  Blob, no server round-trip). **Save** instead `POST`s it to the eping.py server
-  that served this report (`/api/save_report`), which writes it to disk in its own
-  working directory under a timestamped filename - flashes green on success, red
-  on failure (2s), label always stays "Save". Both are hidden when the report is
-  opened as a local `file://` page (there is already a copy on disk, and no server
-  for Save to reach); shown when served over HTTP, e.g. eping.py's
-  `GENERATE REPORT` / `/api/report`.
+- **Download** button, right of the Deduplication dropdown - captures the report
+  exactly as currently shown (theme, dedup mode, sort, filter, collapsed buckets)
+  from the DOM (`document.documentElement.outerHTML`) and saves it as a standalone
+  `<base>_report.html` file client-side (a Blob, no server round-trip). Hidden
+  when the report is opened as a local `file://` page (there is already a copy
+  on disk).
 
 A **Comments** section, populated from `#COMMENT#` rows written by eping.py's
 `ADD COMMENT` / `T` (see above), is shown above the Host List - collapsed by
@@ -787,14 +779,17 @@ standalone **COMMENTS (N)** block, listing every comment in log order (or
 `PER-HOST DETAIL` in the text output - the same placement as the HTML report's
 Comments section above its Host List.
 
-The **Host List** section (filterable/sortable table) and each of the four bucket
-sections (**Always UP**, **Flapping**, **Always DOWN**, **No-DNS**) are independently
-collapsible by clicking their title bar (expanded by default); a bucket's collapsed
-state survives an IP View / Deduplication change since those re-render the bucket
-content. Each bucket header also has **Download** (exports its hostnames/IPs as
+The **Host List** section (filterable/sortable table) and each of the six bucket
+sections (**Always UP**, **UP+FLAPPING**, **Flapping**, **Always DOWN**,
+**DOWN+FLAPPING**, **No-DNS**) are independently collapsible by clicking their
+title bar. Host List and **DOWN+FLAPPING** start expanded on load; the other
+five buckets start collapsed. A bucket's collapsed state survives an IP View /
+Deduplication change since those re-render the bucket content. Each bucket
+header also has **Download** (exports its hostnames/IPs as
 `<base>-<up|down|flap|nodns>-hosts.txt`) and **Copy** (copies the same list to the
 clipboard, with an `execCommand` fallback for `file://` pages where the async
-Clipboard API may be unavailable).
+Clipboard API may be unavailable). The Host List section itself has its own
+**Download** (CSV, honouring the active filter/search) and **Copy** buttons.
 
 Clicking a table row expands its detail: full state-change history with timestamps,
 and per-host statistics (IP, uptime, downtime, span, first/last seen, RTT min/avg/max).
