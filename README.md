@@ -1,4 +1,4 @@
-# eping.py 3.22
+# eping.py 3.23
 
 Continuous ICMP reachability monitor built on top of `fping`. Scans a host list in a
 loop and reports each host as UP, DOWN or NO-DNS, counting state changes over time.
@@ -232,7 +232,10 @@ Serves a single self-contained page; no external resources are loaded.
   ADD FILE/upload accept. ACTIVE LOGFILE saves the active CSV log (zipped),
   disabled while logging is off. CHOOSE FILE opens a wide picker listing every
   `.csv`/`.txt`/`.html` file in eping.py's working directory as a table (name,
-  size, date) - toggle buttons filter by extension (all three on by default), a
+  size, date) - toggle buttons filter by extension (all three on by default,
+  with a red DELETE button at the far right of the same row, enabled once at
+  least one file is checked - confirms with the exact file count before
+  deleting; the currently active logfile can never be deleted this way), a
   checkbox per file plus a "select all" checkbox, and a "no compression"
   checkbox (only selectable while a single file is checked - more than one
   falls back to an uncompressed ZIP instead) that skips the ZIP wrapper
@@ -367,6 +370,7 @@ These are the same bounds enforced at CLI startup for the matching flags (see
 | GET | `/api/download/hosts_shown` | — | the currently displayed hosts as a `.txt` download (DOWNLOAD > SHOWN HOSTS) |
 | GET | `/api/download/logfile` | — | the active CSV log, zipped (DOWNLOAD > ACTIVE LOGFILE); `404` while logging is off |
 | GET | `/api/download/choose_logfile?name=...&nozip=1` | — | one or more `name=` files from `/api/logfiles`, bundled into a single ZIP (DOWNLOAD > CHOOSE FILE); `nozip=1` skips the ZIP wrapper for a single file, or uses ZIP_STORED (no compression) for more than one |
+| POST | `/api/delete_logfile` | `{"names":["a.csv","b.txt",...]}` | deletes the listed files (basename only, must match `/api/logfiles`' extension whitelist) - DOWNLOAD > CHOOSE FILE's DELETE button; the active logfile is always refused |
 | GET | `/api/report` | — | the last `GENERATE REPORT` HTML result, served inline; `404` until one has completed |
 | POST | `/api/command` | `{"cmd":"up_only\|set_filter\|addr_mode\|get_names\|match_filter\|sort\|add\|del\|set_ref\|zero\|add_comment\|reset_log\|clear\|set_option\|reset_options\|run_report\|exit","value":"..."}` | control; `set_option` value is `"key=value"` (see *ADV OPTIONS*); `run_report` starts a background `GENERATE REPORT` run - `value` empty analyses the active logfile, or a `.csv` filename from `/api/logfiles` (CHOOSE LOGFILE) to analyse that one instead |
 | POST | `/api/upload` | `text/plain` host list | add hosts |
