@@ -6,7 +6,8 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-version = '2.26'
+VERSION = '2.27'
+version = VERSION   # legacy alias
 
 import re
 import os
@@ -19,12 +20,8 @@ import datetime
 import ipaddress
 import html as html_lib
 
-# ── optional modules ──────────────────────────────────────────────────────────
-try:
-    import urllib.request, socket as _socket
-except Exception:
-    urllib = None
-    _socket = None
+import io
+import urllib.request
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 CRED    = '\033[91m'
@@ -45,7 +42,7 @@ def header_line(title, ch='─'):
 
 # ── signal / error helpers ────────────────────────────────────────────────────
 def sigint_handler(sig, frame):
-    print(f'\n{col("Interrupted.", CORANGE)}  epinga.py v{version}  – www.jeitler.cc\n')
+    print(f'\n{col("Interrupted.", CORANGE)}  epinga.py v{VERSION}  – www.jeitler.cc\n')
     sys.exit(0)
 
 def die(msg):
@@ -55,8 +52,17 @@ def die(msg):
 # ── regex ─────────────────────────────────────────────────────────────────────
 ip_re   = re.compile(r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}'
                      r'([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
-fqdn_re = re.compile(r'(?=^.{4,253}$)(^((?!-)[a-zA-Z0-9-äöüÄÖÜ]{1,63}(?<!-)'
-                     r'([\.]?))+[a-zA-ZäöüÄÖÜ]{0,63}$)')
+
+
+def version_tuple(v):
+    """'2.27' -> (2, 27): numeric version compare ('2.9' > '2.26' is True as strings)."""
+    out = []
+    for part in str(v or '').split('.'):
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(0)
+    return tuple(out)
 
 def sort_hosts(hosts):
     ips, fqdns = [], []
@@ -68,13 +74,12 @@ def sort_hosts(hosts):
 
 # ── version check ─────────────────────────────────────────────────────────────
 def check_version_online(url, tool_name, timeout=2.0):
-    if not urllib or not _socket:
-        return None
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
-            for line in r.read().decode().splitlines():
-                if line.startswith(tool_name + ' '):
-                    return line.split()[1]
+            for line in r.read().decode('utf-8', 'replace').splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == tool_name:
+                    return parts[1]
     except Exception:
         pass
     return None
@@ -90,16 +95,17 @@ def parse_ts(s):
 
 # ── byte-tracking file wrapper (tell() fails with next(), so we count ourselves) ──
 class _ByteTracker:
-    """Wraps a text file and counts bytes via readline() so tell() is never needed."""
+    """Wraps a *binary* file: counts raw bytes per line and decodes once, so the
+    progress bar needs no tell() and no re-encode of every line."""
     def __init__(self, fh, encoding='utf-8'):
         self._fh       = fh
         self._enc      = encoding
         self.bytes_read = 0
 
     def readline(self):
-        line = self._fh.readline()
-        self.bytes_read += len(line.encode(self._enc, errors='replace'))
-        return line
+        raw = self._fh.readline()
+        self.bytes_read += len(raw)
+        return raw.decode(self._enc, errors='replace')
 
     def __iter__(self):
         return self
@@ -254,11 +260,12 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
     comments   = []   # [{'ts': datetime, 'text': str}, ...] - from '#COMMENT#' sentinel rows
     infos      = []   # [{'ts': datetime, 'text': str}, ...] - from '#INFO#' sentinel rows
     rows_read  = 0
+    rows_skipped = 0  # malformed/truncated rows (no hostname, no timestamp, no state)
 
     progress = Progress(file_size) if not quiet else None
 
     try:
-        fh = open(filename, 'r', encoding='UTF-8', newline='')
+        fh = open(filename, 'rb')
     except OSError as e:
         die(str(e))
 
@@ -272,59 +279,60 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
         if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
             die(f'"{filename}" does not look like an eping logfile (wrong header).')
 
+        def field(row, key):
+            # a truncated last line (log still being written) yields None for the
+            # missing columns - never let that reach .strip()/comparisons
+            return (row.get(key) or '').strip()
+
         for row in reader:
             rows_read += 1
 
-            hostname = row['HOSTNAME']
-
-            if hostname == '#COMMENT#':
-                ts = parse_ts(row['TIMESTAMP'])
-                if ts is None:
-                    continue
-                if ts_start and ts < ts_start:
-                    continue
-                if ts_end   and ts > ts_end:
-                    continue
-                text = row.get('IP', '').strip()
-                if text:
-                    comments.append({'ts': ts, 'text': text})
+            hostname = field(row, 'HOSTNAME')
+            if not hostname:
+                rows_skipped += 1
                 continue
 
-            if hostname == '#INFO#':
-                ts = parse_ts(row['TIMESTAMP'])
+            if hostname in ('#COMMENT#', '#INFO#'):
+                ts = parse_ts(field(row, 'TIMESTAMP'))
                 if ts is None:
+                    rows_skipped += 1
                     continue
                 if ts_start and ts < ts_start:
                     continue
                 if ts_end   and ts > ts_end:
                     continue
-                text = row.get('IP', '').strip()
+                text = field(row, 'IP')
                 if text:
-                    infos.append({'ts': ts, 'text': text})
+                    (comments if hostname == '#COMMENT#' else infos).append({'ts': ts, 'text': text})
                 continue
 
             if filter_hosts and hostname not in filter_hosts:
                 continue
 
-            ts = parse_ts(row['TIMESTAMP'])
+            ts = parse_ts(field(row, 'TIMESTAMP'))
             if ts is None:
+                rows_skipped += 1
                 continue
             if ts_start and ts < ts_start:
                 continue
             if ts_end   and ts > ts_end:
                 continue
 
-            prev_state = row['PREVIOUS_STATE']
-            cur_state  = row['CURRENT_STATE']
-            rtt_raw    = row['RTT']
-            noc        = row['NO_OF_CHANGES']
-            ip_raw     = row.get('IP', '')   # absent on older logfiles - fine, defaults to ''
+            prev_state = field(row, 'PREVIOUS_STATE')
+            cur_state  = field(row, 'CURRENT_STATE')
+            if not cur_state:
+                rows_skipped += 1        # truncated row - no usable state
+                continue
+            rtt_raw    = field(row, 'RTT')
+            noc        = field(row, 'NO_OF_CHANGES')
+            ip_raw     = field(row, 'IP')   # absent on older logfiles - fine, defaults to ''
 
             if hostname not in hosts:
-                hosts[hostname] = HostStats(ts, cur_state, ip_raw)
+                # initial state is the row's PREVIOUS_STATE (what the host was before
+                # this row) so a first row that already carries a change counts as one
+                hosts[hostname] = HostStats(ts, prev_state or cur_state, ip_raw)
                 host_order.append(hostname)
-            else:
-                hosts[hostname].feed(ts, prev_state, cur_state, rtt_raw, noc, ip_raw)
+            hosts[hostname].feed(ts, prev_state, cur_state, rtt_raw, noc, ip_raw)
 
             if progress and rows_read % 5000 == 0:
                 progress.update(tracker.bytes_read)
@@ -338,6 +346,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
 
     comments.sort(key=lambda c: c['ts'])
     infos.sort(key=lambda i: i['ts'])
+    if rows_skipped and not quiet:
+        print(f'  {col(str(rows_skipped) + " malformed/truncated row(s) skipped", CORANGE)}')
     return hosts, host_order, rows_read, comments, infos
 
 
@@ -629,13 +639,14 @@ def generate_html(data, out_path):
     n_down    = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'DOWN')
     n_nodns   = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'NO-DNS')
     n_dup     = count_duplicate_hosts(data['hosts'])
+    filename_html = html_lib.escape(str(data['filename']))
 
     html = f"""<!DOCTYPE html>
 <html lang="de">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>epinga – {data['filename']}</title>
+<title>epinga – {filename_html}</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzRhM2IzNCI+CiAgPGVsbGlwc2UgY3g9IjEyIiBjeT0iMTYuNSIgcng9IjUuNCIgcnk9IjQuMyIvPgogIDxlbGxpcHNlIGN4PSI1LjIiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjE4LjgiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjguOSIgY3k9IjUuNiIgcng9IjIuNCIgcnk9IjMuMSIvPgogIDxlbGxpcHNlIGN4PSIxNS4xIiBjeT0iNS42IiByeD0iMi40IiByeT0iMy4xIi8+Cjwvc3ZnPg==">
 <style>
 :root {{
@@ -869,9 +880,9 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
       <ellipse cx="18.8" cy="10.5" rx="2.5" ry="3.1"/>
       <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
       <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
-    </svg>epinga &nbsp;·&nbsp; Analysis Report<small class="ver">v{version}</small></h1>
+    </svg>epinga &nbsp;·&nbsp; Analysis Report<small class="ver">v{VERSION}</small></h1>
     <div class="meta">
-      File: <strong>{data['filename']}</strong> &nbsp;|&nbsp;
+      File: <strong>{filename_html}</strong> &nbsp;|&nbsp;
       Generated: {data['generated']} &nbsp;|&nbsp;
       {data['rows_read']:,} rows &nbsp;|&nbsp;
       {n_total} hosts &nbsp;|&nbsp;
@@ -1061,7 +1072,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <ellipse cx="8.9" cy="5.6" rx="2.4" ry="3.1"/>
     <ellipse cx="15.1" cy="5.6" rx="2.4" ry="3.1"/>
   </svg>
-  <span>epinga.py v{version} &nbsp;·&nbsp;
+  <span>epinga.py v{VERSION} &nbsp;·&nbsp;
   &copy; Ewald Jeitler &nbsp;·&nbsp;
   supervised by <a href="https://jeitler.cc/nelly/" target="_blank" rel="noopener">Nelly</a> &nbsp;·&nbsp;
   <a href="https://tools.jeitler.cc" target="_blank" rel="noopener">tools.jeitler.cc</a> &nbsp;·&nbsp;
@@ -1143,12 +1154,12 @@ function buildTimeline(h) {{
   }}).join('');
 
   return `<div style="position:relative;width:100%;height:10px;background:var(--bg3);
-    border-radius:4px;overflow:hidden" title="${{h.first_ts}} → ${{h.last_ts}}">${{segHtml}}</div>`;
+    border-radius:4px;overflow:hidden" title="${{escHtml(h.first_ts)}} → ${{escHtml(h.last_ts)}}">${{segHtml}}</div>`;
 }}
 
 function stateBadge(s, changes) {{
   const label = changes > 0 ? 'FLAPPING' : s;
-  return `<span class="badge ${{label}}">${{label}}</span>`;
+  return `<span class="badge ${{escHtml(label)}}">${{escHtml(label)}}</span>`;
 }}
 
 function uptimeBar(pct, flapping) {{
@@ -1169,7 +1180,7 @@ function renderTable(data) {{
     tr.id = 'r' + idx;
     tr.dataset.idx = idx;
     tr.innerHTML = `
-      <td class="host">${{hostLabel(h)}}${{ secondaryLabel(h) ? ` <span class="host-ip">| ${{secondaryLabel(h)}}</span>` : '' }} <span class="chevron">&#8964;</span></td>
+      <td class="host">${{escHtml(hostLabel(h))}}${{ secondaryLabel(h) ? ` <span class="host-ip">| ${{escHtml(secondaryLabel(h))}}</span>` : '' }} <span class="chevron">&#8964;</span></td>
       <td style="text-align:center;white-space:nowrap">${{stateBadge(h.state, h.changes)}}</td>
       <td style="padding:0 12px"><div style="width:200px">${{buildTimeline(h)}}</div></td>
       <td style="text-align:right">${{uptimeBar(h.uptime, h.changes > 0)}}</td>
@@ -1192,12 +1203,25 @@ function escHtml(s) {{
   return String(s).replace(/[&<>"']/g, c => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}})[c]);
 }}
 
+// RAW.comments is sorted by ts (epinga sorts before embedding) - binary search the
+// [first_ts, last_ts] window instead of scanning every comment for every host row
+function lowerBound(arr, ts) {{
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {{ const mid = (lo + hi) >> 1; if (arr[mid].ts < ts) lo = mid + 1; else hi = mid; }}
+  return lo;
+}}
+function upperBound(arr, ts) {{
+  let lo = 0, hi = arr.length;
+  while (lo < hi) {{ const mid = (lo + hi) >> 1; if (arr[mid].ts <= ts) lo = mid + 1; else hi = mid; }}
+  return lo;
+}}
 function buildDetail(h) {{
   // comments are a global timeline, not per-host - only show ones logged while
   // this host was actually being observed (its first_ts..last_ts window)
-  const relevantComments = (RAW.comments || []).filter(c =>
-    (!h.first_ts || c.ts >= h.first_ts) && (!h.last_ts || c.ts <= h.last_ts)
-  );
+  const allC = RAW.comments || [];
+  const cFrom = h.first_ts ? lowerBound(allC, h.first_ts) : 0;
+  const cTo   = h.last_ts  ? upperBound(allC, h.last_ts)  : allC.length;
+  const relevantComments = allC.slice(cFrom, cTo);
   const timeline = [
     ...h.events.map(e => ({{ts: e.ts, kind: 'change', frm: e.frm, to: e.to}})),
     ...relevantComments.map(c => ({{ts: c.ts, kind: 'comment', text: c.text}})),
@@ -1208,7 +1232,7 @@ function buildDetail(h) {{
     : timeline.map(e => {{
         if (e.kind === 'comment') {{
           return `<div class="event comment-event">
-            <span class="ts">${{e.ts}}</span>
+            <span class="ts">${{escHtml(e.ts)}}</span>
             <span class="comment-marker">&#128172;</span>
             <span class="comment-event-text">${{escHtml(e.text)}}</span>
           </div>`;
@@ -1216,10 +1240,10 @@ function buildDetail(h) {{
         const fc = e.frm === 'UP' ? 'var(--green)' : 'var(--red)';
         const tc = e.to  === 'UP' ? 'var(--green)' : 'var(--red)';
         return `<div class="event">
-          <span class="ts">${{e.ts}}</span>
-          <span style="color:${{fc}}">${{e.frm}}</span>
+          <span class="ts">${{escHtml(e.ts)}}</span>
+          <span style="color:${{fc}}">${{escHtml(e.frm)}}</span>
           <span class="arrow">→</span>
-          <span style="color:${{tc}}">${{e.to}}</span>
+          <span style="color:${{tc}}">${{escHtml(e.to)}}</span>
         </div>`;
       }}).join('');
 
@@ -1238,12 +1262,12 @@ function buildDetail(h) {{
     <div class="detail-section">
       <h4>STATISTICS</h4>
       <div class="stat-list">
-        <div class="kv"><span class="k">Ip</span><span class="v">${{h.ip || h.name}}</span></div>
-        <div class="kv"><span class="k">Uptime</span><span class="v">${{h.time_up}}</span></div>
-        <div class="kv"><span class="k">Downtime</span><span class="v">${{h.time_down}}</span></div>
-        <div class="kv"><span class="k">Total span</span><span class="v">${{h.span}}</span></div>
-        <div class="kv"><span class="k">First seen</span><span class="v">${{h.first_ts}}</span></div>
-        <div class="kv"><span class="k">Last seen</span><span class="v">${{h.last_ts}}</span></div>
+        <div class="kv"><span class="k">Ip</span><span class="v">${{escHtml(h.ip || h.name)}}</span></div>
+        <div class="kv"><span class="k">Uptime</span><span class="v">${{escHtml(h.time_up)}}</span></div>
+        <div class="kv"><span class="k">Downtime</span><span class="v">${{escHtml(h.time_down)}}</span></div>
+        <div class="kv"><span class="k">Total span</span><span class="v">${{escHtml(h.span)}}</span></div>
+        <div class="kv"><span class="k">First seen</span><span class="v">${{escHtml(h.first_ts)}}</span></div>
+        <div class="kv"><span class="k">Last seen</span><span class="v">${{escHtml(h.last_ts)}}</span></div>
         ${{rttHtml}}
       </div>
     </div>
@@ -1662,17 +1686,17 @@ function renderBuckets() {{
   const flapSuffix = h => h.changes > 0 ? ` <span class="chg">(${{h.changes}})</span>` : '';
   const bkts = [
     {{ title:'Always UP',      list:up,       suffix:'up',
-       fn: h=>`${{hostLabel(h)}}` }},
+       fn: h=>`${{escHtml(hostLabel(h))}}` }},
     {{ title:'UP+FLAPPING',    list:upflap,   suffix:'upflap',
-       fn: h=>`${{hostLabel(h)}}${{flapSuffix(h)}}` }},
+       fn: h=>`${{escHtml(hostLabel(h))}}${{flapSuffix(h)}}` }},
     {{ title:'Flapping',       list:flap,     suffix:'flap',
-       fn: h=>`${{hostLabel(h)}} <span class="chg">(${{h.changes}})</span>` }},
+       fn: h=>`${{escHtml(hostLabel(h))}} <span class="chg">(${{h.changes}})</span>` }},
     {{ title:'Always DOWN',    list:down,     suffix:'down',
-       fn: h=>`${{hostLabel(h)}}` }},
+       fn: h=>`${{escHtml(hostLabel(h))}}` }},
     {{ title:'DOWN+FLAPPING',  list:downflap, suffix:'downflap',
-       fn: h=>`${{hostLabel(h)}}${{flapSuffix(h)}}` }},
+       fn: h=>`${{escHtml(hostLabel(h))}}${{flapSuffix(h)}}` }},
     {{ title:'No-DNS',         list:nodns,    suffix:'nodns',
-       fn: h=>`${{hostLabel(h)}}` }},
+       fn: h=>`${{escHtml(hostLabel(h))}}` }},
   ];
   BUCKET_LISTS = {{}};
   bkts.forEach(b => {{ BUCKET_LISTS[b.suffix] = b.list; }});
@@ -1752,8 +1776,6 @@ if (location.protocol === 'file:') {{
 
 
 # ── output capture helpers ────────────────────────────────────────────────────
-import io as _io
-
 ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[mKJ]|\r')
 
 def strip_ansi(s):
@@ -1791,7 +1813,11 @@ def getch_prompt(html_path):
         print()
         return ch in (b'\r', b'\n')
     except Exception:
-        ans = input()
+        try:
+            ans = input()
+        except EOFError:
+            print()
+            return False
         return ans.strip() == ''
 
 
@@ -1808,11 +1834,12 @@ def fmt_size(n):
 
 
 def file_menu(ext='.csv'):
-    entries = sorted(
-        (f.name, f.stat().st_size)
-        for f in os.scandir()
-        if f.is_file() and f.name.endswith(ext)
-    )
+    with os.scandir() as it:
+        entries = sorted(
+            (f.name, f.stat().st_size)
+            for f in it
+            if f.is_file() and f.name.endswith(ext)
+        )
     if not entries:
         die(f'No *{ext} files found in current directory.')
     size_w = max(len(fmt_size(sz)) for _, sz in entries)
@@ -1835,7 +1862,7 @@ def file_menu(ext='.csv'):
 # ── argument parsing ──────────────────────────────────────────────────────────
 def build_parser():
     p = argparse.ArgumentParser(
-        description=f'epinga.py v{version} – eping logfile analyser (large-file capable)',
+        description=f'epinga.py v{VERSION} – eping logfile analyser (large-file capable)',
         formatter_class=argparse.RawTextHelpFormatter
     )
     p.add_argument('-f', '--logfile',  dest='filename', default='',
@@ -1860,11 +1887,13 @@ def build_parser():
                    help='Custom filename for HTML report (default: auto-named)')
     p.add_argument('--open',           dest='open_browser', action='store_true',
                    help='Open HTML report automatically without asking')
+    p.add_argument('--no-open',        dest='no_open', action='store_true',
+                   help='Never open the report and never ask (headless/scripted runs)')
     p.add_argument('-q', '--quiet',    dest='quiet', action='store_true',
                    help='Suppress progress bar')
     p.add_argument('--no-version-check', dest='no_version_check', action='store_true',
                    help='Skip the online update check (e.g. for headless/scripted runs)')
-    p.add_argument('--version',        action='version', version=f'epinga.py {version}')
+    p.add_argument('--version',        action='version', version=f'epinga.py {VERSION}')
     return p
 
 
@@ -1885,6 +1914,17 @@ def main():
 
     ts_start = parse_ts(args.ts_start) if args.ts_start else None
     ts_end   = parse_ts(args.ts_end)   if args.ts_end   else None
+    if args.ts_start and ts_start is None:
+        die(f'--start: invalid timestamp "{args.ts_start}" (expected {TS_FMT.replace("%", "")})')
+    if args.ts_end and ts_end is None:
+        die(f'--end: invalid timestamp "{args.ts_end}" (expected {TS_FMT.replace("%", "")})')
+    if ts_start and ts_end and ts_start > ts_end:
+        die('--start must not be later than --end')
+
+    try:
+        file_size = os.path.getsize(filename)
+    except OSError as e:
+        die(str(e))
 
     # ── output paths (always auto-generated) ──
     base      = os.path.splitext(os.path.basename(filename))[0]
@@ -1894,9 +1934,9 @@ def main():
     # ── banner (printed directly, not captured) ──
     print()
     hr('═')
-    header_line(f'epinga.py  v{version}  –  eping logfile analyser  –  www.jeitler.cc', '═')
+    header_line(f'epinga.py  v{VERSION}  –  eping logfile analyser  –  www.jeitler.cc', '═')
     hr('═')
-    print(f'  File : {filename}  ({fmt_bytes(os.path.getsize(filename))})')
+    print(f'  File : {filename}  ({fmt_bytes(file_size)})')
     if filter_hosts:
         print(f'  Hosts: {", ".join(sorted(filter_hosts))}')
     if ts_start or ts_end:
@@ -1918,8 +1958,68 @@ def main():
         die('No matching data found.')
 
     # ── start capturing output for text file ──
-    _buf        = _io.StringIO()
+    _buf        = io.StringIO()
     sys.stdout  = _Tee(sys.__stdout__, _buf)
+    try:
+        _print_report_body(args, hosts, host_order, comments, infos)
+    finally:
+        sys.stdout = sys.__stdout__
+
+    # ── save text report ──
+    try:
+        with open(txt_path, 'w', encoding='utf-8') as fh:
+            fh.write(strip_ansi(_buf.getvalue()))
+    except OSError as e:
+        die('cannot write ' + txt_path + ': ' + str(e))
+
+    # ── save HTML report ──
+    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments, infos)
+    try:
+        generate_html(report_data, html_path)
+    except OSError as e:
+        die('cannot write ' + html_path + ': ' + str(e))
+
+    # ── version check ──
+    if not args.no_version_check:
+        url    = 'https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions'
+        remote = check_version_online(url, 'epinga.py')
+        if remote and version_tuple(remote) > version_tuple(VERSION):
+            print(col(f'  !! Update available (v{remote}) – https://www.jeitler.cc !!', CRED))
+        else:
+            print(f'  THX for using epinga.py v{VERSION}  –  www.jeitler.cc')
+    else:
+        print(f'  THX for using epinga.py v{VERSION}  –  www.jeitler.cc')
+
+    print()
+    print(col(f'  Text saved → {txt_path}', CCYAN))
+    print(col(f'  HTML saved → {html_path}', CCYAN))
+
+    # ── open HTML ──
+    if not args.no_open:
+        open_report(html_path, args.open_browser)
+    print()
+
+
+def open_report(html_path, auto_open):
+    """Open the report in the default browser (open/xdg-open) - automatically with
+    --open, otherwise after an Enter/Esc prompt. Silently skipped without a TTY."""
+    import subprocess, platform, shutil
+    open_cmd = 'open' if platform.system() == 'Darwin' else 'xdg-open'
+    if shutil.which(open_cmd) is None:
+        return
+    if not auto_open:
+        if not sys.stdin.isatty():
+            return
+        if not getch_prompt(html_path):
+            return
+    try:
+        subprocess.Popen([open_cmd, html_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        print(col(f'  could not open browser: {e}', CORANGE))
+
+
+def _print_report_body(args, hosts, host_order, comments, infos):
+    """Everything that goes to the terminal AND into the .txt report."""
 
     # ── info (settings snapshot/change timeline from eping.py's '#INFO#' rows -
     # shown first, above COMMENTS - like the HTML report's Info section, placed
@@ -1961,44 +2061,6 @@ def main():
 
     # ── summary ──
     print_summary(hosts, host_order, sort_by=args.sort)
-
-    # ── restore stdout ──
-    sys.stdout = sys.__stdout__
-
-    # ── save text report ──
-    with open(txt_path, 'w', encoding='utf-8') as fh:
-        fh.write(strip_ansi(_buf.getvalue()))
-
-    # ── save HTML report ──
-    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments, infos)
-    generate_html(report_data, html_path)
-
-    # ── version check ──
-    if not args.no_version_check:
-        url    = 'https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions'
-        remote = check_version_online(url, 'epinga.py')
-        if remote and remote > version:
-            print(col(f'  !! Update available (v{remote}) – https://www.jeitler.cc !!', CRED))
-        else:
-            print(f'  THX for using epinga.py v{version}  –  www.jeitler.cc')
-    else:
-        print(f'  THX for using epinga.py v{version}  –  www.jeitler.cc')
-
-    print()
-    print(col(f'  Text saved → {txt_path}', CCYAN))
-    print(col(f'  HTML saved → {html_path}', CCYAN))
-
-    # ── open HTML ──
-    import subprocess, platform, shutil
-    open_cmd = 'open' if platform.system() == 'Darwin' else 'xdg-open'
-    can_open = shutil.which(open_cmd) is not None
-    if can_open:
-        if args.open_browser:
-            subprocess.Popen([open_cmd, html_path])
-        else:
-            if getch_prompt(html_path):
-                subprocess.Popen([open_cmd, html_path])
-    print()
 
 
 if __name__ == '__main__':

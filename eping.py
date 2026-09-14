@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# eping.py by ewald@jeitler.cc 2024 https://www.jeitler.cc 
+# eping.py by ewald@jeitler.cc 2024 https://www.jeitler.cc
 # - - - - - - - - - - - - - - - - - - - - - - - -
-# When I wrote this code, only god and 
-# I knew how it worked. 
-# Now, only god knows it! 
+# When I wrote this code, only god and
+# I knew how it worked.
+# Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.35'
+VERSION = '3.38'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -149,7 +149,7 @@ import sys
 import csv
 import glob
 import math
-import time 
+import time
 import curses
 import signal
 import shutil
@@ -167,15 +167,40 @@ import zipfile
 import socket
 import shlex
 import concurrent.futures
-#checkversion online
-try:
-    import urllib.request
-except Exception:
-    urllib = None
+import urllib.request
+import urllib.error
+import tempfile
 
-import resource
+# --- host/network regexes (IPv4 only - IPv6 is handled via ipaddress, see is_ip_host) ---
+_OCTET = r'(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])'
+ip_re        = re.compile(r'^(?:' + _OCTET + r'\.){3}' + _OCTET + r'$')
+cidr_ipv4_re = re.compile(r'^(?:' + _OCTET + r'\.){3}' + _OCTET + r'(?:\/(?:3[0-2]|[1-2][0-9]|[0-9]))$')
+# hostname/FQDN: 1..253 chars, labels 1..63 of [A-Za-z0-9-] (umlauts tolerated), no
+# leading/trailing '-'. An all-numeric dotted string (e.g. 999.1.1.1, a malformed
+# IPv4) is rejected so it cannot slip through as a "hostname".
+_LABEL  = r'(?!-)[a-zA-Z0-9\-äöüÄÖÜ]{1,63}(?<!-)'
+fqdn_re = re.compile(r'(?=^.{1,253}$)(?!^[0-9.]+$)^' + _LABEL + r'(?:\.' + _LABEL + r')*\.?$')
 
-import curses
+# --- fping tuning values (module-level so build_fping_cmd() works when imported;
+#     overwritten from the CLI args in main and by apply_adv_option()) ---
+backoff  = '1.5'
+timeout  = '250'
+retries  = '3'
+interval = ''
+
+def version_tuple(v):
+    """'3.36' -> (3, 36) for a correct numeric version comparison ('2.9' > '2.26'
+    as strings is True, as tuples it is False). Non-numeric parts count as 0."""
+    out = []
+    for part in str(v or '').split('.'):
+        try:
+            out.append(int(part))
+        except ValueError:
+            out.append(0)
+    return tuple(out)
+
+def is_newer_version(remote, local):
+    return bool(remote) and version_tuple(remote) > version_tuple(local)
 
 def curses_supports_curs_set():
     def _inner(stdscr):
@@ -197,20 +222,21 @@ def raise_fd_limit(target=FD_TARGET):
         # non-fatal: keep running with current soft limit
         pass
 
-   
+
 def check_version_online(url: str, tool_name: str, timeout: float = 2.0):
-    if not urllib or not socket:
-        return None
+    """Return the version string listed for tool_name at url, or None on any error
+    (network, proxy, decode, malformed line) - the check must never crash startup."""
     import ssl
     ctx = ssl._create_unverified_context()
     try:
         with urllib.request.urlopen(url, timeout=timeout, context=ctx) as response:
-            content = response.read().decode('utf-8')
+            content = response.read().decode('utf-8', 'replace')
             for line in content.splitlines():
-                if line.startswith(tool_name + " "):
-                    return line.split()[1]
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == tool_name:
+                    return parts[1]
         return None
-    except (urllib.error.URLError, socket.timeout):
+    except Exception:
         return None
 
 
@@ -290,9 +316,11 @@ def maybe_run_epinga(logfile_file_name, logging_enabled):
     except Exception as e:
         print(f'  Failed to run epinga.py: {e}')
 
-def error_handler(message):
-    print ('\n ' + str(message) + '\n')
-    sys.exit(0)
+def error_handler(message, exit_code=1):
+    """Print message and exit. Errors exit 1 (scriptable); pass exit_code=0 for a
+    normal, informational exit."""
+    print('\n ' + str(message) + '\n')
+    sys.exit(exit_code)
 
 def match_re(word,name_re):
     m = name_re.match(word)
@@ -327,7 +355,7 @@ def ip_version_str(word):
         return str(ipaddress.ip_address(word).version)
     except ValueError:
         return None
-        
+
 def get_ipv4_from_range(first_ip, last_ip, max_ip):
     # Expand an IPv4 range [first_ip, last_ip] inclusive. Returns list of strings.
     if not (match_re(first_ip, ip_re) and match_re(last_ip, ip_re)):
@@ -412,19 +440,16 @@ def split_hostfile_list(value):
     separated (e.g. 'a.txt,b.txt', 'a.txt b.txt' or a mix), empty parts dropped."""
     return [p for p in re.split(r'[,\s]+', (value or '').strip()) if p]
 
-def create_file_if_not_exists(filename,data):
+def create_file_if_not_exists(filename, data):
+    if os.path.exists(filename):
+        return
+    print('\n\nINFO: File ' + filename + ' does not exist - creating sample file.\n\n')
+    time.sleep(2)
     try:
-        with open(filename, "r") as f:
-            f.close()
-    except:
-        try:
-            print ('\n\nINFO: File ' + default_hostfile + ' does not exist — creating sample file.\n\n')
-            time.sleep(2)
-            with open(filename, "w") as f:
-                f.writelines(data)
-            f.close()
-        except:
-            raise TypeError('ERROR: Unable to create file: ' + default_hostfile )
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.writelines(data)
+    except OSError as e:
+        raise TypeError('ERROR: Unable to create file: ' + filename + ' (' + str(e) + ')')
 
 use_check_source = True   # set from --no_check_source in main
 web_readonly     = False  # True with --web_view: the CLI drives, the browser only looks
@@ -840,6 +865,29 @@ def split_seq(seq, num_pieces):
 _running_procs = []
 _procs_lock    = threading.Lock()
 _abort_scan    = False
+_scan_error    = ''   # last fatal error from a worker (e.g. fping vanished) - shown in scan_desc
+
+
+def parse_fping_line(line, timestamp):
+    """Parse one line of 'fping -e' output into a result row, or None if the line
+    is not a per-host result. Row layout (see host_state): [hostname, state, timestamp,
+    rtt, pinged_ip, no_of_changes, change_ts, tbd] - slot 4 carries the pinged
+    address and is replaced by the display name in run_ping_round()."""
+    out = line.split()
+    if len(out) < 3:
+        return None
+    try:
+        if out[1] == 'is' and out[2].startswith('unreachable'):
+            return [out[0], ' DOWN', timestamp, '----', out[0], 0, '', 0]
+        if out[2] == 'alive':
+            rtt = format(float(out[3].lstrip('(')), '.2f')
+            return [out[0], '  UP', timestamp, rtt, out[0], 0, '', 0]
+        if (out[1] == 'nodename' and out[2] == 'nor') or (out[1] == 'Name' and out[2] == 'or'):
+            host = out[0].rstrip(':')
+            return [host, 'NO-DNS', timestamp, '----', host, 0, '', 0]
+    except (IndexError, ValueError):
+        pass
+    return None
 
 def scan_reset_abort():
     global _abort_scan
@@ -896,7 +944,11 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
             bufsize=1,
         )
     except FileNotFoundError:
-        error_handler("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
+        # never sys.exit() inside a worker thread - it would only kill this thread
+        # and leave the main loop running with an empty result. Report via scan_desc.
+        global _scan_error
+        _scan_error = "fping not found - install it via 'sudo apt install fping' or 'brew install fping'"
+        return
 
     with _procs_lock:
         _running_procs.append(ping)
@@ -909,51 +961,18 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
         except BrokenPipeError:
             pass
 
-    fping_cmd_output_raw = []
+    # parse while streaming - no second pass over a buffered copy of the output
+    fping_result_data = []
     for line in ping.stdout:
-        if not line:
-            continue
-        fping_cmd_output_raw.append(get_date_time() + ' ' + line)
+        row = parse_fping_line(line, get_date_time())
+        if row is not None:
+            fping_result_data.append(row)
     ping.wait()
     with _procs_lock:
         try:
             _running_procs.remove(ping)
         except ValueError:
             pass
-
-    fping_result_data = []
-    for o in fping_cmd_output_raw:
-        o = re.sub(r'\s{2,}', ' ', o)
-        out = o.split(' ')
-        add_data = False
-        no_of_changes = 0
-        try:
-            if 'unreachable' in out[4]:
-                timestamp = out[0] + ' ' + out[1]
-                hostname  = out[2]
-                rtt       = '----'
-                state     = ' DOWN'
-                add_data  = True
-            elif out[4] == 'alive':
-                timestamp = out[0] + ' ' + out[1]
-                hostname  = out[2]
-                rtt       = out[5].replace('(', '')
-                rtt       = format(float(rtt), ".2f")
-                state     = '  UP'
-                add_data  = True
-            elif (out[3] == 'nodename' and out[4] == 'nor') or (out[3] == 'Name' and out[4] == 'or'):
-                timestamp = out[0] + ' ' + out[1]
-                hostname  = out[2].replace(':', '')
-                rtt       = '----'
-                state     = 'NO-DNS'
-                add_data  = True
-        except IndexError:
-            pass
-
-        if add_data:
-            # slot 4 carries the pinged IP - overwritten with the display name later
-            # in run_ping_round(), so we stash it here before that happens
-            fping_result_data.append([hostname, state, timestamp, rtt, hostname, no_of_changes, '', 0])
 
     with lock:
         fping_cmd_output_raw_total.extend(fping_result_data)
@@ -1229,35 +1248,31 @@ def apply_ip_only_on_web(original_hosts_list, active_hosts_list, host_state,
     return ip_map, 'ip only: on, ' + ', '.join(parts)
 
 def check_python_version(mrv):
-    current_version = sys.version_info
-    if current_version[0] == mrv[0] and current_version[1] >= mrv[1]:
-        return True
-    else:
-        return False
+    return tuple(sys.version_info[:2]) >= tuple(mrv[:2])
 
 def delete_files(filestring):
-    fileList = glob.glob(filestring, recursive=False)
-    for file in fileList:
+    file_list = glob.glob(filestring, recursive=False)
+    for file in file_list:
         try:
             os.remove(file)
             print(file)
         except OSError:
             error_handler('ERROR: unable to delete files' )
     print("Removed all matched files!")
-    error_handler(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+    error_handler(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc', exit_code=0)
 
 def screen_output(line,coll,text,color,attr_val):
     attr = 0
     if attr_val == 1:
-        attr ^= curses.A_BOLD
+        attr |= curses.A_BOLD
     if attr_val == 2:
-        attr ^= curses.A_BOLD + curses.A_BLINK
+        attr |= curses.A_BOLD | curses.A_BLINK
 
-    attr ^= curses.color_pair(color)
+    attr |= curses.color_pair(color)
     try:
-        screen.addstr(line,coll,text,attr)
-    except:
-        pass
+        screen.addstr(line, coll, text, attr)
+    except curses.error:
+        pass   # writing past the last cell raises - harmless
 
 def screen_print_date_time(color_pair, tz_offset=None):
     offset = int(args.time_zone_adjust) if tz_offset is None else tz_offset
@@ -1267,18 +1282,18 @@ def screen_print_date_time(color_pair, tz_offset=None):
 
 def screen_print_center_top(message,color_pair):
     num_rows, num_cols = screen.getmaxyx()
-    free_space = num_cols - int(len(message)) 
-    spaces = free_space / 2 
+    free_space = num_cols - int(len(message))
+    spaces = free_space / 2
     spacesstring =str()
     spacesstring = spacesstring.rjust(int(spaces), ' ')
-    messagetext = spacesstring + message + spacesstring 
+    messagetext = spacesstring + message + spacesstring
     screen_output(0, 0, messagetext,color_pair,1)
 
-def screen_print_horizonta_line (message,color_pair,line):
+def screen_print_horizontal_line(message, color_pair, line):
     num_rows, num_cols = screen.getmaxyx()
     spacesstring =str()
     linestring = spacesstring.rjust(int(num_cols), message)
-    if line < num_rows-1: 
+    if line < num_rows-1:
         screen_output(line, 0, linestring,color_pair,1 )
 
 def sigint_handler(signal, frame):
@@ -1290,10 +1305,12 @@ def sigint_handler(signal, frame):
         web_state['message'] = 'stopped'
     time.sleep(1.5)   # guarantee the browser's next poll sees it even if
                        # maybe_run_epinga() below has nothing to prompt for
-    screen=curses.initscr()
-    curses.endwin()
+    try:
+        curses.endwin()
+    except curses.error:
+        pass
     print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
-    if _remote_version and _remote_version > VERSION:
+    if is_newer_version(_remote_version, VERSION):
         print_update_notice(_remote_version)
     maybe_run_epinga(_logfile_file_name, _logging_enabled)
     sys.stdout.flush()
@@ -1511,6 +1528,13 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
             return datetime.datetime.strptime(e[2], "%d/%m/%Y %H:%M:%S")
         except (ValueError, TypeError):
             return datetime.datetime.min
+    log_fh = writer = None
+    if logging_enabled and learning_phase and fping_result_data_sorted:
+        try:
+            log_fh = open(logfile_file_name, 'a', encoding='UTF8', newline='')
+            writer = csv.writer(log_fh)
+        except OSError:
+            log_fh = writer = None   # unwritable log must not stop monitoring
     for entry in sorted(fping_result_data_sorted, key=_row_ts_key):
         hostname  = entry[0]
         new_state = entry[1]
@@ -1551,12 +1575,14 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
         try:
             ts_tmp = datetime.datetime.strptime(timestamp, "%d/%m/%Y %H:%M:%S")
             timestamp = ts_tmp + datetime.timedelta(hours=tz_offset) if tz_offset else ts_tmp
-        except: pass
+        except (ValueError, TypeError):
+            pass
         if change_ts:
             try:
                 ct_tmp = datetime.datetime.strptime(change_ts, "%d/%m/%Y %H:%M:%S")
                 change_ts = ct_tmp + datetime.timedelta(hours=tz_offset) if tz_offset else ct_tmp
-            except: pass
+            except (ValueError, TypeError):
+                pass
 
         host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd, resolved_ip]
 
@@ -1568,12 +1594,21 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
         if 'UP' in new_state:
             up_seen.add(hostname)
 
-        # logging
-        if logging_enabled and learning_phase:
-            logdata = ([timestamp] + [hostname] + [old_state.replace(" ", "")] + [new_state.replace(" ", "")] + [rtt] + [changes] + [change_ts] + [tbd] + [resolved_ip])
-            with open(logfile_file_name, 'a', encoding='UTF8') as f:
-                writer = csv.writer(f)
-                writer.writerow(logdata)
+        # logging - the file is opened once per round (see log_fh below), not per row
+        if writer is not None:
+            writer.writerow([timestamp, hostname, old_state.replace(' ', ''),
+                             new_state.replace(' ', ''), rtt, changes, change_ts, tbd,
+                             resolved_ip])
+    if log_fh is not None:
+        log_fh.close()
+
+def neutralize_csv_formula(text):
+    """Prefix a leading = + @ (and tab/CR) with a quote so a spreadsheet does not
+    execute a free-text comment as a formula (CSV injection). '-' is deliberately
+    not touched: '#INFO#' rows legitimately start with CLI flags like '-B 1.5'."""
+    if text and text[0] in ('=', '+', '@', '\t', '\r'):
+        return "'" + text
+    return text
 
 def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offset=0):
     """Append a free-text, timestamped comment row to the CSV log (if logging is on).
@@ -1591,10 +1626,12 @@ def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offse
     ts = datetime.datetime.strptime(now_str, "%d/%m/%Y %H:%M:%S")
     if tz_offset:
         ts = ts + datetime.timedelta(hours=tz_offset)
-    logdata = [ts, '#COMMENT#', '', '', '', '', '', '', comment_text]
-    with open(logfile_file_name, 'a', encoding='UTF8') as f:
-        writer = csv.writer(f)
-        writer.writerow(logdata)
+    logdata = [ts, '#COMMENT#', '', '', '', '', '', '', neutralize_csv_formula(comment_text)]
+    try:
+        with open(logfile_file_name, 'a', encoding='UTF8', newline='') as f:
+            csv.writer(f).writerow(logdata)
+    except OSError:
+        return False
     return True
 
 def write_log_info(logging_enabled, logfile_file_name, info_text, tz_offset=0):
@@ -1614,9 +1651,11 @@ def write_log_info(logging_enabled, logfile_file_name, info_text, tz_offset=0):
     if tz_offset:
         ts = ts + datetime.timedelta(hours=tz_offset)
     logdata = [ts, '#INFO#', '', '', '', '', '', '', info_text]
-    with open(logfile_file_name, 'a', encoding='UTF8') as f:
-        writer = csv.writer(f)
-        writer.writerow(logdata)
+    try:
+        with open(logfile_file_name, 'a', encoding='UTF8', newline='') as f:
+            csv.writer(f).writerow(logdata)
+    except OSError:
+        return False
     return True
 
 def reset_logfile(logfile_file_name):
@@ -1640,6 +1679,57 @@ def new_logfile_name(tz_offset=0):
     """Fresh 'eping-log_<timestamp>.csv' name, same format used at startup."""
     now = datetime.datetime.now() + datetime.timedelta(hours=tz_offset)
     return 'eping-log_' + now.strftime('%Y-%m-%d_%H:%M:%S') + '.csv'
+
+_rotate_std_re = re.compile(
+    r'^eping-log_(\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2})(?:-(\d+))?\.csv$')
+_rotate_seq_re = re.compile(r'^(.*)-(\d+)$')
+
+def rotated_logfile_name(current_name, tz_offset=0):
+    """Next filename in a size-rotation chain (see rotate_log_if_needed()).
+
+    Reuses the chain's ORIGINAL timestamp - the first file's, taken from
+    current_name - with an incrementing '-N' suffix (N = which rotation this
+    is: 1, 2, 3, ...). This is deliberately different from new_logfile_name(),
+    which RESET LOGGING's 'start a fresh file' action keeps using with the
+    current time - only size-based rotation renames within its own chain.
+    Falls back to appending/incrementing a numeric suffix on a custom
+    (--logfile) filename that doesn't match the eping-log_<timestamp> pattern.
+    """
+    base = os.path.basename(current_name)
+    m = _rotate_std_re.match(base)
+    if m:
+        ts, seq = m.group(1), m.group(2)
+        next_seq = int(seq) + 1 if seq else 1
+        return 'eping-log_' + ts + '-' + str(next_seq) + '.csv'
+    stem, ext = os.path.splitext(base)
+    m2 = _rotate_seq_re.match(stem)
+    if m2 and m2.group(2).isdigit():
+        stem, next_seq = m2.group(1), int(m2.group(2)) + 1
+    else:
+        next_seq = 1
+    dirpart = os.path.dirname(current_name)
+    new_base = stem + '-' + str(next_seq) + ext
+    return os.path.join(dirpart, new_base) if dirpart else new_base
+
+def validate_custom_logfile_name(name):
+    """Turn a user-supplied 'new logfile' name into a safe filename, or None
+    if it's unusable - used by RESET LOGGING's optional custom name (CLI [L]
+    and the web reset_log 'start'/'new' actions; new_logfile_name()/
+    rotated_logfile_name() remain the default when no name is given).
+    Appends .csv if missing; rejects blank input, path separators/traversal
+    (via safe_cwd_filename()) and any name that already exists - reset_logfile()
+    would silently overwrite an unrelated file otherwise.
+    """
+    name = (name or '').strip()
+    if not name:
+        return None
+    if not name.lower().endswith('.csv'):
+        name += '.csv'
+    if not safe_cwd_filename(name, ('.csv',)):
+        return None
+    if os.path.exists(name):
+        return None
+    return name
 
 def prune_old_logfiles(max_files):
     """Delete the oldest eping-log_*.csv files (by mtime) beyond max_files.
@@ -1675,7 +1765,7 @@ def rotate_log_if_needed(logfile_file_name, max_size_mb, max_files, tz_offset=0)
         return logfile_file_name
     if size < max_size_mb * 1024 * 1024:
         return logfile_file_name
-    new_name = new_logfile_name(tz_offset)
+    new_name = rotated_logfile_name(logfile_file_name, tz_offset)
     if not reset_logfile(new_name):
         return logfile_file_name
     prune_old_logfiles(max_files)
@@ -1773,6 +1863,8 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
         meta.append((grp_name, len(grp_targets),
                      retries if grp_retries is None else grp_retries, procs, interval_ms))
     _t = time.time()
+    global _scan_error
+    _scan_error = ''
     scan_reset_abort()
     for t in thread_list:
         t.start()
@@ -1799,6 +1891,8 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
             scan_desc += (' (--rate %d not reachable, -i floor 1ms)' % rate_pps)
     if use_check_source and '--check-source' in fping_capabilities():
         scan_desc += ', check-source'
+    if _scan_error:
+        scan_desc += ' | ERROR: ' + _scan_error
 
     # per group: how long did fping itself actually run?
     for slot, (name, cnt, rr, procs, iv) in enumerate(meta):
@@ -1810,7 +1904,11 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
     # map the pinged address back to the hostname(s) the user entered
     rows = []
     for row in fping_cmd_output_raw_total:
-        for display_name in name_map.get(row[0], [row[0]]):
+        names = name_map.get(row[0])
+        if not names or (len(names) == 1 and names[0] == row[0]):
+            rows.append(row)          # pinged by its own name - nothing to map
+            continue
+        for display_name in names:
             new_row    = list(row)
             new_row[0] = display_name
             rows.append(new_row)
@@ -2026,8 +2124,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   <div id="resetLogModal" class="modal-overlay" style="display:none">
     <div class="modal-box">
       <h3>RESET LOGGING</h3>
-      <p>Delete ALL entries in the current CSV log, or start a new file?<br>
+      <p id="resetLogText">Delete ALL entries in the current CSV log, or start a new file?<br>
          Keys also work: <b>Y</b>=clear, <b>N</b>=new file, <b>ESC</b>/<b>ENTER</b>=cancel.</p>
+      <input type="text" id="resetLogNameInput" maxlength="255"
+             placeholder="optional file name for the new file (blank = auto-generated)"
+             style="width:100%;box-sizing:border-box;margin-bottom:12px">
       <div class="modal-buttons">
         <button id="modalBtnClearLog" class="danger">CLEAR LOGGING (Y)</button>
         <button id="modalBtnNewLog">NEW FILE (N)</button>
@@ -2155,7 +2256,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   <div id="chooseReportModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>CHOOSE LOGFILE</h3>
-      <p>Pick a *.csv log file in this eping.py's working directory to analyse with epinga.py.</p>
+      <p>Pick one or more *.csv log files to analyse with epinga.py as one combined report.
+         Files from the same size-rotation chain are auto-selected - uncheck any you don't want.</p>
       <div id="chooseReportList" style="width:100%;max-height:220px;overflow-y:auto;
            margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
            padding:6px 10px;box-sizing:border-box"></div>
@@ -2755,8 +2857,39 @@ var resetLogModal = document.getElementById('resetLogModal');
 var loggingOn = false;   // kept in sync from every status poll, see render()
 var reportWindow = null; // blank tab opened by GENERATE REPORT, filled in once ready - see poll()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
-function openResetLog(){ resetLogModal.style.display = 'flex'; }
 function closeResetLog(){ resetLogModal.style.display = 'none'; }
+function openResetLog(){
+  // shown for BOTH states now - OFF just skips the CLEAR button and Y/N text,
+  // since there's nothing to clear yet, but still offers a custom file name
+  var clearBtn = document.getElementById('modalBtnClearLog');
+  var newBtn   = document.getElementById('modalBtnNewLog');
+  var text     = document.getElementById('resetLogText');
+  document.getElementById('resetLogNameInput').value = '';
+  if(loggingOn){
+    clearBtn.style.display = '';
+    newBtn.textContent = 'NEW FILE (N)';
+    text.innerHTML = 'Delete ALL entries in the current CSV log, or start a new file?<br>' +
+      'Optional name for the new file below (blank = auto-generated).<br>' +
+      'Keys also work: <b>Y</b>=clear, <b>N</b>=new file, <b>ESC</b>/<b>ENTER</b>=cancel.';
+  } else {
+    clearBtn.style.display = 'none';
+    newBtn.textContent = 'START LOGGING (N)';
+    text.innerHTML = 'Start logging to a new CSV file.<br>' +
+      'Optional name below (blank = auto-generated).<br>' +
+      'Keys also work: <b>N</b>/<b>ENTER</b>=start, <b>ESC</b>=cancel.';
+  }
+  resetLogModal.style.display = 'flex';
+  document.getElementById('resetLogNameInput').focus();
+}
+function runResetLog(action){
+  // action: 'y' | 'new' - the optional custom name (if any) is appended to
+  // 'new' as 'new=<name>'; OFF state sends the name alone (see the three
+  // reset_log handlers server-side for this same encoding).
+  var name = document.getElementById('resetLogNameInput').value.trim();
+  closeResetLog();
+  if(!loggingOn){ post('reset_log', name); return; }
+  post('reset_log', action === 'new' && name ? 'new=' + name : action);
+}
 
 // key, label, unit, sliderMin, sliderMax, step, longDesc (full mouseover tooltip),
 // shortDesc (few words, shown inline next to the label).
@@ -2963,12 +3096,10 @@ document.getElementById('modalBtnCloseStopped').onclick = function(){
   stoppedModal.style.display = 'none';
   if(reconnectTimer){ clearInterval(reconnectTimer); reconnectTimer = null; }
 };
-document.getElementById('btnResetLog').onclick = function(){
-  if(loggingOn){ openResetLog(); }
-  else{ post('reset_log'); }   // logging is off - start it right away, no confirmation
-};
-document.getElementById('modalBtnClearLog').onclick = function(){ closeResetLog(); post('reset_log', 'y'); };
-document.getElementById('modalBtnNewLog').onclick   = function(){ closeResetLog(); post('reset_log', 'new'); };
+document.getElementById('btnResetLog').onclick = openResetLog;   // both states go through the
+                                                                   // modal now - OFF just skips CLEAR
+document.getElementById('modalBtnClearLog').onclick = function(){ runResetLog('y'); };
+document.getElementById('modalBtnNewLog').onclick   = function(){ runResetLog('new'); };
 document.getElementById('modalBtnCancelLog').onclick = function(){ closeResetLog(); };
 document.getElementById('btnExit').onclick = function(){
   if(confirm('Stop eping.py?')){ post('exit'); } };
@@ -3157,7 +3288,7 @@ var REPORT_WAIT_HTML = '<!doctype html><html><head><meta charset="UTF-8">'
   + 'Generating report with epinga.py &hellip;<br>'
   + '<small style="color:#5d6b5d">please wait - this tab will update automatically</small>'
   + '</div></body></html>';
-function runReport(value){
+function runReport(values){
   // window.open() must happen synchronously in the click handler or browsers
   // treat it as a popup and block it - open a blank tab now, fill it in once
   // poll() sees the report become ready (or close it again on error).
@@ -3166,7 +3297,13 @@ function runReport(value){
     reportWindow.document.write(REPORT_WAIT_HTML);
     reportWindow.document.close();
   }
-  post('run_report', value || '');
+  note(PENDING.run_report, true);
+  // post() only carries a single 'value' string - multi-file selection needs
+  // its own 'values' array, so this bypasses post() for the array case.
+  var body = Array.isArray(values) ? {cmd: 'run_report', values: values}
+                                    : {cmd: 'run_report', value: values || ''};
+  fetch('api/command', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)}).then(function(r){ return r.json(); });
 }
 document.getElementById('selGenReport').onchange = function(){
   var what = this.value;
@@ -3174,6 +3311,13 @@ document.getElementById('selGenReport').onchange = function(){
   if(what === 'active'){ runReport(''); }
   else if(what === 'choose'){ openChooseReport(); }
 };
+// Rotation chain grouping key for GENERATE REPORT's multi-select - matches
+// rotated_logfile_name()'s 'eping-log_<timestamp>[-N].csv' scheme server-side.
+// Returns the shared original timestamp, or null if name isn't part of one.
+function reportChainKey(name){
+  var m = /^eping-log_(\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2})(?:-\d+)?\.csv$/.exec(name);
+  return m ? m[1] : null;
+}
 function openChooseReport(){
   var list = document.getElementById('chooseReportList');
   list.innerHTML = '<div style="color:var(--dim);font-size:12px">loading ...</div>';
@@ -3187,20 +3331,29 @@ function openChooseReport(){
       list.innerHTML = '<div style="color:var(--dim);font-size:12px">no *.csv files found</div>';
       return;
     }
+    var firstCb = null;
     files.forEach(function(f, i){
       var row = document.createElement('label');
       row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;cursor:pointer;white-space:nowrap';
-      var rb = document.createElement('input');
-      rb.type      = 'radio';
-      rb.name      = 'chooseReportFile';
-      rb.className = 'chooseReportRadio';
-      rb.value     = f.name;
-      if(i === 0) rb.checked = true;   // most recent file (list is newest-first) preselected
-      row.appendChild(rb);
+      var cb = document.createElement('input');
+      cb.type      = 'checkbox';
+      cb.className = 'chooseReportCb';
+      cb.value     = f.name;
+      if(i === 0){ cb.checked = true; firstCb = cb; }   // most recent file (list is newest-first) preselected
+      cb.onchange = function(){
+        if(!cb.checked) return;                          // unchecking never forces siblings off
+        var key = reportChainKey(f.name);
+        if(!key) return;
+        Array.prototype.forEach.call(document.querySelectorAll('.chooseReportCb'), function(other){
+          if(other !== cb && reportChainKey(other.value) === key) other.checked = true;
+        });
+      };
+      row.appendChild(cb);
       row.appendChild(document.createTextNode(
         f.name + (f.active ? '  (ACTIVE)' : '') + '  -  ' + humanBytes(f.size)));
       list.appendChild(row);
     });
+    if(firstCb) firstCb.onchange();   // auto-select the preselected file's rotation siblings too
   }).catch(function(){
     list.innerHTML = '<div style="color:var(--dim);font-size:12px">failed to list files</div>';
   });
@@ -3210,10 +3363,11 @@ document.getElementById('modalBtnChooseReportCancel').onclick = function(){
   chooseReportModal.style.display = 'none';
 };
 document.getElementById('modalBtnChooseReportGenerate').onclick = function(){
-  var picked = document.querySelector('.chooseReportRadio:checked');
-  if(!picked) return;
+  var boxes = document.querySelectorAll('.chooseReportCb:checked');
+  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+  if(!names.length) return;
   chooseReportModal.style.display = 'none';
-  runReport(picked.value);
+  runReport(names);
 };
 document.getElementById('selDownload').onchange = function(){
   var what  = this.value;
@@ -3284,10 +3438,18 @@ function cycleSortMode(){
    and while a text field has focus, so normal typing and Ctrl+C keep working. */
 document.addEventListener('keydown', function(e){
   if(resetLogOpen()){
+    if(e.key === 'Escape'){ closeResetLog(); e.preventDefault(); return; }
+    if(document.activeElement && document.activeElement.id === 'resetLogNameInput'){
+      if(e.key === 'Enter'){ runResetLog('new'); e.preventDefault(); }
+      return;   // any other key types normally into the name field
+    }
     var rk = e.key.toLowerCase();
-    if(rk === 'y'){ closeResetLog(); post('reset_log', 'y'); e.preventDefault(); }
-    else if(rk === 'n'){ closeResetLog(); post('reset_log', 'new'); e.preventDefault(); }
-    else if(rk === 'escape' || e.key === 'Enter'){ closeResetLog(); e.preventDefault(); }
+    if(loggingOn && rk === 'y'){ runResetLog('y'); e.preventDefault(); }
+    else if(rk === 'n'){ runResetLog('new'); e.preventDefault(); }
+    else if(e.key === 'Enter'){
+      if(!loggingOn){ runResetLog('new'); } else { closeResetLog(); }
+      e.preventDefault();
+    }
     return;   // any other key is ignored, the modal stays open
   }
   if(chooseLogOpen()){
@@ -3633,55 +3795,114 @@ _report_lock = threading.Lock()   # guards _report_file_path (separate from web_
 _report_file_path = None          # last successfully generated report HTML, or None
 _report_running   = False         # guards against overlapping GENERATE REPORT runs
 
-def generate_epinga_report(logpath):
-    """Run epinga.py against logpath and produce an HTML report next to it -
+def merge_logfiles(paths):
+    """Concatenate multiple CSV logfiles (same header) into one temp CSV, for
+    GENERATE REPORT's multi-file selection - the merged file is analysed by
+    epinga.py as a single logfile, then removed by the caller.
+
+    Rows are written in file-mtime order (oldest first) regardless of the
+    order paths were selected in, so a rotation chain always merges back into
+    chronological order. Only the first file's header row is kept.
+    Returns the temp file path, or None on error.
+    """
+    ordered = sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+    fd, tmp_path = tempfile.mkstemp(prefix='eping-merged_', suffix='.csv', dir='.')
+    try:
+        with os.fdopen(fd, 'w', encoding='UTF8', newline='') as out:
+            writer = csv.writer(out)
+            header_written = False
+            for p in ordered:
+                with open(p, 'r', encoding='UTF-8', newline='') as f:
+                    rows = list(csv.reader(f))
+                if not rows:
+                    continue
+                if not header_written:
+                    writer.writerow(rows[0])
+                    header_written = True
+                writer.writerows(rows[1:])
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return None
+    return tmp_path
+
+
+def generate_epinga_report(logpaths):
+    """Run epinga.py against one or more logfiles and produce an HTML report -
     core logic shared by the web gui's GENERATE REPORT (run_epinga_report, below)
-    and the curses [N] ANALYSE NOW key. Headless invocation: -q suppresses
+    and the curses [N] ANALYSE NOW key. logpaths is a single path (str) or a
+    list of paths; more than one path is merged first (see merge_logfiles())
+    and analysed as one combined logfile. Headless invocation: -q suppresses
     epinga.py's own console output, --html writes the report, --no-version-check
     skips a network call. stdin=DEVNULL makes epinga.py's end-of-run "open in
     browser?" prompt fail fast with EOFError instead of blocking - harmless, the
     report is already written to disk by that point.
     Returns (report_path, None) on success, (None, error_message) on failure.
     """
-    if not logpath or not os.path.exists(logpath) or os.path.getsize(logpath) == 0:
+    if isinstance(logpaths, str):
+        logpaths = [logpaths] if logpaths else []
+    logpaths = [p for p in logpaths if p]
+    if not logpaths or any(not os.path.exists(p) or os.path.getsize(p) == 0 for p in logpaths):
         return None, 'no active logfile with data yet'
     epinga_path = find_epinga_path()
     if not epinga_path:
         return None, 'epinga.py not found next to eping.py or in PATH'
+    merged_tmp = None
+    if len(logpaths) > 1:
+        merged_tmp = merge_logfiles(logpaths)
+        if not merged_tmp:
+            return None, 'failed to merge selected logfiles'
+        analyse_path = merged_tmp
+        report_base  = os.path.splitext(min(logpaths, key=os.path.getmtime))[0] + '_merged'
+    else:
+        analyse_path = logpaths[0]
+        report_base  = os.path.splitext(analyse_path)[0]
     # never overwrite a previous report for this logfile - suffix -1, -2, ...
-    report_path = os.path.splitext(logpath)[0] + '_report.html'
+    report_path = report_base + '_report.html'
     suffix = 1
     while os.path.exists(report_path):
-        report_path = os.path.splitext(logpath)[0] + '_report-' + str(suffix) + '.html'
+        report_path = report_base + '_report-' + str(suffix) + '.html'
         suffix += 1
     try:
-        subprocess.run([sys.executable, epinga_path, '-f', logpath, '-q',
-                        '--html', report_path, '--no-version-check'],
-                       stdin=subprocess.DEVNULL,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.run([sys.executable, epinga_path, '-f', analyse_path, '-q',
+                               '--html', report_path, '--no-version-check', '--no-open'],
+                              stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True)
     except Exception as e:
         return None, str(e)
+    finally:
+        if merged_tmp:
+            try:
+                os.remove(merged_tmp)
+            except OSError:
+                pass
     if not os.path.exists(report_path) or os.path.getsize(report_path) == 0:
-        return None, 'epinga.py did not produce a report'
+        err = (proc.stderr or '').strip().splitlines()
+        return None, ('epinga.py did not produce a report'
+                      + ((': ' + err[-1]) if err else ''))
     return report_path, None
 
 
-def run_epinga_report(target_path=None):
-    """GENERATE REPORT (web gui): analyse a logfile with epinga.py and make the
-    resulting HTML available at /api/report. target_path picks an arbitrary
-    *.csv (DOWNLOAD > CHOOSE LOGFILE - already validated by the caller); None
-    (or the ACTIVE LOGFILE choice) uses the currently active one instead.
+def run_epinga_report(target_paths=None):
+    """GENERATE REPORT (web gui): analyse one or more logfiles with epinga.py
+    and make the resulting HTML available at /api/report. target_paths picks
+    one or more arbitrary *.csv files (DOWNLOAD... CHOOSE LOGFILE picker -
+    already validated by the caller); None (or the ACTIVE LOGFILE choice)
+    uses the currently active one instead.
 
     Runs in its own thread - epinga.py can take a while on large logfiles, and
     must never block run_web_mode()'s fping loop or the HTTP request thread.
     """
     global _report_file_path, _report_running
-    if target_path:
-        logpath = target_path
+    if target_paths:
+        logpaths = target_paths
     else:
         with web_lock:
-            logpath = web_state.get('logfile') or ''
-    report_path, err = generate_epinga_report(logpath)
+            logpaths = web_state.get('logfile') or ''
+    report_path, err = generate_epinga_report(logpaths)
     if report_path:
         with _report_lock:
             _report_file_path = report_path
@@ -3690,7 +3911,32 @@ def run_epinga_report(target_path=None):
     else:
         with web_lock:
             web_state['report'] = {'status': 'error', 'error': err}
-    _report_running = False
+    with web_lock:
+        _report_running = False
+
+
+def content_disposition(filename):
+    """Attachment header value with a safe ASCII fallback and an RFC 5987 UTF-8
+    name - quotes, CR/LF and other control characters can never reach the header."""
+    clean = ''.join(c for c in filename if c >= ' ' and c not in '"\\')
+    ascii_name = clean.encode('ascii', 'replace').decode('ascii').replace('?', '_') or 'download'
+    utf8_name  = urllib.parse.quote(clean, safe='')
+    return ('attachment; filename="' + ascii_name + '"; filename*=UTF-8\'\''
+            + utf8_name)
+
+
+def safe_cwd_filename(name, exts):
+    """True if name is a plain file name (no path parts), has one of exts and does
+    not point at a symlink - the single validation used by every file endpoint."""
+    if not isinstance(name, str) or not name or os.path.basename(name) != name:
+        return False
+    if name in ('.', '..') or not name.lower().endswith(exts):
+        return False
+    return not os.path.islink(name)
+
+
+WEB_COMMANDS_MAX = 1000   # queued browser commands before the server answers 429
+REPORT_MAX_FILES = 25     # GENERATE REPORT: max *.csv files mergeable into one report
 
 
 class EpingWebHandler(http.server.BaseHTTPRequestHandler):
@@ -3712,8 +3958,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             if filename:
-                self.send_header('Content-Disposition',
-                                 'attachment; filename="' + filename + '"')
+                self.send_header('Content-Disposition', content_disposition(filename))
+            self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError):
@@ -3736,8 +3982,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/zip')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Connection', 'close')
-        self.send_header('Content-Disposition',
-                         'attachment; filename="' + zip_name + '.zip"')
+        self.send_header('Content-Disposition', content_disposition(zip_name + '.zip'))
+        self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.close_connection = True
         try:
@@ -3771,8 +4017,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(size))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Connection', 'close')
-        self.send_header('Content-Disposition',
-                         'attachment; filename="' + os.path.basename(path) + '"')
+        self.send_header('Content-Disposition', content_disposition(os.path.basename(path)))
+        self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.close_connection = True
         try:
@@ -3791,7 +4037,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, 'text/html; charset=utf-8', WEB_INDEX_HTML)
         elif path in ('/api/status', 'api/status'):
             with web_lock:
-                body = json.dumps(web_state)
+                snapshot = dict(web_state)   # values are replaced, never mutated in place
+            body = json.dumps(snapshot)      # serialize outside the lock - no stall of the ping loop
             self._respond(200, 'application/json; charset=utf-8', body)
         elif path in ('/api/logfiles', 'api/logfiles'):
             # DOWNLOAD > CHOOSE FILE - every .csv/.txt/.html in the working
@@ -3854,8 +4101,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 return
             files = []
             for name in names:
-                if (not name or os.path.basename(name) != name or name in ('.', '..')
-                        or not name.lower().endswith(DOWNLOAD_FILE_EXTS)):
+                if not safe_cwd_filename(name, DOWNLOAD_FILE_EXTS):
                     self._respond(400, 'text/plain; charset=utf-8', 'invalid filename: ' + name)
                     return
                 if not os.path.isfile(name):
@@ -3897,6 +4143,9 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self._respond(404, 'text/plain; charset=utf-8', 'not found')
 
     def _read_body(self, max_bytes):
+        """Read the request body. Returns None when it exceeds max_bytes - the body is
+        then drained (or the connection closed) so the next keep-alive request does
+        not start in the middle of it."""
         try:
             length = int(self.headers.get('Content-Length') or 0)
         except ValueError:
@@ -3904,13 +4153,26 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         if length <= 0:
             return b''
         if length > max_bytes:
+            self._drain_body(length)
             return None
         return self.rfile.read(length)
+
+    def _drain_body(self, length):
+        if length > 4 * WEB_MAX_UPLOAD:
+            self.close_connection = True   # not worth reading - drop the connection
+            return
+        remaining = length
+        while remaining > 0:
+            chunk = self.rfile.read(min(65536, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
 
     def do_POST(self):
         path = self.path.split('?')[0]
 
         if web_readonly:
+            self._read_body(0)
             self._respond(403, 'application/json; charset=utf-8',
                           json.dumps({'ok': False, 'error': 'read only view'}))
             return
@@ -3926,8 +4188,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 text = raw.decode('utf-8', 'replace')
             except Exception:
                 text = ''
-            with web_lock:
-                web_commands.append(('upload', text))
+            if not self._queue_command(('upload', text)):
+                return
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
 
@@ -3937,8 +4199,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             qs      = urllib.parse.urlsplit(self.path).query
             qparams = urllib.parse.parse_qs(qs)
             name    = (qparams.get('name') or [''])[0]
-            if (not name or os.path.basename(name) != name or name in ('.', '..')
-                    or not name.lower().endswith(('.txt', '.csv'))):
+            if not safe_cwd_filename(name, ('.txt', '.csv')):
                 self._respond(400, 'application/json; charset=utf-8',
                               json.dumps({'ok': False, 'error': 'invalid filename - must be *.txt or *.csv'}))
                 return
@@ -3978,9 +4239,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 return
             added, errors, texts = [], [], []
             for name in names:
-                if (not isinstance(name, str) or os.path.basename(name) != name
-                        or name in ('.', '..') or not name.lower().endswith('.txt')
-                        or not os.path.isfile(name)):
+                if not safe_cwd_filename(name, ('.txt',)) or not os.path.isfile(name):
                     errors.append(name)
                     continue
                 try:
@@ -3989,9 +4248,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     added.append(name)
                 except OSError:
                     errors.append(name)
-            if texts:
-                with web_lock:
-                    web_commands.append(('upload', '\n'.join(texts)))
+            if texts and not self._queue_command(('upload', '\n'.join(texts))):
+                return
             self._respond(200, 'application/json; charset=utf-8',
                           json.dumps({'ok': not errors, 'added': added, 'errors': errors}))
             return
@@ -4012,8 +4270,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             active = os.path.basename(active) if active else ''
             deleted, errors = [], []
             for name in names:
-                if (not isinstance(name, str) or os.path.basename(name) != name
-                        or name in ('.', '..') or not name.lower().endswith(DOWNLOAD_FILE_EXTS)):
+                if not safe_cwd_filename(name, DOWNLOAD_FILE_EXTS):
                     errors.append(name)
                     continue
                 if name == active:
@@ -4029,6 +4286,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if path not in ('/api/command', 'api/command'):
+            self._read_body(0)   # drain, keeps the keep-alive stream in sync
             self._respond(404, 'text/plain; charset=utf-8', 'not found')
             return
         raw = self._read_body(65536) or b'{}'
@@ -4045,32 +4303,54 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             # GENERATE REPORT - runs in its own background thread (epinga.py can
             # take a while on a large logfile), not via web_commands/run_web_mode -
             # it needs no access to that loop's locals, only web_state['logfile']
-            # (ACTIVE LOGFILE) or the validated target_path below (CHOOSE LOGFILE).
+            # (ACTIVE LOGFILE) or the validated target_paths below (CHOOSE LOGFILE,
+            # one or more *.csv - multiple are merged, see merge_logfiles()).
             global _report_running
-            target_path = None
-            if value:
-                if (os.path.basename(value) != value or value in ('.', '..')
-                        or not value.lower().endswith('.csv')):
-                    self._respond(400, 'application/json; charset=utf-8',
-                                  json.dumps({'ok': False, 'error': 'invalid filename'}))
-                    return
-                if not os.path.isfile(value):
-                    self._respond(404, 'application/json; charset=utf-8',
-                                  json.dumps({'ok': False, 'error': 'file not found'}))
-                    return
-                target_path = value
+            raw_names = payload.get('values')
+            if isinstance(raw_names, list) and raw_names:
+                names = [str(n)[:256] for n in raw_names[:REPORT_MAX_FILES]]
+            elif value:
+                names = [value]
+            else:
+                names = []
+            target_paths = None
+            if names:
+                target_paths = []
+                for name in names:
+                    if not safe_cwd_filename(name, ('.csv',)):
+                        self._respond(400, 'application/json; charset=utf-8',
+                                      json.dumps({'ok': False, 'error': 'invalid filename'}))
+                        return
+                    if not os.path.isfile(name):
+                        self._respond(404, 'application/json; charset=utf-8',
+                                      json.dumps({'ok': False, 'error': 'file not found'}))
+                        return
+                    target_paths.append(name)
             with web_lock:
                 already_running = _report_running
                 if not already_running:
                     _report_running = True
                     web_state['report'] = {'status': 'running', 'error': ''}
             if not already_running:
-                threading.Thread(target=run_epinga_report, args=(target_path,), daemon=True).start()
+                threading.Thread(target=run_epinga_report, args=(target_paths,), daemon=True).start()
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
-        with web_lock:
-            web_commands.append((cmd, value))
+        if not self._queue_command((cmd, value)):
+            return
         self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
+
+    def _queue_command(self, item):
+        """Append to web_commands unless the queue is full (429). Returns True if queued."""
+        with web_lock:
+            if len(web_commands) >= WEB_COMMANDS_MAX:
+                full = True
+            else:
+                web_commands.append(item)
+                full = False
+        if full:
+            self._respond(429, 'application/json; charset=utf-8',
+                          json.dumps({'ok': False, 'error': 'command queue full'}))
+        return not full
 
 
 class EpingWebServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -4742,11 +5022,20 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     write_log_comment(args.disable_logging, logfile_file_name, value, tz_offset)
                     message = 'comment logged'
             elif cmd == 'reset_log':
+                # value encoding (see the web gui's runResetLog()): OFF state -
+                # the raw value IS the optional custom name (blank = auto-
+                # generated); ON state - 'y' (clear), 'new' or 'new=<custom
+                # name>' (new file)
+                raw = value.strip()
+                action, _, custom_raw = raw.partition('=')
+                action = action.lower()
                 if not args.disable_logging:
                     # logging is currently OFF - START LOG turns it on right away,
-                    # no confirmation needed (there is nothing to lose yet)
-                    new_name = new_logfile_name(tz_offset)
-                    if reset_logfile(new_name):
+                    # no y/n confirmation needed (there is nothing to lose yet)
+                    new_name = validate_custom_logfile_name(raw) if raw else new_logfile_name(tz_offset)
+                    if new_name is None:
+                        message = 'invalid file name - logging not started'
+                    elif reset_logfile(new_name):
                         args.disable_logging = True   # True means 'logging enabled' (see -dl)
                         logfile_file_name = new_name
                         _logfile_file_name = new_name   # keep _web_sigint() in sync
@@ -4760,8 +5049,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     else:
                         message = 'failed to start logging'
                 else:
-                    choice = value.strip().lower()
-                    if choice == 'y':
+                    if action == 'y':
                         if reset_logfile(logfile_file_name):
                             message = 'logging reset - ' + logfile_file_name + ' cleared'
                             write_log_info(args.disable_logging, logfile_file_name,
@@ -4771,9 +5059,11 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                            tz_offset)
                         else:
                             message = 'failed to reset log file'
-                    elif choice == 'new':
-                        new_name = new_logfile_name(tz_offset)
-                        if reset_logfile(new_name):
+                    elif action == 'new':
+                        new_name = validate_custom_logfile_name(custom_raw) if custom_raw else new_logfile_name(tz_offset)
+                        if new_name is None:
+                            message = 'invalid file name - new logfile not created'
+                        elif reset_logfile(new_name):
                             logfile_file_name  = new_name
                             _logfile_file_name = new_name   # keep _web_sigint() in sync
                             message = 'new logfile: ' + logfile_file_name
@@ -4870,7 +5160,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     web_state['message'] = 'stopped'
                 time.sleep(1.5)   # let the browser pick up the final status
                 print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
-                if _remote_version and _remote_version > VERSION:
+                if is_newer_version(_remote_version, VERSION):
                     print_update_notice(_remote_version)
                 # flush any not-yet-settled ADV OPTIONS change - see set_option
                 for _key, (_val, _t) in pending_info.items():
@@ -5010,8 +5300,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         _t = time.time()
         if run_counter >= 2:
             remaining = float(args.waittime) - (datetime.datetime.now() - time1).total_seconds()
-            if remaining > 0:
-                time.sleep(remaining)
+            # -w 0 (or an empty host list) must not spin at 100% CPU
+            time.sleep(max(remaining, 0.05))
         phase['wait'] = time.time() - _t
 
         run_time = format(float((datetime.datetime.now() - time1).total_seconds()), ".2f")
@@ -5048,7 +5338,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
 if __name__=='__main__':
 
     if not is_program_installed("fping"):
-        error_handler ("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
+        error_handler("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
     default_hostfile = 'eping-hosts.txt'
     min_required_version = (3,6)
@@ -5057,27 +5347,27 @@ if __name__=='__main__':
 
     if not check_python_version(min_required_version):
         error_handler('ERROR: Your Python interpreter must be ' + str(min_required_version[0]) + '.' + str(min_required_version[1]) +' or greater' )
-    
+
     now = datetime.datetime.now()
     parser = argparse.ArgumentParser()
-    
+
     # adding optional argument
     parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename, one or more, comma and/or space separated, e.g. hosts1.txt,hosts2.txt or \"hosts1.txt hosts2.txt\"" )
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
     parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5, range: 1-2)" )
-    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms, range: 10-5000)") 
+    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms, range: 10-5000)")
     parser.add_argument('-re', '--retries', default='3', dest='retries', help="number of retries per host (default: 3, range: 0-5)")
     parser.add_argument('-i', '--interval', default='', dest='interval', help="interval between sending pings in ms, range 0-250; overrides --rate. -1 = auto (unset, same as omitting this flag). 0 = no pacing at all (fastest, needs the privileges fping was installed with, sends one hard burst)")
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
-    parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete all files start with \'eping-l*\'' ")
+    parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete ALL files starting with 'eping-*' in the current directory - logs, reports AND the hosts file eping-hosts.txt")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-setref', '--set_reference', action="store_true", dest='set_reference', help="with -up: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing [S]/SET REFERENCE)" )
     parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="fping processes per retry group, range 0-" + str(THREADS_MANUAL_MAX) + " (default: auto = " + str(PROCS_PER_GROUP) + "; 0 is an alias for auto; higher values cost accuracy)" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
-    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time between rounds in seconds, range 0-" + str(WAITTIME_MAX) )   
+    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time between rounds in seconds, range 0-" + str(WAITTIME_MAX) )
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
@@ -5134,27 +5424,22 @@ if __name__=='__main__':
     dns_family = '4' if args.force_ipv4 else ('6' if args.force_ipv6 else 'auto')
 
     # check online current version
-    if not args.disable_versioncheck: 
-           url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
-           toolname = "eping.py"
-           remote_version = check_version_online(url, toolname)
-    else: 
-        remote_version = version
+    if not args.disable_versioncheck:
+        url = "https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/eversions"
+        remote_version = check_version_online(url, "eping.py")
+    else:
+        remote_version = VERSION
 
     _remote_version = remote_version
 
-    # regex IP/FQDN/CIDR .... 
-    ip_re = re.compile(r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$')
-    fqdn_re = re.compile(r'(?=^.{4,253}$)(^((?!-)[a-zA-Z0-9-äöüÄÖÜ]{1,63}(?<!-)([\.]?))+[a-zA-ZäöüÄÖÜ]{0,63}$)')
-    cidr_ipv4_re = re.compile (r'^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(3[0-2]|[1-2][0-9]|[0-9]))$')
-    timestamp_re = re.compile (r'^\[[0-9]{10}.[0-9]{5}\]')
-    
-    hosts_list_ipv4 =[]
-    hosts_list_fqdn= []
-    
+    # ip_re / fqdn_re / cidr_ipv4_re live at module level (importable, testable)
+
+    hosts_list_ipv4 = []
+    hosts_list_fqdn = []
+
     # delete files eping-*.......
     if args.delete_files:
-        delete_files('eping-*')
+        delete_files('eping-*')   # matches the -cl help text: logs, reports, hosts file
 
     # --- network range(s) -r: comma separated, 'start-end', end may be shortened
     if args.network_range:
@@ -5170,7 +5455,7 @@ if __name__=='__main__':
         except Exception as e:
             error_handler(f"CIDR error: {e}")
 
-    # time_zone_range -24 to +24 check 
+    # time_zone_range -24 to +24 check
     try:
         tz = int(args.time_zone_adjust)
         if tz < -24 or tz > 24:
@@ -5395,7 +5680,7 @@ if __name__=='__main__':
             create_file_if_not_exists(default_hostfile,data)
         except TypeError as error_msg:
             error_handler(error_msg)
-    
+
     # get ip's, networks, hostname's and fqdn's from file(s) - one or more, comma
     # separated - same parser as the web upload and [F]=ADD FILE, so all three
     # understand CIDR networks and comments; entries from every file are combined,
@@ -5424,13 +5709,13 @@ if __name__=='__main__':
                   + str(CIDR_MIN_MASK) + ' .. /' + str(CIDR_MAX_MASK) + ': '
                   + ', '.join(hostfile_skipped[:5]) + '\n')
             time.sleep(2)
-        
-    #remove duplicates from list 
+
+    #remove duplicates from list
     hosts_list_fqdn = list(set(hosts_list_fqdn))
     hosts_list_ipv4 = list(set(hosts_list_ipv4))
-    #combine both lists 
+    #combine both lists
     summary_hosts_list =[]
-    summary_hosts_list.extend(hosts_list_ipv4) 
+    summary_hosts_list.extend(hosts_list_ipv4)
     summary_hosts_list.extend(hosts_list_fqdn)
 
     # hard cap on total host count
@@ -5460,11 +5745,11 @@ if __name__=='__main__':
     if args.disable_logging:
         header = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT','NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP']
         try:
-            with open(logfile_file_name, 'w', encoding='UTF8') as f:
+            with open(logfile_file_name, 'w', encoding='UTF8', newline='') as f:
                 writer = csv.writer(f)
                 writer.writerow(header)
-        except:
-            error_handler('ERROR: failed to create logfile: ' + logfile_file_name )
+        except OSError as e:
+            error_handler('ERROR: failed to create logfile: ' + logfile_file_name + ' (' + str(e) + ')')
         # #INFO# startup snapshot - full CLI-equivalent of every current setting
         startup_snapshot = build_cli_snapshot(args, backoff, timeout, retries,
                                               down_retries, flap_window, confirm,
@@ -5483,7 +5768,7 @@ if __name__=='__main__':
     # WEB GUI MODE - no curses at all, everything runs headless
     # =================================================================
     if args.web:
-        _update_available = bool(remote_version) and (remote_version > version)
+        _update_available = is_newer_version(remote_version, VERSION)
         with web_lock:
             web_state['version'] = version
         def _web_sigint(sig, frame):
@@ -5493,7 +5778,7 @@ if __name__=='__main__':
                 web_state['message'] = 'stopped'
             time.sleep(1.5)   # guarantee the browser's next poll sees the status
             print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
-            if _remote_version and _remote_version > VERSION:
+            if is_newer_version(_remote_version, VERSION):
                 print_update_notice(_remote_version)
             # no maybe_run_epinga() prompt in web mode - see the 'exit' cmd handler
             sys.stdout.flush()
@@ -5603,8 +5888,7 @@ if __name__=='__main__':
                 web_sync('done', bump=True)
             run_counter += 1
             remaining = float(args.waittime) - (datetime.datetime.now() - t0).total_seconds()
-            if remaining > 0:
-                stop_event.wait(remaining)
+            stop_event.wait(max(remaining, 0.05))
 
     def input_dialog(title, prompt):
         """Show a single line input dialog and return the entered string (may be empty).
@@ -6222,10 +6506,18 @@ if __name__=='__main__':
                 message = 'comment empty - not logged'
 
         elif bcmd == 'reset_log':
-            choice = bval.strip().lower()
+            # value encoding (see the web gui's runResetLog()): OFF state - the
+            # raw value IS the optional custom name (blank = auto-generated);
+            # ON state - 'y' (clear), 'new' or 'new=<custom name>' (new file)
+            raw = bval.strip()
+            action, _, custom_raw = raw.partition('=')
+            action = action.lower()
             if not args.disable_logging:
-                new_name = new_logfile_name(tz_offset)
-                if reset_logfile(new_name):
+                new_name = validate_custom_logfile_name(raw) if raw else new_logfile_name(tz_offset)
+                if new_name is None:
+                    notice('NAME ALREADY EXISTS OR INVALID - LOGGING NOT STARTED', 3)
+                    message = 'invalid file name - logging not started'
+                elif reset_logfile(new_name):
                     args.disable_logging = True
                     logfile_file_name  = new_name
                     _logfile_file_name = new_name
@@ -6238,7 +6530,7 @@ if __name__=='__main__':
                 else:
                     notice('FAILED TO START LOGGING', 3)
                     message = 'failed to start logging'
-            elif choice == 'y':
+            elif action == 'y':
                 if reset_logfile(logfile_file_name):
                     notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
                     message = 'logging reset - ' + logfile_file_name + ' cleared'
@@ -6249,9 +6541,12 @@ if __name__=='__main__':
                 else:
                     notice('FAILED TO RESET LOGFILE', 3)
                     message = 'failed to reset logfile'
-            elif choice == 'new':
-                new_name = new_logfile_name(tz_offset)
-                if reset_logfile(new_name):
+            elif action == 'new':
+                new_name = validate_custom_logfile_name(custom_raw) if custom_raw else new_logfile_name(tz_offset)
+                if new_name is None:
+                    notice('NAME ALREADY EXISTS OR INVALID - NEW LOGFILE NOT CREATED', 3)
+                    message = 'invalid file name - new logfile not created'
+                elif reset_logfile(new_name):
                     logfile_file_name  = new_name
                     _logfile_file_name = new_name
                     notice('NEW LOGFILE: ' + logfile_file_name, 2)
@@ -6313,7 +6608,7 @@ if __name__=='__main__':
             time.sleep(1.5)
             curses.endwin()
             print('THX for using eping.py v' + VERSION + '  -  www.jeitler.cc')
-            if remote_version and remote_version > version:
+            if is_newer_version(remote_version, VERSION):
                 print_update_notice(remote_version)
             maybe_run_epinga(logfile_file_name, args.disable_logging)
             sys.stdout.flush()
@@ -6377,7 +6672,7 @@ if __name__=='__main__':
     phase          = {}
     used_scan      = ''
     learning_phase = True
-    update_available_cli = bool(remote_version) and (remote_version > version)
+    update_available_cli = is_newer_version(remote_version, VERSION)
     gn_thread      = None   # [G] background PTR lookup - see get_names_start/finish
     gn_result      = None
     gn_candidates  = []
@@ -6466,7 +6761,7 @@ if __name__=='__main__':
         fping is still running, so a resize or a filter change shows immediately.
         """
         rows, cols = screen.getmaxyx()
-        if remote_version and remote_version > version:
+        if is_newer_version(remote_version, VERSION):
             screen_print_center_top('Update available - please visit https://www.jeitler.cc', 3)
         elif gn_thread is not None and gn_thread.is_alive():
             screen_print_center_top(
@@ -6479,9 +6774,9 @@ if __name__=='__main__':
             screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
 
         screen_print_date_time(1, tz_offset)
-        screen_print_horizonta_line('-', 1, 1)
-        screen_print_horizonta_line('-', 1, 3)
-        screen_print_horizonta_line('-', 1, rows - 2)
+        screen_print_horizontal_line('-', 1, 1)
+        screen_print_horizontal_line('-', 1, 3)
+        screen_print_horizontal_line('-', 1, rows - 2)
 
         # how many 64 column blocks fit on this terminal
         maxcols = 0
@@ -6528,7 +6823,8 @@ if __name__=='__main__':
             change_timestamp = o[6]
             try:
                 change_timestamp = (str(change_timestamp)).split(' ')[1]
-            except: pass
+            except IndexError:
+                pass
 
             output_hostname = ('%.25s' % hostname)
             output_rtt      = '{message: >8}'.format(message=rtt)
@@ -6679,7 +6975,7 @@ if __name__=='__main__':
 
     # show something immediately instead of a black window
     screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
-    screen_print_horizonta_line('-', 1, 1)
+    screen_print_horizontal_line('-', 1, 1)
     scan_box(0.0, len(active_hosts_list))
     screen.refresh()
 
@@ -6978,10 +7274,15 @@ if __name__=='__main__':
             screen.clear()
         elif cmd == 'RESET_LOGGING':
             if not args.disable_logging:
-                # logging is currently OFF - [L]/START LOG turns it on right away,
-                # no confirmation needed (there is nothing to lose yet)
-                new_name = new_logfile_name(tz_offset)
-                if reset_logfile(new_name):
+                # logging is currently OFF - [L]/START LOG turns it on right away
+                # (no Y/N confirmation - there is nothing to lose yet), but still
+                # offers an optional custom file name (blank = auto-generated)
+                custom = input_dialog(' START LOGGING ',
+                    'optional file name (blank = auto-generated), .csv added automatically:')
+                new_name = validate_custom_logfile_name(custom) if custom else new_logfile_name(tz_offset)
+                if new_name is None:
+                    notice('NAME ALREADY EXISTS OR INVALID - LOGGING NOT STARTED', 3)
+                elif reset_logfile(new_name):
                     args.disable_logging = True   # True means 'logging enabled' (see -dl)
                     logfile_file_name  = new_name
                     _logfile_file_name = new_name   # keep sigint_handler() in sync
@@ -7009,8 +7310,14 @@ if __name__=='__main__':
                     else:
                         notice('FAILED TO RESET LOGFILE', 3)
                 elif answer == 'n':
-                    new_name = new_logfile_name(tz_offset)
-                    if reset_logfile(new_name):
+                    # 'start a fresh file' also offers an optional custom name -
+                    # blank keeps the default rotation-chain-style naming
+                    custom = input_dialog(' NEW LOGFILE NAME ',
+                        'optional file name (blank = auto-generated), .csv added automatically:')
+                    new_name = validate_custom_logfile_name(custom) if custom else new_logfile_name(tz_offset)
+                    if new_name is None:
+                        notice('NAME ALREADY EXISTS OR INVALID - NEW LOGFILE NOT CREATED', 3)
+                    elif reset_logfile(new_name):
                         logfile_file_name  = new_name
                         _logfile_file_name = new_name   # keep sigint_handler() in sync
                         notice('NEW LOGFILE: ' + logfile_file_name, 2)
@@ -7034,7 +7341,7 @@ if __name__=='__main__':
                                # maybe_run_epinga() below has nothing to prompt for
             curses.endwin()
             print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
-            if remote_version and remote_version > version:
+            if is_newer_version(remote_version, VERSION):
                 print_update_notice(remote_version)
             maybe_run_epinga(logfile_file_name, args.disable_logging)
             sys.stdout.flush()
@@ -7139,7 +7446,7 @@ if __name__=='__main__':
             time2 = datetime.datetime.now()
             time3 = time2 - time1
             remaining = float(args.waittime) - time3.total_seconds()
-            deadline  = time.time() + remaining
+            deadline  = time.time() + max(remaining, 0.05)   # -w 0: never a hot loop
             while time.time() < deadline:
                 time.sleep(0.1)
                 k = screen.getch()
