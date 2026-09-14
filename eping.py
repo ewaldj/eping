@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.28'
+VERSION = '3.29'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2212,12 +2212,12 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
       <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, or delete files from it">
-        <option value="" selected disabled hidden>FILE ACTIONS</option>
-        <option value="hosts_all">ALL HOSTS</option>
-        <option value="hosts_shown">SHOWN HOSTS</option>
-        <option value="logfile">ACTIVE LOGFILE</option>
-        <option value="choose_logfile">CHOOSE FILE</option>
-        <option value="upload_file">UPLOAD</option>
+        <option value="" selected disabled hidden>FILE OPERATIONS</option>
+        <option value="hosts_all">DOWNLOAD ALL HOSTS</option>
+        <option value="hosts_shown">DOWNLOAD SHOWN HOSTS</option>
+        <option value="logfile">DOWNLOAD ACTIVE LOGFILE</option>
+        <option value="choose_logfile">DOWNLOAD SELECTED FILE</option>
+        <option value="upload_file">UPLOAD FILE</option>
         <option value="delete_files">DELETE FILES</option>
       </select>
       <input type="file" id="uploadServerFileInput" accept=".txt,.csv,text/csv,text/plain" style="display:none">
