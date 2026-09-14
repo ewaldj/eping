@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.31'
+VERSION = '3.32'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2940,10 +2940,12 @@ function advOptionsOpen(){ return advOptionsModal.style.display !== 'none'; }
 var stoppedModal    = document.getElementById('stoppedModal');
 var stoppedMsg       = document.getElementById('stoppedMsg');
 var stoppedDismissed = false;   // user closed it - don't keep popping it back up
+var reconnectTimer   = null;    // auto-retry while unreachable - see openStoppedModal()
 function openStoppedModal(text){
   if(stoppedDismissed) return;
   stoppedMsg.textContent = text;
   stoppedModal.style.display = 'flex';
+  if(!reconnectTimer) reconnectTimer = setInterval(function(){ location.reload(); }, 5000);
 }
 document.getElementById('modalBtnReload').onclick = function(){ location.reload(); };
 document.getElementById('modalBtnCloseStopped').onclick = function(){
@@ -2953,6 +2955,7 @@ document.getElementById('modalBtnCloseStopped').onclick = function(){
   window.close();
   stoppedDismissed = true;
   stoppedModal.style.display = 'none';
+  if(reconnectTimer){ clearInterval(reconnectTimer); reconnectTimer = null; }
 };
 document.getElementById('btnResetLog').onclick = function(){
   if(loggingOn){ openResetLog(); }
@@ -3591,6 +3594,7 @@ function poll(){
     render(s.rows);
 
     document.body.classList.remove('off');   // reachable again - undo a previous catch()
+    if(reconnectTimer){ clearInterval(reconnectTimer); reconnectTimer = null; }
     if(s.stopped){ stopped = true;
       document.body.classList.add('off');
       openStoppedModal('eping.py stopped - THX for using eping.py');
