@@ -1,4 +1,4 @@
-# eping.py 3.48
+# eping.py 3.49
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -449,9 +449,10 @@ opening more than one tab per click, so opening several files at once can't chai
 several `window.open()` calls from a single click. Instead, a file beyond the first is
 opened by clicking a plain link rendered inside the previous tab (a centered "N more
 file(s) selected / OPEN NEXT FILE" box) - ordinary browser navigation, not a
-script-triggered popup, so it isn't subject to that restriction. Max 20MB per file
+script-triggered popup, so it isn't subject to that restriction. Max 200MB per file
 (`VIEW_FILE_MAX_BYTES`) - larger files are refused with a message pointing at DOWNLOAD
-instead.
+instead. The picker greys out and disables oversized files, labeled "TOO LARGE", with
+the current limit shown in the modal text.
 
 ## Address modes (PREFER HOSTNAME / SWITCH TO IP ONLY / GET NAMES)
 

@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.48'
+VERSION = '3.49'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -48,7 +48,7 @@ FULL_SWEEP_MAX     = 50       # 0 = disabled (never sweep)
 DNS_TTL_MAX        = 3600
 DOWNLOAD_FILE_EXTS = ('.csv', '.txt', '.html')  # CHOOSE FILE picker - listed types
 VIEW_FILE_EXTS     = ('.csv', '.txt')           # VIEW FILE FROM SERVER - listed types
-VIEW_FILE_MAX_BYTES = 20 * 1024 * 1024   # rendered inline in one response - must fit in memory
+VIEW_FILE_MAX_BYTES = 200 * 1024 * 1024  # rendered inline in one response - must fit in memory
 RUNTIME_UNAVAILABLE = 'n/a'  # shown instead of a stale/misleading RUNTIME value - see
                              # run_background_pings(): background rounds during a dialog
                              # advance RUNS but never update RUNTIME, so the figure would
@@ -2208,7 +2208,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <div class="modal-box wide xwide">
       <h3>VIEW FILE</h3>
       <p>Pick one or more *.txt/*.csv files - each opens read-only in its own new tab
-         (raw content, with COPY and DOWNLOAD buttons).</p>
+         (raw content, with COPY and DOWNLOAD buttons).<br>
+         Files over <span id="viewFileMaxLabel"></span> can't be viewed inline - use DOWNLOAD instead.</p>
       <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
           <input type="checkbox" id="viewFileSelectAll"> select all
@@ -2799,6 +2800,8 @@ document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
 
 /* ---- VIEW FILE (FILE OPERATIONS > VIEW FILE FROM SERVER) - read-only, one
    new tab per selected *.txt/*.csv file, raw content + COPY/DOWNLOAD ---- */
+// must match VIEW_FILE_MAX_BYTES in eping.py - do_GET rejects larger files with 413
+var VIEW_FILE_MAX_BYTES = 200 * 1024 * 1024;
 var viewFileFiles = [];
 var viewFileSort  = {key: 'mtime', dir: 'desc'};
 var viewFileModal = document.getElementById('viewFileModal');
@@ -2817,18 +2820,21 @@ function viewFileRenderList(){
     return;
   }
   visible.forEach(function(f){
+    var tooLarge = f.size > VIEW_FILE_MAX_BYTES;
     var tr = document.createElement('tr');
-    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    tr.style.cssText = 'cursor:' + (tooLarge ? 'default' : 'pointer') + ';font-size:12px'
+                        + (tooLarge ? ';opacity:0.45' : '');
     var tdCb = document.createElement('td');
     tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
     var cb = document.createElement('input');
     cb.type      = 'checkbox';
     cb.className = 'viewFileCb';
     cb.value     = f.name;
+    cb.disabled  = tooLarge;
     tdCb.appendChild(cb);
     var tdName = document.createElement('td');
     tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
-    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
+    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '') + (tooLarge ? '  - TOO LARGE' : '');
     var tdSize = document.createElement('td');
     tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
     tdSize.textContent = humanBytes(f.size);
@@ -2839,7 +2845,7 @@ function viewFileRenderList(){
     tr.appendChild(tdName);
     tr.appendChild(tdSize);
     tr.appendChild(tdDate);
-    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } };
+    if(!tooLarge) tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } };
     list.appendChild(tr);
   });
   all.disabled = false;
@@ -2850,6 +2856,7 @@ function openViewFile(){
   list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
   all.checked  = false;
   all.disabled = true;
+  document.getElementById('viewFileMaxLabel').textContent = humanBytes(VIEW_FILE_MAX_BYTES);
   viewFileModal.style.display = 'flex';
   fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
     viewFileFiles = (j.files || []).filter(function(f){
@@ -2863,7 +2870,9 @@ function openViewFile(){
 }
 document.getElementById('viewFileSelectAll').onchange = function(){
   var checked = this.checked;
-  Array.prototype.forEach.call(document.querySelectorAll('.viewFileCb'), function(cb){ cb.checked = checked; });
+  Array.prototype.forEach.call(document.querySelectorAll('.viewFileCb'), function(cb){
+    if(!cb.disabled) cb.checked = checked;
+  });
 };
 document.getElementById('modalBtnViewFileCancel').onclick = closeViewFile;
 
