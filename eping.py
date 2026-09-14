@@ -7,7 +7,7 @@
 # I knew how it worked. 
 # Now, only god knows it! 
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.22'
+VERSION = '3.28'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -51,7 +51,7 @@ RUNTIME_UNAVAILABLE = 'n/a'  # shown instead of a stale/misleading RUNTIME value
                              # run_background_pings(): background rounds during a dialog
                              # advance RUNS but never update RUNTIME, so the figure would
                              # otherwise look frozen/wrong right after the dialog closes
-LOG_MAX_SIZE_MIN   = 100      # MB - lower bound once log rotation by size is enabled
+LOG_MAX_SIZE_MIN   = 10       # MB - lower bound once log rotation by size is enabled
 LOG_MAX_SIZE_MAX   = 2500     # MB - upper bound; 0 = no limit (rotation disabled)
 LOG_MAX_FILES_MAX  = 500      # 0 = unlimited kept eping-log_*.csv files
 DNS_CACHE_TTL      = 300      # seconds a resolved hostname stays valid (0 = no caching)
@@ -1901,12 +1901,18 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   button:hover{border-color:var(--acc);color:var(--acc)}
   button.on{border-color:var(--up);color:var(--up)}
   button.danger:hover{border-color:var(--down);color:var(--down)}
+  #deleteFilesBtn{background:var(--down);border-color:var(--down);color:var(--bg);font-weight:600}
+  #deleteFilesBtn:hover{background:var(--down);border-color:var(--down);color:var(--bg)}
+  #deleteFilesBtn:disabled{opacity:.4;cursor:default}
   .fsbox{display:flex;align-items:center;gap:4px;margin-left:auto;color:var(--dim)}
   .fsbox button{padding:4px 9px}
   input[type=text]{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
                    padding:4px 8px;font:inherit;border-radius:3px;min-width:200px}
-  select{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
-         padding:4px 8px;font:inherit;border-radius:3px}
+  select{background:var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235d6b5d' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center;
+         background-size:9px 5px;
+         color:var(--fg);border:1px solid var(--ctrl-line);
+         padding:4px 22px 4px 8px;font:inherit;border-radius:3px;
+         -webkit-appearance:none;-moz-appearance:none;appearance:none}
   select:hover{border-color:var(--acc)}
   select.on{border-color:var(--up);color:var(--up)}
   input[type=text]:focus{outline:none;border-color:var(--acc)}
@@ -1939,7 +1945,9 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   /* stage 2 - only reached if stage 1 still isn't enough: shrink the actual
      controls too (also implies stage 1, added by JS alongside this class) */
   body.compact .bar{gap:4px;padding:5px 10px}
-  body.compact .bar button, body.compact .bar select{padding:3px 6px;font-size:12px}
+  body.compact .bar button{padding:3px 6px;font-size:12px}
+  body.compact .bar select{padding:3px 18px 3px 6px;font-size:12px;
+                            background-position:right 7px center;background-size:9px 5px}
 
   /* ---- confirmation modal (RESET LOGGING) ---- */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);
@@ -2042,7 +2050,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <h3>CHOOSE FILE</h3>
       <p>Pick one or more files in this eping.py's working directory to download<br>
         - selecting more than one bundles them into a single ZIP.</p>
-      <div style="display:flex;gap:6px;margin-bottom:10px">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
         <button type="button" class="chooseLogExtBtn on" data-ext="csv">.CSV</button>
         <button type="button" class="chooseLogExtBtn on" data-ext="txt">.TXT</button>
         <button type="button" class="chooseLogExtBtn on" data-ext="html">.HTML</button>
@@ -2066,6 +2074,57 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <div class="modal-buttons">
         <button id="modalBtnChooseLogDownload">DOWNLOAD</button>
         <button id="modalBtnChooseLogCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
+  <div id="deleteFilesModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide xwide">
+      <h3>DELETE FILES</h3>
+      <p>Pick one or more files in this eping.py's working directory to delete<br>
+        - this cannot be undone.</p>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+        <button type="button" class="deleteFilesExtBtn on" data-ext="csv">.CSV</button>
+        <button type="button" class="deleteFilesExtBtn on" data-ext="txt">.TXT</button>
+        <button type="button" class="deleteFilesExtBtn on" data-ext="html">.HTML</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+          <input type="checkbox" id="deleteFilesSelectAll"> select all
+        </label>
+      </div>
+      <div style="width:100%;max-height:220px;overflow-y:auto;
+           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
+           padding:6px 10px;box-sizing:border-box">
+        <table style="width:100%;border-collapse:collapse">
+          <tbody id="deleteFilesList"></tbody>
+        </table>
+      </div>
+      <div class="modal-buttons">
+        <button id="deleteFilesBtn" class="danger" disabled
+                title="delete the selected file(s) from the server - cannot be undone">DELETE</button>
+        <button id="modalBtnDeleteFilesCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
+  <div id="addFromServerModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide xwide">
+      <h3>ADD FROM SERVER</h3>
+      <p>Pick one or more `.txt` files in this eping.py's working directory to add their hosts.</p>
+      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+          <input type="checkbox" id="addFromServerSelectAll"> select all
+        </label>
+      </div>
+      <div style="width:100%;max-height:220px;overflow-y:auto;
+           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
+           padding:6px 10px;box-sizing:border-box">
+        <table style="width:100%;border-collapse:collapse">
+          <tbody id="addFromServerList"></tbody>
+        </table>
+      </div>
+      <div class="modal-buttons">
+        <button id="addFromServerAddBtn" disabled>ADD</button>
+        <button id="modalBtnAddFromServerCancel">CANCEL</button>
       </div>
     </div>
   </div>
@@ -2152,13 +2211,16 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
-      <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file in this eping.py's working directory">
-        <option value="" selected>DOWNLOAD</option>
+      <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, or delete files from it">
+        <option value="" selected disabled hidden>FILE ACTIONS</option>
         <option value="hosts_all">ALL HOSTS</option>
         <option value="hosts_shown">SHOWN HOSTS</option>
         <option value="logfile">ACTIVE LOGFILE</option>
         <option value="choose_logfile">CHOOSE FILE</option>
+        <option value="upload_file">UPLOAD</option>
+        <option value="delete_files">DELETE FILES</option>
       </select>
+      <input type="file" id="uploadServerFileInput" accept=".txt,.csv,text/csv,text/plain" style="display:none">
       <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
      </span>
      <span class="fsbox">
@@ -2185,10 +2247,14 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
-     <button id="btnUpload" title="load hosts from a text/CSV file">ADD FILE</button>
+     <select id="selAddFile" title="add hosts from a text file - from your computer, or from a .txt file already on the server">
+       <option value="" selected disabled hidden>ADD FILE</option>
+       <option value="client">FROM CLIENT</option>
+       <option value="server">FROM SERVER</option>
+     </select>
      <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
      <select id="selGenReport" title="analyse a logfile with epinga.py and open the report in a new tab">
-       <option value="" selected>GENERATE REPORT</option>
+       <option value="" selected disabled hidden>GENERATE REPORT</option>
        <option value="active">ACTIVE LOGFILE</option>
        <option value="choose">CHOOSE LOGFILE</option>
       </select>
@@ -2430,7 +2496,7 @@ function formatFileDate(ts){
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
        + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
-function updateNoZipState(){
+function updateChooseLogControls(){
   var count  = document.querySelectorAll('.chooseLogCb:checked').length;
   var noZip  = document.getElementById('chooseLogNoZip');
   noZip.disabled = count > 1;
@@ -2473,11 +2539,11 @@ function chooseLogRenderList(){
     tr.appendChild(tdName);
     tr.appendChild(tdSize);
     tr.appendChild(tdDate);
-    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateNoZipState(); };
+    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateChooseLogControls(); };
     list.appendChild(tr);
   });
   all.disabled = false;
-  updateNoZipState();
+  updateChooseLogControls();
 }
 function openChooseLog(){
   var list = document.getElementById('chooseLogList');
@@ -2504,9 +2570,115 @@ Array.prototype.forEach.call(document.querySelectorAll('.chooseLogExtBtn'), func
 document.getElementById('chooseLogSelectAll').onchange = function(){
   var checked = this.checked;
   Array.prototype.forEach.call(document.querySelectorAll('.chooseLogCb'), function(cb){ cb.checked = checked; });
-  updateNoZipState();
+  updateChooseLogControls();
 };
 document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
+
+/* ---- DELETE FILES (FILE ACTIONS > DELETE FILES) - own modal, was CHOOSE
+   FILE's DELETE button up to v3.25 ---- */
+var deleteFilesFiles = [];
+var deleteFilesExts  = {csv: true, txt: true, html: true};
+var deleteFilesModal = document.getElementById('deleteFilesModal');
+function deleteFilesOpen(){ return deleteFilesModal.style.display !== 'none'; }
+function closeDeleteFiles(){ deleteFilesModal.style.display = 'none'; }
+function updateDeleteFilesControls(){
+  var count = document.querySelectorAll('.deleteFilesCb:checked').length;
+  document.getElementById('deleteFilesBtn').disabled = count === 0;
+}
+function deleteFilesRenderList(){
+  var list = document.getElementById('deleteFilesList');
+  var all  = document.getElementById('deleteFilesSelectAll');
+  var visible = deleteFilesFiles.filter(function(f){
+    var ext = f.name.split('.').pop().toLowerCase();
+    return !!deleteFilesExts[ext];
+  });
+  list.innerHTML = '';
+  all.checked = false;
+  if(!visible.length){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no matching files</td></tr>';
+    all.disabled = true;
+    updateDeleteFilesControls();
+    return;
+  }
+  visible.forEach(function(f){
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    var tdCb = document.createElement('td');
+    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
+    var cb = document.createElement('input');
+    cb.type      = 'checkbox';
+    cb.className = 'deleteFilesCb';
+    cb.value     = f.name;
+    tdCb.appendChild(cb);
+    var tdName = document.createElement('td');
+    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
+    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
+    var tdSize = document.createElement('td');
+    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdSize.textContent = humanBytes(f.size);
+    var tdDate = document.createElement('td');
+    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdDate.textContent = formatFileDate(f.mtime);
+    tr.appendChild(tdCb);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSize);
+    tr.appendChild(tdDate);
+    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateDeleteFilesControls(); };
+    list.appendChild(tr);
+  });
+  all.disabled = false;
+  updateDeleteFilesControls();
+}
+function openDeleteFiles(){
+  var list = document.getElementById('deleteFilesList');
+  var all  = document.getElementById('deleteFilesSelectAll');
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  all.checked  = false;
+  all.disabled = true;
+  deleteFilesModal.style.display = 'flex';
+  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
+    deleteFilesFiles = j.files || [];
+    deleteFilesRenderList();
+  }).catch(function(){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
+  });
+}
+Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesExtBtn'), function(btn){
+  btn.onclick = function(){
+    var ext = this.dataset.ext;
+    deleteFilesExts[ext] = !deleteFilesExts[ext];
+    this.classList.toggle('on', deleteFilesExts[ext]);
+    deleteFilesRenderList();
+  };
+});
+document.getElementById('deleteFilesSelectAll').onchange = function(){
+  var checked = this.checked;
+  Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesCb'), function(cb){ cb.checked = checked; });
+  updateDeleteFilesControls();
+};
+document.getElementById('deleteFilesBtn').onclick = function(){
+  var boxes = document.querySelectorAll('.deleteFilesCb:checked');
+  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+  if(!names.length) return;
+  if(!confirm('Delete ' + names.length + ' file(s)? This cannot be undone.')) return;
+  fetch('api/delete_logfile', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                               body: JSON.stringify({names: names})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      var deleted = j.deleted || [];
+      if(deleted.length){
+        deleteFilesFiles = deleteFilesFiles.filter(function(f){ return deleted.indexOf(f.name) === -1; });
+        deleteFilesRenderList();
+      }
+      if(j.errors && j.errors.length){
+        note(deleted.length + ' deleted, ' + j.errors.length + ' failed', false);
+      } else {
+        note('deleted ' + deleted.length + ' file(s)', false);
+      }
+    })
+    .catch(function(){ note('delete failed', false); });
+};
+document.getElementById('modalBtnDeleteFilesCancel').onclick = closeDeleteFiles;
 document.getElementById('modalBtnChooseLogDownload').onclick = function(){
   var boxes = document.querySelectorAll('.chooseLogCb:checked');
   var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
@@ -2767,7 +2939,12 @@ document.getElementById('btnClear').onclick  = function(){
 
 /* ---- host file upload ---- */
 var fileInput = document.getElementById('fileInput');
-document.getElementById('btnUpload').onclick = function(){ fileInput.click(); };
+document.getElementById('selAddFile').onchange = function(){
+  var what = this.value;
+  this.value = '';                              // reset - a select, not a toggle
+  if(what === 'client'){ fileInput.click(); }
+  else if(what === 'server'){ openAddFromServer(); }
+};
 fileInput.addEventListener('change', function(){
   var f = fileInput.files && fileInput.files[0];
   if(!f) return;
@@ -2782,6 +2959,115 @@ fileInput.addEventListener('change', function(){
   };
   rd.readAsText(f);
 });
+
+var uploadServerFileInput = document.getElementById('uploadServerFileInput');
+uploadServerFileInput.addEventListener('change', function(){
+  var f = uploadServerFileInput.files && uploadServerFileInput.files[0];
+  if(!f) return;
+  var rd = new FileReader();
+  rd.onload = function(){
+    note('uploading ' + f.name + ' ...', true);
+    fetch('api/upload_server_file?name=' + encodeURIComponent(f.name),
+      {method: 'POST', headers: {'Content-Type': 'text/plain; charset=utf-8'},
+       body: rd.result}).then(function(r){ return r.json(); }).then(function(j){
+        if(j.ok){ note('uploaded as ' + j.name, false); }
+        else { note('upload failed: ' + (j.error || ''), false); }
+      }).catch(function(){ note('upload failed', false); });
+    uploadServerFileInput.value = '';
+  };
+  rd.readAsText(f);
+});
+
+/* ---- add hosts from a .txt file already on the server ---- */
+var addFromServerFiles = [];
+var addFromServerModal = document.getElementById('addFromServerModal');
+function closeAddFromServer(){ addFromServerModal.style.display = 'none'; }
+function addFromServerUpdateControls(){
+  var count = document.querySelectorAll('.addFromServerCb:checked').length;
+  document.getElementById('addFromServerAddBtn').disabled = count === 0;
+}
+function addFromServerRenderList(){
+  var list = document.getElementById('addFromServerList');
+  var all  = document.getElementById('addFromServerSelectAll');
+  list.innerHTML = '';
+  all.checked = false;
+  if(!addFromServerFiles.length){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no .txt files found</td></tr>';
+    all.disabled = true;
+    addFromServerUpdateControls();
+    return;
+  }
+  addFromServerFiles.forEach(function(f){
+    var tr = document.createElement('tr');
+    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    var tdCb = document.createElement('td');
+    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
+    var cb = document.createElement('input');
+    cb.type      = 'checkbox';
+    cb.className = 'addFromServerCb';
+    cb.value     = f.name;
+    tdCb.appendChild(cb);
+    var tdName = document.createElement('td');
+    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
+    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
+    var tdSize = document.createElement('td');
+    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdSize.textContent = humanBytes(f.size);
+    var tdDate = document.createElement('td');
+    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
+    tdDate.textContent = formatFileDate(f.mtime);
+    tr.appendChild(tdCb);
+    tr.appendChild(tdName);
+    tr.appendChild(tdSize);
+    tr.appendChild(tdDate);
+    tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } addFromServerUpdateControls(); };
+    list.appendChild(tr);
+  });
+  all.disabled = false;
+  addFromServerUpdateControls();
+}
+function openAddFromServer(){
+  var list = document.getElementById('addFromServerList');
+  var all  = document.getElementById('addFromServerSelectAll');
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  all.checked  = false;
+  all.disabled = true;
+  addFromServerModal.style.display = 'flex';
+  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
+    addFromServerFiles = (j.files || []).filter(function(f){
+      return f.name.split('.').pop().toLowerCase() === 'txt';
+    });
+    addFromServerRenderList();
+  }).catch(function(){
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
+  });
+}
+document.getElementById('addFromServerSelectAll').onchange = function(){
+  var checked = this.checked;
+  Array.prototype.forEach.call(document.querySelectorAll('.addFromServerCb'), function(cb){ cb.checked = checked; });
+  addFromServerUpdateControls();
+};
+document.getElementById('addFromServerAddBtn').onclick = function(){
+  var boxes = document.querySelectorAll('.addFromServerCb:checked');
+  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+  if(!names.length) return;
+  closeAddFromServer();
+  note('adding ' + names.length + ' file(s) ...', true);
+  fetch('api/add_from_server', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({names: names})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      var added = j.added || [];
+      if(j.errors && j.errors.length){
+        note(added.length + ' file(s) added, ' + j.errors.length + ' failed', false);
+      } else {
+        note(added.length + ' file(s) added', false);
+      }
+    })
+    .catch(function(){ note('add from server failed', false); });
+};
+document.getElementById('modalBtnAddFromServerCancel').onclick = closeAddFromServer;
+
 // GENERATE REPORT's holding page, written into the blank tab right away (see
 // below) so the user sees a wait message instead of a blank window while
 // epinga.py runs - same colors as the main page, no dependency on it (a
@@ -2861,6 +3147,8 @@ document.getElementById('selDownload').onchange = function(){
   this.value = '';                              // reset - a select, not a toggle
   if(!what) return;
   if(what === 'choose_logfile'){ openChooseLog(); return; }
+  if(what === 'delete_files'){ openDeleteFiles(); return; }
+  if(what === 'upload_file'){ uploadServerFileInput.click(); return; }
   if(what === 'logfile'){
     // hidden iframe, not fetch+blob and not a real <a> click - the log can be
     // large, and fetch+blob buffers the whole response in JS before the
@@ -2930,6 +3218,10 @@ document.addEventListener('keydown', function(e){
   }
   if(chooseLogOpen()){
     if(e.key === 'Escape'){ closeChooseLog(); e.preventDefault(); }
+    return;
+  }
+  if(deleteFilesOpen()){
+    if(e.key === 'Escape'){ closeDeleteFiles(); e.preventDefault(); }
     return;
   }
   if(advOptionsOpen()){
@@ -3557,6 +3849,103 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             with web_lock:
                 web_commands.append(('upload', text))
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
+            return
+
+        # --- FILE ACTIONS > UPLOAD: save a *.txt/*.csv file as-is, no host
+        # parsing (see /api/upload above for that) ---
+        if path in ('/api/upload_server_file', 'api/upload_server_file'):
+            qs      = urllib.parse.urlsplit(self.path).query
+            qparams = urllib.parse.parse_qs(qs)
+            name    = (qparams.get('name') or [''])[0]
+            if (not name or os.path.basename(name) != name or name in ('.', '..')
+                    or not name.lower().endswith(('.txt', '.csv'))):
+                self._respond(400, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'invalid filename - must be *.txt or *.csv'}))
+                return
+            raw = self._read_body(WEB_MAX_UPLOAD)
+            if raw is None:
+                self._respond(413, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'file too large'}))
+                return
+            base, ext = os.path.splitext(name)
+            save_name = name
+            suffix = 1
+            while os.path.exists(save_name):
+                save_name = base + '-' + str(suffix) + ext
+                suffix += 1
+            try:
+                with open(save_name, 'wb') as fh:
+                    fh.write(raw)
+            except OSError as e:
+                self._respond(500, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': str(e)}))
+                return
+            self._respond(200, 'application/json; charset=utf-8',
+                          json.dumps({'ok': True, 'name': save_name}))
+            return
+
+        # --- add hosts from one or more *.txt files already on the server ---
+        if path in ('/api/add_from_server', 'api/add_from_server'):
+            raw = self._read_body(WEB_MAX_UPLOAD)
+            try:
+                data = json.loads(raw.decode('utf-8', 'replace')) if raw else {}
+            except Exception:
+                data = {}
+            names = data.get('names') if isinstance(data, dict) else None
+            if not isinstance(names, list) or not names:
+                self._respond(400, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'no filenames given'}))
+                return
+            added, errors, texts = [], [], []
+            for name in names:
+                if (not isinstance(name, str) or os.path.basename(name) != name
+                        or name in ('.', '..') or not name.lower().endswith('.txt')
+                        or not os.path.isfile(name)):
+                    errors.append(name)
+                    continue
+                try:
+                    with open(name, encoding='utf-8', errors='replace') as fh:
+                        texts.append(fh.read())
+                    added.append(name)
+                except OSError:
+                    errors.append(name)
+            if texts:
+                with web_lock:
+                    web_commands.append(('upload', '\n'.join(texts)))
+            self._respond(200, 'application/json; charset=utf-8',
+                          json.dumps({'ok': not errors, 'added': added, 'errors': errors}))
+            return
+
+        if path in ('/api/delete_logfile', 'api/delete_logfile'):
+            raw = self._read_body(WEB_MAX_UPLOAD)
+            try:
+                data = json.loads(raw.decode('utf-8', 'replace')) if raw else {}
+            except Exception:
+                data = {}
+            names = data.get('names') if isinstance(data, dict) else None
+            if not isinstance(names, list) or not names:
+                self._respond(400, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'no filenames given'}))
+                return
+            with web_lock:
+                active = web_state.get('logfile') or ''
+            active = os.path.basename(active) if active else ''
+            deleted, errors = [], []
+            for name in names:
+                if (not isinstance(name, str) or os.path.basename(name) != name
+                        or name in ('.', '..') or not name.lower().endswith(DOWNLOAD_FILE_EXTS)):
+                    errors.append(name)
+                    continue
+                if name == active:
+                    errors.append(name)   # never delete the logfile currently being written to
+                    continue
+                try:
+                    os.remove(name)
+                    deleted.append(name)
+                except OSError:
+                    errors.append(name)
+            self._respond(200, 'application/json; charset=utf-8',
+                          json.dumps({'ok': not errors, 'deleted': deleted, 'errors': errors}))
             return
 
         if path not in ('/api/command', 'api/command'):
