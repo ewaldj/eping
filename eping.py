@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.50'
+VERSION = '3.51'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -167,6 +167,7 @@ import http.server
 import socketserver
 import urllib.parse
 import zipfile
+import gzip
 import socket
 import shlex
 import concurrent.futures
@@ -3967,7 +3968,7 @@ function poll(){
     loggingOn = !!s.logging;
     hostfileActive = !!s.hostfile_active;
     hostfileName   = s.hostfile_name || '';
-    shownHostsCount = (s.host_list_shown || []).length;
+    shownHostsCount = s.hosts_shown || 0;
     var brl = document.getElementById('btnResetLog');
     brl.textContent = loggingOn ? 'RESET LOG' : 'START LOG';
     brl.title = loggingOn
@@ -4350,9 +4351,25 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         # replace the running gui page.
         if isinstance(body, str):
             body = body.encode('utf-8')
+        # gzip large JSON/HTML bodies when the client accepts it (every browser
+        # does) - /api/status is polled every second and its JSON is highly
+        # repetitive (thousands of near-identical host rows), so this cuts the
+        # per-poll bandwidth of a large host count by roughly 5-10x for free.
+        # Skipped for downloads (filename set) - those are usually already
+        # compressed (zip) or the client expects the raw byte stream as-is.
+        encoding = None
+        if (not filename and len(body) > 512
+                and 'gzip' in (self.headers.get('Accept-Encoding') or '')):
+            try:
+                body     = gzip.compress(body, compresslevel=6)
+                encoding = 'gzip'
+            except Exception:
+                encoding = None
         try:
             self.send_response(code)
             self.send_header('Content-Type', ctype)
+            if encoding:
+                self.send_header('Content-Encoding', encoding)
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             if filename:
@@ -4436,6 +4453,14 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         elif path in ('/api/status', 'api/status'):
             with web_lock:
                 snapshot = dict(web_state)   # values are replaced, never mutated in place
+            # host_list_shown/host_list_all are two full copies of every host name,
+            # only ever used server-side by /api/download/hosts_shown|hosts_all
+            # (read straight from web_state there) - the client only needs their
+            # counts (already in hosts_shown/hosts), never the names themselves, so
+            # they're dropped from the polled payload; at large host counts this is
+            # the majority of the per-poll size. web_state itself keeps them intact.
+            snapshot.pop('host_list_shown', None)
+            snapshot.pop('host_list_all', None)
             body = json.dumps(snapshot)      # serialize outside the lock - no stall of the ping loop
             self._respond(200, 'application/json; charset=utf-8', body)
         elif path in ('/api/logfiles', 'api/logfiles'):
@@ -7076,6 +7101,9 @@ if __name__=='__main__':
             # same effect/order as the keyboard [E] EXIT handler further below -
             # kept as its own copy here (not a shared call) since the keyboard
             # handler's control flow can't safely be invoked from mid-loop.
+            # no maybe_run_epinga() prompt here - this exit was triggered from
+            # the browser, not the terminal, so nobody is there to answer the
+            # "[y/N]" input() prompt; same as the pure -web mode's exit handler.
             with web_lock:
                 web_state['stopped'] = True
                 web_state['message'] = 'stopped'
@@ -7084,7 +7112,6 @@ if __name__=='__main__':
             print('THX for using eping.py v' + VERSION + '  -  www.jeitler.cc')
             if is_newer_version(remote_version, VERSION):
                 print_update_notice(remote_version)
-            maybe_run_epinga(logfile_file_name, args.disable_logging)
             sys.stdout.flush()
             os._exit(0)
 
