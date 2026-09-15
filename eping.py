@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.56'
+VERSION = '3.57'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2156,7 +2156,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
   <div id="saveHostsModal" class="modal-overlay" style="display:none">
-    <div class="modal-box">
+    <div class="modal-box" style="width:420px">
       <h3>SAVE HOSTS FILE ON SERVER</h3>
       <p id="saveHostsText">Save the currently shown hosts to the server?</p>
       <input type="text" id="saveHostsNameInput" maxlength="255"
