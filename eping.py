@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.57'
+VERSION = '3.58'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2421,11 +2421,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
         <option value="save_hosts_file">SAVE HOSTS FILE ON SERVER</option>
-        <option value="upload_file">UPLOAD FILE TO SERVER</option>
         <option value="hosts_all">DOWNLOAD ALL HOSTS</option>
         <option value="hosts_shown">DOWNLOAD ACTIVE HOSTS</option>
         <option value="logfile">DOWNLOAD ACTIVE LOGFILE</option>
         <option value="choose_logfile">DOWNLOAD SELECTED FILES</option>
+        <option value="upload_file">UPLOAD FILE TO SERVER</option>
         <option value="delete_files">DELETE FILES FROM SERVER</option>
         <option value="view_file">VIEW FILE FROM SERVER</option>
       </select>
