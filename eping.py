@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.59'
+VERSION = '3.60'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -5504,7 +5504,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                   if match_filter_re.search(h)
                                   or (h in host_state and len(host_state[h]) > 8 and host_state[h][8]
                                       and match_filter_re.search(host_state[h][8]))]
-                dropped = [h for h in original_hosts_list if h not in set(shown_hosts)]
+                _keep = set(shown_hosts)   # built once - a set() per element made this O(n^2)
+                dropped = [h for h in original_hosts_list if h not in _keep]
                 prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
                 original_hosts_list[:] = shown_hosts
                 active_hosts_list      = shown_hosts
@@ -5760,7 +5761,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 active_hosts_list = apply_addr_mode(active_hosts_list)
                 if args.set_reference:
                     # -setref: same as the 'set_ref' web command, once learning ends
-                    prune_dropped_hosts([h for h in original_hosts_list if h not in set(active_hosts_list)],
+                    _keep = set(active_hosts_list)   # once, not per element (was O(n^2))
+                    prune_dropped_hosts([h for h in original_hosts_list if h not in _keep],
                                         host_state, up_seen, down_streak)
                     original_hosts_list = list(active_hosts_list)
                 learning_phase = True
@@ -6965,7 +6967,8 @@ if __name__=='__main__':
             # matching comment in run_web_mode()'s own set_ref for why display_list
             # (the [M]/display filter applied) is used, not just active_hosts_list
             shown_hosts = [o[0] for o in display_list]
-            dropped = [h for h in original_hosts_list if h not in set(shown_hosts)]
+            _keep = set(shown_hosts)   # built once - a set() per element made this O(n^2)
+            dropped = [h for h in original_hosts_list if h not in _keep]
             prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
             original_hosts_list[:] = shown_hosts
             active_hosts_list      = shown_hosts
@@ -7645,7 +7648,8 @@ if __name__=='__main__':
             # display_list already has both the [U] view filter (active_hosts_list)
             # and the [M]/display filter applied, see rebuild_display()
             shown_hosts = [o[0] for o in display_list]
-            dropped = [h for h in original_hosts_list if h not in set(shown_hosts)]
+            _keep = set(shown_hosts)   # built once - a set() per element made this O(n^2)
+            dropped = [h for h in original_hosts_list if h not in _keep]
             prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
             # two independent list objects - do not bind both names to the same
             # object here, or a later add_hosts_to()/remove_hosts_from() call
@@ -7968,7 +7972,8 @@ if __name__=='__main__':
                                      if prefer_hostname else active_hosts_list)
                 if args.set_reference:
                     # -setref: same as pressing [S]/SET REFERENCE once learning ends
-                    prune_dropped_hosts([h for h in original_hosts_list if h not in set(active_hosts_list)],
+                    _keep = set(active_hosts_list)   # once, not per element (was O(n^2))
+                    prune_dropped_hosts([h for h in original_hosts_list if h not in _keep],
                                         host_state, up_seen, down_streak)
                     original_hosts_list = list(active_hosts_list)
                 screen.clear()
