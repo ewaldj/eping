@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.58'
+VERSION = '3.59'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1946,6 +1946,10 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
 
 web_lock         = threading.Lock()
 web_commands     = []
+# /api/status: web_state['rows'] is always replaced as a whole, never mutated, so a
+# changed object identity means new rows. _rows_track['seq'] counts those changes;
+# the browser echoes the last seq it rendered and gets the rows only when newer.
+_rows_track      = {'ref': None, 'seq': 0}
 web_state = {
     'version'          : VERSION,
     'update_available' : False,
@@ -3942,10 +3946,11 @@ window.addEventListener('resize', function(){
 
 /* ---------------- polling ---------------- */
 var pollSeq = 0, lastAppliedSeq = 0;
+var lastRowsSeq = 0;   // newest host-table version rendered - the server omits rows we already have
 function poll(){
   if(stopped) return;
   var mySeq = ++pollSeq;
-  fetch('api/status').then(function(r){return r.json();}).then(function(s){
+  fetch('api/status?rs=' + lastRowsSeq).then(function(r){return r.json();}).then(function(s){
     // overlapping polls can resolve out of order - drop a response older than
     // the newest one already applied, instead of letting it flash stale state
     if(mySeq < lastAppliedSeq) return;
@@ -4051,7 +4056,10 @@ function poll(){
 
     hasData = true;
     if(s.run_counter > 0) firstRunDone = true;
-    render(s.rows);
+    if(s.rows !== undefined){      // absent = unchanged since the last render
+      render(s.rows);
+      lastRowsSeq = s.rows_seq;
+    }
 
     document.body.classList.remove('off');   // reachable again - undo a previous catch()
     if(stoppedByUnreachable){   // was showing "not reachable" - close it in place, no reload
@@ -4468,8 +4476,25 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         if path in ('/', '/index.html'):
             self._respond(200, 'text/html; charset=utf-8', WEB_INDEX_HTML)
         elif path in ('/api/status', 'api/status'):
+            try:
+                client_rows_seq = int(urllib.parse.parse_qs(
+                    self.path.partition('?')[2]).get('rs', [''])[0])
+            except (TypeError, ValueError):
+                client_rows_seq = -1
             with web_lock:
                 snapshot = dict(web_state)   # values are replaced, never mutated in place
+                if snapshot.get('rows') is not _rows_track['ref']:
+                    _rows_track['ref'] = snapshot.get('rows')
+                    _rows_track['seq'] += 1
+                rows_seq = _rows_track['seq']
+            # the host table is the bulk of the payload and only changes once per
+            # round or on a command - while the browser already holds this version
+            # it is left out, so a 40000-host page is not re-sent, re-parsed and
+            # re-rendered every second (that kept the browser busy for seconds per
+            # poll and delayed every click: sorting, view switch, ...)
+            snapshot['rows_seq'] = rows_seq
+            if client_rows_seq == rows_seq:
+                snapshot.pop('rows', None)
             # host_list_shown/host_list_all are two full copies of every host name,
             # only ever used server-side by /api/download/hosts_shown|hosts_all
             # (read straight from web_state there) - the client only needs their
