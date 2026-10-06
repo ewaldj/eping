@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.60'
+VERSION = '3.61'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -472,7 +472,7 @@ def fping_capabilities():
         caps = set()
         try:
             p = subprocess.run(['fping', '-h'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               universal_newlines=True, timeout=5)
+                               encoding='utf-8', errors='replace', timeout=5)
             text = p.stdout or ''
             for flag in ('--check-source', '--seqmap-timeout'):
                 if flag in text:
@@ -957,7 +957,7 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,          # merge: simpler + avoids deadlock
             stdin=(subprocess.PIPE if use_stdin else subprocess.DEVNULL),
-            universal_newlines=True,
+            encoding='utf-8', errors='replace',
             bufsize=1,
         )
     except FileNotFoundError:
@@ -1276,7 +1276,9 @@ def delete_files(filestring):
         except OSError:
             error_handler('ERROR: unable to delete files' )
     print("Removed all matched files!")
-    error_handler(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc', exit_code=0)
+    error_handler(f'THX for using eping.py v{VERSION} - www.jeitler.cc', exit_code=0)
+
+_ASCII_FALLBACK = str.maketrans({'\u250c': '+', '\u2510': '+', '\u2514': '+', '\u2518': '+', '\u2500': '-', '\u2502': '|'})
 
 def screen_output(line,coll,text,color,attr_val):
     attr = 0
@@ -1290,6 +1292,12 @@ def screen_output(line,coll,text,color,attr_val):
         screen.addstr(line, coll, text, attr)
     except curses.error:
         pass   # writing past the last cell raises - harmless
+    except UnicodeEncodeError:
+        # non-UTF-8 locale (e.g. ASCII on Python 3.6): draw an ASCII fallback
+        try:
+            screen.addstr(line, coll, text.translate(_ASCII_FALLBACK).encode('ascii', 'replace').decode('ascii'), attr)
+        except curses.error:
+            pass
 
 def screen_print_date_time(color_pair, tz_offset=None):
     offset = int(args.time_zone_adjust) if tz_offset is None else tz_offset
@@ -1326,7 +1334,7 @@ def sigint_handler(signal, frame):
         curses.endwin()
     except curses.error:
         pass
-    print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+    print(f'THX for using eping.py v{VERSION} - www.jeitler.cc')
     if is_newer_version(_remote_version, VERSION):
         print_update_notice(_remote_version)
     maybe_run_epinga(_logfile_file_name, _logging_enabled)
@@ -4253,9 +4261,10 @@ def generate_epinga_report(logpaths):
     try:
         proc = subprocess.run([sys.executable, epinga_path, '-f', analyse_path, '-q',
                                '--html', report_path, '--no-version-check', '--no-open'],
+                              env=dict(os.environ, PYTHONIOENCODING='utf-8'),
                               stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              universal_newlines=True)
+                              encoding='utf-8', errors='replace')
     except Exception as e:
         return None, str(e)
     finally:
@@ -5690,7 +5699,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     web_state['stopped'] = True
                     web_state['message'] = 'stopped'
                 time.sleep(1.5)   # let the browser pick up the final status
-                print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+                print(f'THX for using eping.py v{VERSION} - www.jeitler.cc')
                 if is_newer_version(_remote_version, VERSION):
                     print_update_notice(_remote_version)
                 # flush any not-yet-settled ADV OPTIONS change - see set_option
@@ -6315,7 +6324,7 @@ if __name__=='__main__':
                 web_state['stopped'] = True
                 web_state['message'] = 'stopped'
             time.sleep(1.5)   # guarantee the browser's next poll sees the status
-            print(f'\nTHX for using eping.py v{VERSION}  –  www.jeitler.cc')
+            print(f'\nTHX for using eping.py v{VERSION} - www.jeitler.cc')
             if is_newer_version(_remote_version, VERSION):
                 print_update_notice(_remote_version)
             # no maybe_run_epinga() prompt in web mode - see the 'exit' cmd handler
@@ -7932,7 +7941,7 @@ if __name__=='__main__':
             time.sleep(1.5)   # guarantee the browser's next poll sees it even if
                                # maybe_run_epinga() below has nothing to prompt for
             curses.endwin()
-            print(f'THX for using eping.py v{VERSION}  –  www.jeitler.cc')
+            print(f'THX for using eping.py v{VERSION} - www.jeitler.cc')
             if is_newer_version(remote_version, VERSION):
                 print_update_notice(remote_version)
             maybe_run_epinga(logfile_file_name, args.disable_logging)

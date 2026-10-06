@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.27'
+VERSION = '2.28'
 version = VERSION   # legacy alias
 
 import re
@@ -1898,11 +1898,24 @@ def build_parser():
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
+def _safe_stdio():
+    """Never crash on non-encodable output (e.g. ASCII locale on Python 3.6,
+    no PEP 538/540 coercion): keep the stream's encoding, replace what it can't encode."""
+    for name in ('stdout', 'stderr'):
+        st = getattr(sys, name)
+        enc = (getattr(st, 'encoding', None) or 'ascii')
+        if enc.lower().replace('-', '') == 'utf8' or not hasattr(st, 'buffer'):
+            continue
+        setattr(sys, name, io.TextIOWrapper(st.buffer, encoding=enc, errors='replace',
+                                            line_buffering=True))
+
+
 def main():
     signal.signal(signal.SIGINT, sigint_handler)
 
-    if sys.version_info < (3, 8):
-        die('Python 3.8 or later required.')
+    if sys.version_info < (3, 6):
+        die('Python 3.6 or later required.')
+    _safe_stdio()
 
     args = build_parser().parse_args()
 
@@ -1959,11 +1972,12 @@ def main():
 
     # ── start capturing output for text file ──
     _buf        = io.StringIO()
-    sys.stdout  = _Tee(sys.__stdout__, _buf)
+    _real_out   = sys.stdout
+    sys.stdout  = _Tee(_real_out, _buf)
     try:
         _print_report_body(args, hosts, host_order, comments, infos)
     finally:
-        sys.stdout = sys.__stdout__
+        sys.stdout = _real_out
 
     # ── save text report ──
     try:
