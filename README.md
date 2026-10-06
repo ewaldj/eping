@@ -1,4 +1,4 @@
-# eping.py 3.60
+# eping.py 3.61
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -7,10 +7,11 @@ Written by Ewald Jeitler — <https://www.jeitler.cc>
 
 ## Requirements
 
-- Python 3.6+
+- Python 3.6+ (eping.py and epinga.py)
 - `fping` in `$PATH`
 - A terminal supporting `curs_set()` for CLI mode
 - `--check-source` used automatically if fping supports it (5.0+)
+- Non-UTF-8 terminal locale (e.g. `LANG=C`): works, but box-drawing characters are shown as ASCII/`?`; `LC_ALL=C.UTF-8` gives the full look
 
 ## Installation / Update
 
@@ -514,7 +515,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.27
+# epinga.py 2.28
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
