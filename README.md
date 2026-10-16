@@ -1,4 +1,4 @@
-# eping.py 3.64
+# eping.py 3.65
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -103,7 +103,7 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
 - **Detection**: first non-empty line is a header with the columns `IP Address` and
   `Hostname` (case-insensitive); the delimiter (`;`, `,` or tab) is detected.
 - **Columns used**: `IP Address`, `Hostname`, `Serial Number`, `Model`, `Location`,
-  `sysLocation`, `Type`. All other columns are ignored.
+  `sysLocation`, `Type`, `Comment`. All other columns are ignored.
 - **Host entry**: the IP address; rows without a valid IP are ignored. With PREFER
   HOSTNAME (`-ph`, or that address mode active when the file is added) the entry is
   the `Hostname` instead - rows without an IP are then pinged by name too (NO-DNS if it
@@ -111,7 +111,7 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
   Rows without a usable entry are ignored.
 - **Duplicates**: one host per entry, the first row wins. The count of ignored and
   duplicate rows is reported when the file is added (startup message / web footer).
-- **Log**: the five inventory values and the CSV hostname are written with every row
+- **Log**: the six inventory values and the CSV hostname are written with every row
   of that host, see *Logging*. A `Hostname` that is not the host entry (IP mode) is
   only kept there as information.
 - Plain `.txt` hosts and `SAVE HOSTS FILE` carry no inventory values: a saved hosts
@@ -120,13 +120,13 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
 Example (`;` delimited, extra columns are ignored):
 
 ```
-Hostname;IP Address;Serial Number;Model;Location;sysLocation;Type;Vendor
-sw-core-01;10.0.0.1;FOC1234A1BC;C9300-48P;Vienna DC1;Rack A3;Switch;Cisco
-sw-core-02;10.0.0.2;FOC1234A1BD;C9300-48P;Vienna DC1;Rack A4;Switch;Cisco
-ap-lobby-01;;FCW2528P5PSV;C9120AXI-E;Graz HQ;Lobby;AP;Cisco
-rtr-edge-01;192.0.2.10;FTX9876B2CD;ISR4331;Linz POP;Rack B1;Router;Cisco
-sw-access-01;10.0.1.1;FOC5678C3DE;C9200L-24P;Vienna DC1;Rack C1;Switch;Cisco
-fw-edge-01;192.0.2.1;JMX2345F6GH;ASA5516;Linz POP;Rack B2;Firewall;Cisco
+Hostname;IP Address;Serial Number;Model;Location;sysLocation;Type;Comment
+sw-core-01;10.0.0.1;FOC1234A1BC;C9300-48P;Vienna DC1;Rack A3;Switch;spare PSU missing
+sw-core-02;10.0.0.2;FOC1234A1BD;C9300-48P;Vienna DC1;Rack A4;Switch;
+ap-lobby-01;;FCW2528P5PSV;C9120AXI-E;Graz HQ;Lobby;AP;
+rtr-edge-01;192.0.2.10;FTX9876B2CD;ISR4331;Linz POP;Rack B1;Router;uplink to ISP
+sw-access-01;10.0.1.1;FOC5678C3DE;C9200L-24P;Vienna DC1;Rack C1;Switch;
+fw-edge-01;192.0.2.1;JMX2345F6GH;ASA5516;Linz POP;Rack B2;Firewall;ASA 5516 - EoL 2027
 ```
 
 Without `-ph` this gives 5 hosts (the IP addresses); `ap-lobby-01` has no IP and is
@@ -400,10 +400,10 @@ Hard-enforced at startup and live via ADV OPTIONS (`-web` only), same bounds.
 Unless `-dl`, every round appends to `eping-log_YYYY-MM-DD_HH:MM:SS.csv` (or `-o FILE`):
 
 ```
-TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTAMP,TBD,IP,INV_HOSTNAME,SERIAL_NUMBER,MODEL,LOCATION,SYSLOCATION,TYPE
+TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTAMP,TBD,IP,INV_HOSTNAME,SERIAL_NUMBER,MODEL,LOCATION,SYSLOCATION,TYPE,INV_COMMENT
 ```
 
-`INV_HOSTNAME` … `TYPE`: the inventory values of a host added from an inventory CSV (see
+`INV_HOSTNAME` … `INV_COMMENT`: the inventory values of a host added from an inventory CSV (see
 *Inventory CSV import*), empty for all other hosts. Logs without these columns (older
 versions) stay readable by epinga.py.
 
@@ -531,7 +531,7 @@ message shows for 3s after. Re-triggering while running shows "already running".
 
 `M` (CLI) / match filter field (web): case-insensitive regex, display only, matched
 against shown name, resolved IP and the inventory fields (CSV hostname, serial
-number, model, location, sysLocation, type). Every host keeps being pinged regardless. Empty
+number, model, location, sysLocation, type, comment). Every host keeps being pinged regardless. Empty
 value turns it off. CLI: replaces the version banner with `MATCH FILTER '<regex>'
 active (N of M hosts shown, all still pinged)`. Invalid regex: error shown, previous
 filter unchanged.
@@ -561,7 +561,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.31
+# epinga.py 2.34
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
@@ -611,7 +611,7 @@ Top bar: total/UP/flapping/DOWN/no-DNS/duplicate-host counts. Toolbar:
 
 | Control | Does |
 |---|---|
-| Filter | text or regex (case-insensitive), hostname + IP + inventory fields (CSV hostname, serial, model, location, sysLocation, type); invalid regex falls back to substring |
+| Filter | text or regex (case-insensitive), hostname + IP + inventory fields (CSV hostname, serial, model, location, sysLocation, type, comment); invalid regex falls back to substring |
 | Show | restrict to one state (flapping independent of UP/DOWN/NO-DNS) |
 | Sort | name / uptime% / avg RTT / changes; click a header, shift+click adds a tie-breaker (①②③ badge), shift+click again flips direction |
 | IP View | toggle primary label hostname↔IP (table + buckets); independent of dedup |
@@ -620,11 +620,12 @@ Top bar: total/UP/flapping/DOWN/no-DNS/duplicate-host counts. Toolbar:
 | Download | saves the report exactly as shown (theme/dedup/sort/filter/collapsed state) as a standalone `.html`, client-side; hidden on `file://` |
 
 **Inventory filters** (logs with inventory columns, see *Inventory CSV import*): to the
-right of the top-bar counters, one drop-down each for Model, Location, sysLocation and
-Type, listing the values found in the log with their host count (`(empty)` for hosts
+right of the top-bar counters, one drop-down each for Model, Location, sysLocation,
+Type and Comment, listing the values found in the log with their host count (`(empty)` for hosts
 without a value). They combine with each other and with Filter/Show and affect the
 Host List only. A column without any value gets no drop-down; serial number and CSV
-hostname are unique per device and searched via Filter instead. A host's detail shows
+hostname are unique per device and searched via Filter instead. The drop-downs are
+narrow; the one in use widens while it has focus and the others move aside. A host's detail shows
 all inventory values, the Host List CSV download adds them as columns.
 
 **Comments**: section above Host List from `#COMMENT#` rows, collapsed by default,
