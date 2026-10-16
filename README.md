@@ -117,6 +117,21 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
 - Plain `.txt` hosts and `SAVE HOSTS FILE` carry no inventory values: a saved hosts
   file lists only the host entries.
 
+Example (`;` delimited, extra columns are ignored):
+
+```
+Hostname;IP Address;Serial Number;Model;Location;sysLocation;Type;Vendor
+sw-core-01;10.0.0.1;FOC1234A1BC;C9300-48P;Vienna DC1;Rack A3;Switch;Cisco
+sw-core-02;10.0.0.2;FOC1234A1BD;C9300-48P;Vienna DC1;Rack A4;Switch;Cisco
+ap-lobby-01;;FCW2528P5PSV;C9120AXI-E;Graz HQ;Lobby;AP;Cisco
+rtr-edge-01;192.0.2.10;FTX9876B2CD;ISR4331;Linz POP;Rack B1;Router;Cisco
+sw-access-01;10.0.1.1;FOC5678C3DE;C9200L-24P;Vienna DC1;Rack C1;Switch;Cisco
+fw-edge-01;192.0.2.1;JMX2345F6GH;ASA5516;Linz POP;Rack B2;Firewall;Cisco
+```
+
+Without `-ph` this gives 5 hosts (the IP addresses); `ap-lobby-01` has no IP and is
+ignored. With `-ph` it gives 6 hosts, named by `Hostname`.
+
 ## CLI mode
 
 Sorted table (IPv4 numerically, then hostnames), 64-column blocks. Green = UP, red =
