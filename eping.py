@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.61'
+VERSION = '3.64'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -155,6 +155,7 @@ import re
 import sys
 import html
 import csv
+import io
 import glob
 import math
 import random
@@ -1066,9 +1067,18 @@ def build_display(active_hosts_list, host_state, sort_mode=0, tz_offset=0,
         out.extend(rows_g)
     return out
 
+def match_host(pattern, name, ip=''):
+    """True if pattern (compiled regex) matches the host name, its IP or any
+    inventory CSV field (hostname, serial, model, location, sysLocation, type)."""
+    if pattern.search(name) or (ip and pattern.search(ip)):
+        return True
+    meta = host_meta.get(name) or (host_meta.get(ip) if ip else None)
+    return bool(meta) and any(v and pattern.search(v) for v in meta)
+
 def apply_match_filter(rows, pattern):
-    """Pure display filter: keep only rows whose display name (rows[i][0]) or
-    resolved/pinged IP (rows[i][8], when present) matches 'pattern' (an already-
+    """Pure display filter: keep only rows whose display name (rows[i][0]),
+    resolved/pinged IP (rows[i][8], when present) or inventory CSV field (see
+    match_host) matches 'pattern' (an already-
     compiled regex). This is applied after build_display(), on the rows about to be
     shown - it never touches active_hosts_list, so every host keeps being pinged on
     every round regardless of what the filter currently hides. Pass pattern=None for
@@ -1076,7 +1086,7 @@ def apply_match_filter(rows, pattern):
     if pattern is None:
         return rows
     return [r for r in rows
-           if pattern.search(r[0]) or (len(r) > 8 and r[8] and pattern.search(r[8]))]
+            if match_host(pattern, r[0], r[8] if len(r) > 8 and r[8] else '')]
 
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF, up_seen=None):
@@ -1146,6 +1156,53 @@ def _cached_all_ips(name, ttl):
         _addr_redundancy_cache[name] = (ips, now + (ttl if ips else min(ttl, DNS_FAIL_TTL)))
     return ips
 
+def draw_wait_box(lines):
+    """Centered green 'PLEASE WAIT' box on the curses screen (same look as the
+    scanning box): first line bold, the rest plain."""
+    rows, cols = screen.getmaxyx()
+    box_w = min(max(len(l) for l in lines) + 8, max(12, cols - 2))
+    box_x = max(0, (cols - box_w) // 2)
+    box_y = max(1, rows // 2 - len(lines) // 2 - 1)
+    screen_output(box_y, box_x, '+' + '-' * (box_w - 2) + '+', 2, 1)
+    for idx, text in enumerate(lines):
+        screen_output(box_y + 1 + idx, box_x,
+                      '|' + text[:box_w - 2].center(box_w - 2) + '|', 2, 1 if idx == 0 else 0)
+    screen_output(box_y + 1 + len(lines), box_x, '+' + '-' * (box_w - 2) + '+', 2, 1)
+
+def run_with_wait_box(lines, work):
+    """Run work() and return its result. With a curses screen a PLEASE WAIT box with
+    an elapsed counter is shown meanwhile (and removed afterwards, nothing is left
+    behind); without one (web gui) a plain line goes to stdout."""
+    scr = globals().get('screen')
+    if scr is None:
+        print(' - '.join(lines), flush=True)
+        return work()
+    box = {}
+    def _run():
+        try:
+            box['v'] = work()
+        except BaseException as e:      # re-raised in the caller below
+            box['e'] = e
+    th = threading.Thread(target=_run, daemon=True)
+    t0 = time.time()
+    th.start()
+    while th.is_alive():
+        try:
+            scr.erase()
+            draw_wait_box(list(lines) + ['%.1f sec' % (time.time() - t0)])
+            scr.refresh()
+        except curses.error:
+            pass
+        th.join(0.2)
+    try:
+        scr.clear()
+        scr.refresh()
+    except curses.error:
+        pass
+    if 'e' in box:
+        raise box['e']
+    return box.get('v')
+
 def apply_prefer_hostname(hosts_list, dns_ttl):
     """[P] toggle: drop raw-IP entries whose address is also covered by a hostname
     entry in the same list. The hostname gets pinged anyway, so pinging the bare IP a
@@ -1154,8 +1211,13 @@ def apply_prefer_hostname(hosts_list, dns_ttl):
     just the one resolve_name() currently has cached. dns_ttl controls how long a
     hostname's resolved addresses are cached for this check - see _cached_all_ips()."""
     hostname_ips = set()
-    for h in hosts_list:
-        if not is_ip_host(h):
+    names = [h for h in hosts_list if not is_ip_host(h)]
+    if len(names) > 1:     # resolve in parallel - serial lookups of unresolvable names are slow
+        with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
+            for ips in ex.map(lambda n: _cached_all_ips(n, dns_ttl), names):
+                hostname_ips.update(ips)
+    else:
+        for h in names:
             hostname_ips.update(_cached_all_ips(h, dns_ttl))
     return [h for h in hosts_list
             if not (is_ip_host(h) and h in hostname_ips)]
@@ -1345,7 +1407,116 @@ def sigint_handler(signal, frame):
     # stopping right away.
     os._exit(0)
 
-def parse_hosts_from_text(text, stats=None):
+# ---- inventory CSV import: hosts + per-device columns carried into the log ----
+LOG_HEADER = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT',
+              'NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP',
+              'INV_HOSTNAME','SERIAL_NUMBER','MODEL','LOCATION','SYSLOCATION','TYPE']
+_CSV_META_COLS = ('hostname', 'serial number', 'model', 'location', 'syslocation', 'type')
+_EMPTY_META    = ('',) * len(_CSV_META_COLS)
+host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..15)
+
+def _inventory_header(line):
+    """(delimiter, lower-cased column names) if line is an inventory CSV header
+    (needs 'IP Address' and 'Hostname'), else (None, None)."""
+    delim = max((';', ',', '\t'), key=line.count)
+    if not line.count(delim):
+        return None, None
+    try:
+        cols = [c.strip().lower() for c in next(csv.reader([line], delimiter=delim))]
+    except (csv.Error, StopIteration):
+        return None, None
+    if 'ip address' in cols and 'hostname' in cols:
+        return delim, cols
+    return None, None
+
+def parse_inventory_csv_header(text):
+    """True-ish if text starts with an inventory CSV header line, else None."""
+    first = next((l for l in (text or '').lstrip('\ufeff').splitlines() if l.strip()), None)
+    return _inventory_header(first)[0] if first is not None else None
+
+def parse_inventory_csv(text, use_names, stats=None):
+    """Parse an inventory CSV (header with 'IP Address' and 'Hostname'; other columns
+    are ignored except Serial Number, Model, Location, sysLocation, Type). One host
+    per row. The host entry is the IP (rows without a valid IP are skipped), or with
+    use_names (PREFER HOSTNAME) the Hostname column - then also rows without an IP;
+    the IP is the fallback when the name is not a valid hostname.
+    The row's values are stored in host_meta for the log. Returns the host list, or
+    None if text is not an inventory CSV."""
+    lines = (text or '').lstrip('\ufeff').splitlines()
+    hi = next((i for i, l in enumerate(lines) if l.strip()), None)
+    if hi is None:
+        return None
+    delim, cols = _inventory_header(lines[hi])
+    if delim is None:
+        return None
+    idx = {c: i for i, c in enumerate(cols)}
+    def cell(row, col):
+        i = idx.get(col)
+        return row[i].strip() if i is not None and i < len(row) else ''
+    hosts, seen, seen_ips, ignored, dups = [], set(), set(), 0, 0
+    try:
+        for row in csv.reader(io.StringIO('\n'.join(lines[hi + 1:]), newline=''), delimiter=delim):
+            if not row:
+                continue
+            ip    = cell(row, 'ip address')
+            name  = cell(row, 'hostname')
+            ip_ok = is_ip_host(ip)
+            if use_names and match_re(name, fqdn_re) and not is_ip_host(name):
+                key = name                 # PREFER HOSTNAME: also rows without an IP
+            elif ip_ok:
+                key = ip
+            else:
+                ignored += 1
+                continue
+            if ip_ok:
+                ip = normalize_ip(ip)
+            if key in seen:
+                dups += 1
+                continue
+            seen.add(key)
+            hosts.append(key)
+            meta = tuple(neutralize_csv_formula(cell(row, c)) for c in _CSV_META_COLS)
+            host_meta[key] = meta
+            if ip_ok and ip not in seen_ips:
+                seen_ips.add(ip)
+                host_meta[ip] = meta     # lookup by pinged address when the key was renamed
+    except csv.Error:
+        pass                              # broken quoting - keep what was read so far
+    if stats is not None:
+        stats['csv'] = True
+        stats['csv_ignored'] = ignored
+        stats['csv_dups'] = dups
+    return hosts
+
+def parse_hosts_from_text(text, stats=None, use_names=False, name=None):
+    """Hosts from host-file text. An inventory CSV (see parse_inventory_csv) is
+    recognised by its header; anything else - and every file named *.txt - is parsed
+    as a plain host list (_parse_plain_hosts). A NUL byte separates concatenated files."""
+    csv_ok = not (name and str(name).lower().endswith('.txt'))
+    out, seen, networks, skipped = [], set(), 0, []
+    csv_stats = {}
+    for seg in (text or '').split('\x00'):
+        sub = {}
+        got = parse_inventory_csv(seg, use_names, sub) if csv_ok else None
+        if got is None:
+            got = _parse_plain_hosts(seg, sub)
+        else:
+            for k in ('csv_ignored', 'csv_dups'):
+                csv_stats[k] = csv_stats.get(k, 0) + sub.get(k, 0)
+            csv_stats['csv'] = True
+        networks += sub.get('networks', 0)
+        skipped.extend(sub.get('skipped', []))
+        for h in got:
+            if h not in seen:
+                seen.add(h)
+                out.append(h)
+    if stats is not None:
+        stats['networks'] = networks
+        stats['skipped']  = skipped
+        stats.update(csv_stats)
+    return out
+
+def _parse_plain_hosts(text, stats=None):
     """Extract hosts from arbitrary text (host file, upload, ADD FILE).
 
     Understands IPv4 addresses, CIDR networks (expanded to every address in the
@@ -1412,7 +1583,7 @@ def extract_opt_lines(text):
     return tokens
 
 
-def load_hosts_file(path):
+def load_hosts_file(path, use_names=False):
     """Read a host file from disk. Returns (hosts, error_message)."""
     path = os.path.expanduser((path or '').strip())
     if not path:
@@ -1431,7 +1602,7 @@ def load_hosts_file(path):
     if len(text) > WEB_MAX_UPLOAD:
         return [], 'file too large: ' + path
     stats = {}
-    hosts = parse_hosts_from_text(text, stats)
+    hosts = parse_hosts_from_text(text, stats, use_names, path)
     if stats.get('skipped'):
         return [], ('mask out of range (/%d../%d): %s'
                     % (CIDR_MIN_MASK, CIDR_MAX_MASK, stats['skipped'][0]))
@@ -1623,7 +1794,9 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
         if writer is not None:
             writer.writerow([timestamp, hostname, old_state.replace(' ', ''),
                              new_state.replace(' ', ''), rtt, changes, change_ts, tbd,
-                             resolved_ip])
+                             resolved_ip]
+                            + list(host_meta.get(hostname) or host_meta.get(resolved_ip)
+                                   or _EMPTY_META))
     if log_fh is not None:
         log_fh.close()
 
@@ -1690,8 +1863,7 @@ def reset_logfile(logfile_file_name):
     Same header as the initial file creation at startup. Returns True on success,
     False if the file could not be (re)written (e.g. permission denied).
     """
-    header = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT',
-              'NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP']
+    header = LOG_HEADER
     try:
         with open(logfile_file_name, 'w', encoding='UTF8') as f:
             writer = csv.writer(f)
@@ -2302,7 +2474,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   <div id="addFromServerModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide xwide">
       <h3>ADD FROM SERVER</h3>
-      <p>Pick one or more `.txt` files in this eping.py's working directory to add their hosts.</p>
+      <p>Pick one or more `.txt` files or inventory `.csv` files in this eping.py's working directory to add their hosts.</p>
       <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
           <input type="checkbox" id="addFromServerSelectAll"> select all
@@ -3431,7 +3603,7 @@ function addFromServerRenderList(){
   all.checked = false;
   wireFileSortHead(document.getElementById('addFromServerHead'), addFromServerSort, addFromServerRenderList);
   if(!visible.length){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no .txt files found</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no .txt/.csv files found</td></tr>';
     all.disabled = true;
     addFromServerUpdateControls();
     return;
@@ -3474,7 +3646,8 @@ function openAddFromServer(){
   addFromServerModal.style.display = 'flex';
   fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
     addFromServerFiles = (j.files || []).filter(function(f){
-      return f.name.split('.').pop().toLowerCase() === 'txt';
+      var ext = f.name.split('.').pop().toLowerCase();
+      return ext === 'txt' || ext === 'csv';
     });
     addFromServerRenderList();
   }).catch(function(){
@@ -4749,16 +4922,22 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 return
             added, errors, texts = [], [], []
             for name in names:
-                if not safe_cwd_filename(name, ('.txt',)) or not os.path.isfile(name):
+                if not safe_cwd_filename(name, ('.txt', '.csv')) or not os.path.isfile(name):
                     errors.append(name)
                     continue
                 try:
                     with open(name, encoding='utf-8', errors='replace') as fh:
-                        texts.append(fh.read())
-                    added.append(name)
+                        text = fh.read(WEB_MAX_UPLOAD + 1)
                 except OSError:
                     errors.append(name)
-            if texts and not self._queue_command(('upload', '\n'.join(texts))):
+                    continue
+                # a *.csv must be an inventory CSV (not e.g. an eping logfile)
+                if name.lower().endswith('.csv') and parse_inventory_csv_header(text) is None:
+                    errors.append(name)
+                    continue
+                texts.append(text)
+                added.append(name)
+            if texts and not self._queue_command(('upload', '\n\x00\n'.join(texts))):
                 return
             self._respond(200, 'application/json; charset=utf-8',
                           json.dumps({'ok': not errors, 'added': added, 'errors': errors}))
@@ -5335,7 +5514,13 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         addr_mode = 3
     elif args.prefer_hostname:
         addr_mode = 1
-    active_hosts_list = apply_addr_mode(active_hosts_list)
+    if addr_mode == 1:
+        _n_names = sum(1 for h in active_hosts_list if not is_ip_host(h))
+        active_hosts_list = run_with_wait_box(
+            ['PLEASE WAIT', 'resolving ' + str(_n_names) + ' hostnames'],
+            lambda: apply_addr_mode(active_hosts_list))
+    else:
+        active_hosts_list = apply_addr_mode(active_hosts_list)
 
     while True:
         # --- [G] background PTR lookup: apply results once the thread is done ---
@@ -5479,7 +5664,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                        host_spec_cli('DEL', value), tz_offset)
             elif cmd == 'upload':
                 up_stats  = {}
-                new_hosts = parse_hosts_from_text(value, up_stats)
+                new_hosts = parse_hosts_from_text(value, up_stats, addr_mode == 1)
                 if not new_hosts and up_stats.get('skipped'):
                     message = ('upload: mask must be /%d../%d: %s'
                                % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0]))
@@ -5497,6 +5682,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message += (', %d network(s) expanded' % up_stats['networks'])
                         if up_stats.get('skipped'):
                             message += (', %d ignored (mask)' % len(up_stats['skipped']))
+                        if up_stats.get('csv_ignored'):
+                            message += (', %d csv row(s) ignored (no valid IP)' % up_stats['csv_ignored'])
+                        if up_stats.get('csv_dups'):
+                            message += (', %d csv row(s) duplicate' % up_stats['csv_dups'])
                         if added:
                             pending_add_hosts |= (set(new_hosts) - before_active)
                             message += ' - please wait, pinging ...'
@@ -5510,9 +5699,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                                             sort_mode, tz_offset, flap_window)]
                 if match_filter_re is not None:
                     shown_hosts = [h for h in shown_hosts
-                                  if match_filter_re.search(h)
-                                  or (h in host_state and len(host_state[h]) > 8 and host_state[h][8]
-                                      and match_filter_re.search(host_state[h][8]))]
+                                  if match_host(match_filter_re, h,
+                                                host_state[h][8] if h in host_state and len(host_state[h]) > 8 else '')]
                 _keep = set(shown_hosts)   # built once - a set() per element made this O(n^2)
                 dropped = [h for h in original_hosts_list if h not in _keep]
                 prune_dropped_hosts(dropped, host_state, up_seen, down_streak)
@@ -5687,6 +5875,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 active_hosts_list   = []
                 original_hosts_list[:] = []
                 host_state.clear()
+                host_meta.clear()
                 up_seen.clear()
                 down_streak.clear()
                 _dns_cache.clear()
@@ -6238,13 +6427,18 @@ if __name__=='__main__':
             except Exception:
                 error_handler('ERROR: Unable to open hosts file: ' + str(hostfile_path))
             file_stats = {}
-            for entry in parse_hosts_from_text(hostfile_text, file_stats):
+            for entry in parse_hosts_from_text(hostfile_text, file_stats, args.prefer_hostname, hostfile_path):
                 if is_ip_host(entry):
                     hosts_list_ipv4.append(entry)
                 else:
                     hosts_list_fqdn.append(entry)
             if file_stats.get('skipped'):
                 hostfile_skipped.extend(hostfile_path + ': ' + s for s in file_stats['skipped'])
+            if file_stats.get('csv_ignored') or file_stats.get('csv_dups'):
+                print('\n INFO: ' + str(hostfile_path) + ': csv rows ignored - '
+                      + str(file_stats.get('csv_ignored', 0)) + ' without valid IP, '
+                      + str(file_stats.get('csv_dups', 0)) + ' duplicate\n')
+                time.sleep(1)
         if hostfile_skipped:
             print('\n WARNING: network(s) ignored, mask must be /'
                   + str(CIDR_MIN_MASK) + ' .. /' + str(CIDR_MAX_MASK) + ': '
@@ -6284,7 +6478,7 @@ if __name__=='__main__':
         logfile_file_name = args.logfile
 
     if args.disable_logging:
-        header = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT','NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP']
+        header = LOG_HEADER
         try:
             with open(logfile_file_name, 'w', encoding='UTF8', newline='') as f:
                 writer = csv.writer(f)
@@ -6946,7 +7140,7 @@ if __name__=='__main__':
 
         elif bcmd == 'upload':
             up_stats  = {}
-            new_hosts = parse_hosts_from_text(bval, up_stats)
+            new_hosts = parse_hosts_from_text(bval, up_stats, prefer_hostname)
             if not new_hosts and up_stats.get('skipped'):
                 err_text = ('upload: mask must be /%d..%d: %s'
                            % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0]))
@@ -6991,6 +7185,7 @@ if __name__=='__main__':
             active_hosts_list[:]   = []
             original_hosts_list[:] = []
             host_state.clear()
+            host_meta.clear()
             up_seen.clear()
             down_streak.clear()
             _dns_cache.clear()
@@ -7282,8 +7477,11 @@ if __name__=='__main__':
         ip_only_map, _ = apply_ip_only_on(original_hosts_list, active_hosts_list,
                                           host_state, up_seen, down_streak, int(args.dns_ttl))
         ip_only_mode = True
-    active_hosts_list = (apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
-                         if prefer_hostname else active_hosts_list)
+    if prefer_hostname:
+        _n_names = sum(1 for h in active_hosts_list if not is_ip_host(h))
+        active_hosts_list = run_with_wait_box(
+            ['PLEASE WAIT', 'resolving ' + str(_n_names) + ' hostnames'],
+            lambda: apply_prefer_hostname(active_hosts_list, int(args.dns_ttl)))
 
     # --web_view/--web_view_control: browser view next to the terminal, read only
     # or (with -wvc) also controllable. The curses loop stays the only driver -
@@ -7523,18 +7721,9 @@ if __name__=='__main__':
 
     def scan_box(elapsed, host_count):
         """Full screen 'please wait' box - shown whenever the screen was cleared."""
-        rows, cols = screen.getmaxyx()
-        lines = ['PLEASE WAIT',
-                 'scanning ' + str(host_count) + ' hosts',
-                 '%.1f sec' % elapsed]
-        box_w = min(max(len(l) for l in lines) + 8, max(12, cols - 2))
-        box_x = max(0, (cols - box_w) // 2)
-        box_y = max(1, rows // 2 - len(lines) // 2 - 1)
-        screen_output(box_y, box_x, '+' + '-' * (box_w - 2) + '+', 2, 1)
-        for idx, text in enumerate(lines):
-            screen_output(box_y + 1 + idx, box_x,
-                          '|' + text.center(box_w - 2) + '|', 2, 1 if idx == 0 else 0)
-        screen_output(box_y + 1 + len(lines), box_x, '+' + '-' * (box_w - 2) + '+', 2, 1)
+        draw_wait_box(['PLEASE WAIT',
+                       'scanning ' + str(host_count) + ' hosts',
+                       '%.1f sec' % elapsed])
 
     def scan_progress(elapsed):
         """Called while fping runs. Redraws, so the UI stays alive during a scan.
@@ -7675,6 +7864,7 @@ if __name__=='__main__':
             active_hosts_list   = []
             original_hosts_list = []
             host_state.clear()
+            host_meta.clear()
             up_seen.clear()
             down_streak.clear()
             _dns_cache.clear()
@@ -7769,7 +7959,7 @@ if __name__=='__main__':
                     write_log_info(args.disable_logging, logfile_file_name, '-gn', tz_offset)
         elif cmd == 'MATCH_FILTER':
             value = input_dialog(' DISPLAY FILTER ',
-                                 ' regex to match hostname/IP, case-insensitive - empty to disable:')
+                                 ' regex to match hostname/IP/inventory fields, case-insensitive - empty to disable:')
             if value:
                 try:
                     new_re = re.compile(value, re.IGNORECASE)
@@ -7821,7 +8011,7 @@ if __name__=='__main__':
         elif cmd == 'ADD_FILE':
             value = input_dialog(' ADD HOSTS FROM FILE ', ' Enter path of the host file:')
             if value:
-                new_hosts, err = load_hosts_file(value)
+                new_hosts, err = load_hosts_file(value, prefer_hostname)
                 if err:
                     notice(err.upper(), 3)
                 else:

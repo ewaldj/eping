@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.28'
+VERSION = '2.31'
 version = VERSION   # legacy alias
 
 import re
@@ -155,7 +155,7 @@ class HostStats:
     __slots__ = ('first_ts', 'last_ts', 'current_state', 'prev_ts',
                  'rtt_min', 'rtt_max', 'rtt_sum', 'rtt_cnt',
                  'time_up', 'time_down', 'time_nodns',
-                 'changes', 'no_of_changes', 'ip')
+                 'changes', 'no_of_changes', 'ip', 'meta')
 
     def __init__(self, ts, state, ip=''):
         self.first_ts      = ts
@@ -172,6 +172,7 @@ class HostStats:
         self.changes       = []          # [(ts, prev_state, new_state)]
         self.no_of_changes = 0
         self.ip             = ip or ''   # last known pinged IP (from the CSV's IP column)
+        self.meta           = None       # dict of inventory columns (see META_LOG_COLS), created on first value
 
     # ── feed one CSV row ──────────────────────────────────────────────────────
     def feed(self, ts, prev_state, cur_state, rtt_raw, no_of_changes_raw, ip_raw=''):
@@ -248,6 +249,10 @@ class HostStats:
         return len(self.changes)
 
 
+# inventory columns eping.py 3.62+ appends to each log row: report key -> log column
+META_LOG_COLS = (('inv_name', 'INV_HOSTNAME'), ('serial', 'SERIAL_NUMBER'), ('model', 'MODEL'),
+                 ('location', 'LOCATION'), ('sysloc', 'SYSLOCATION'), ('type', 'TYPE'))
+
 # ── stream-parse the CSV ──────────────────────────────────────────────────────
 def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False):
     try:
@@ -278,6 +283,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
                     'RTT', 'NO_OF_CHANGES'}
         if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
             die(f'"{filename}" does not look like an eping logfile (wrong header).')
+
+        has_meta = 'INV_HOSTNAME' in reader.fieldnames   # logs from eping.py 3.62+
 
         def field(row, key):
             # a truncated last line (log still being written) yields None for the
@@ -333,6 +340,14 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
                 hosts[hostname] = HostStats(ts, prev_state or cur_state, ip_raw)
                 host_order.append(hostname)
             hosts[hostname].feed(ts, prev_state, cur_state, rtt_raw, noc, ip_raw)
+            if has_meta:
+                hs = hosts[hostname]
+                for key, colname in META_LOG_COLS:
+                    v = field(row, colname)
+                    if v:
+                        if hs.meta is None:
+                            hs.meta = {}
+                        hs.meta[key] = v
 
             if progress and rows_read % 5000 == 0:
                 progress.update(tracker.bytes_read)
@@ -550,6 +565,12 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
             'rtt_cnt':       s.rtt_cnt,
             'changes':       s.real_changes,
             'ip':            s.ip,
+            'inv_name':      (s.meta or {}).get('inv_name', ''),
+            'serial':        (s.meta or {}).get('serial', ''),
+            'model':         (s.meta or {}).get('model', ''),
+            'location':      (s.meta or {}).get('location', ''),
+            'sysloc':        (s.meta or {}).get('sysloc', ''),
+            'type':          (s.meta or {}).get('type', ''),
             'time_up':       fmt_td(s.time_up),
             'time_down':     fmt_td(s.time_down + s.time_nodns),
             'span':          fmt_td(s.total_span),
@@ -705,6 +726,16 @@ a {{ color: var(--cyan); text-decoration: none; }}
                    color: var(--green); letter-spacing: .3px; }}
 .card.dup .info-sub {{ font-weight: 400; }}
 .cards {{ align-items: center; }}
+/* inventory drop-downs: the free space right of the stat cards */
+.meta-filters {{ display: flex; gap: 12px; flex: 1 1 320px; flex-wrap: wrap; align-items: center;
+                 margin-left: 4px; padding-left: 16px; border-left: 1px solid var(--border); }}
+.meta-filters:empty {{ display: none; }}
+.mf {{ display: flex; flex-direction: column; gap: 3px; flex: 1 1 150px; min-width: 150px; max-width: 280px; }}
+.mf label {{ font-size: 11px; color: var(--dim); }}
+.mf select {{ background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+              color: var(--text); font-family: var(--font); font-size: 12px; padding: 6px 10px;
+              outline: none; width: 100%; }}
+.mf select:focus {{ border-color: var(--cyan); }}
 .side-widget {{ margin-left: auto; width: 190px; display: flex; justify-content: center; }}
 .cat-link {{ display: block; line-height: 0; }}
 .cat {{ height: 90px; width: auto; display: block; filter: drop-shadow(0 4px 10px rgba(0,0,0,.25)); }}
@@ -899,6 +930,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
   <div class="card down" id="cardDown"><div class="num">{n_down}</div> <div class="lbl">ALWAYS DOWN</div></div>
   <div class="card nodns" id="cardNodns"><div class="num">{n_nodns}</div><div class="lbl">NO-DNS</div></div>
   <div class="card dup" id="cardDup"><div class="num">{n_dup}</div><div class="lbl">DUPLICATES</div></div>
+  <div class="meta-filters" id="metaFilters"></div>
   <div class="side-widget">
   <a href="https://jeitler.cc/nelly/" class="cat-link" target="_blank" rel="noopener" aria-label="More about Nelly">
   <svg class="cat" viewBox="0 0 320 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cute cartoon cat">
@@ -952,7 +984,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
 
 <div class="toolbar">
   <label>Filter:</label>
-  <input id="search" type="text" placeholder="hostname/IP or /regex/ …" title="plain text or a regex (case-insensitive), matched against hostname and IP" oninput="applyFilter()">
+  <input id="search" type="text" placeholder="hostname/IP or /regex/ …" title="plain text or a regex (case-insensitive), matched against hostname, IP and the inventory fields (inventory hostname, serial, model, location, sysLocation, type)" oninput="applyFilter()">
   <label>Show:</label>
   <select id="stateFilter" onchange="applyFilter()">
     <option value="">ALL HOSTS</option>
@@ -978,6 +1010,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <option value="ip">Prefer IP address</option>
     <option value="name">Prefer hostname</option>
   </select>
+  <button id="btnResetFilters" onclick="resetFilters()" title="Clear the text filter, the Show selection and all inventory drop-downs">Reset</button>
   <span class="sep" id="sepDownload"></span>
   <button id="btnDownloadHtml" onclick="downloadHtml()" title="Save this report as a standalone .html file">Download</button>
   <div class="side-widget">
@@ -1263,6 +1296,8 @@ function buildDetail(h) {{
       <h4>STATISTICS</h4>
       <div class="stat-list">
         <div class="kv"><span class="k">Ip</span><span class="v">${{escHtml(h.ip || h.name)}}</span></div>
+        ${{[['inv_name', 'Inventory name'], ['serial', 'Serial'], ['model', 'Model'], ['location', 'Location'], ['sysloc', 'sysLocation'], ['type', 'Type']]
+            .filter(([k]) => h[k]).map(([k, l]) => `<div class="kv"><span class="k">${{l}}</span><span class="v">${{escHtml(h[k])}}</span></div>`).join('')}}
         <div class="kv"><span class="k">Uptime</span><span class="v">${{escHtml(h.time_up)}}</span></div>
         <div class="kv"><span class="k">Downtime</span><span class="v">${{escHtml(h.time_down)}}</span></div>
         <div class="kv"><span class="k">Total span</span><span class="v">${{escHtml(h.span)}}</span></div>
@@ -1453,6 +1488,7 @@ function onDedupSelectChange() {{
 // already (CSS/JS/data all inlined), so a plain Blob download of outerHTML
 // reproduces it exactly, same filename convention as --html/epinga.py itself
 function downloadHtml() {{
+  syncMetaSelected();
   const blob = new Blob(['<!DOCTYPE html>\\n' + document.documentElement.outerHTML], {{type: 'text/html'}});
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
@@ -1487,6 +1523,61 @@ function compareOneColumn(col, asc, a, b) {{
 // the Host List section's Download / Copy buttons (bucket buttons instead
 // take their own bucket's list directly, since those are fixed subsets)
 let CURRENT_FILTERED = [];
+
+// inventory columns (eping.py 3.62+ logs): one drop-down per column that has any
+// value in this log, listing its distinct values (with host counts)
+const NONE_VAL = '\u0001none';
+const META_SEARCH = ['inv_name', 'serial', 'model', 'location', 'sysloc', 'type'];
+const META_FILTERS = [
+  {{key: 'model',    label: 'Model'}},
+  {{key: 'location', label: 'Location'}},
+  {{key: 'sysloc',   label: 'sysLocation'}},
+  {{key: 'type',     label: 'Type'}},
+].filter(f => RAW.hosts.some(h => h[f.key]));
+function initMetaFilters() {{
+  const box = document.getElementById('metaFilters');
+  // a saved copy of this report (Download) keeps its selection as `selected` options
+  const prev = {{}};
+  META_FILTERS.forEach(f => {{ const old = document.getElementById('mf_' + f.key); if (old) prev[f.key] = old.value; }});
+  box.innerHTML = '';
+  META_FILTERS.forEach(f => {{
+    const counts = new Map();
+    let nNone = 0;
+    RAW.hosts.forEach(h => {{ if (h[f.key]) counts.set(h[f.key], (counts.get(h[f.key]) || 0) + 1); else nNone++; }});
+    const grp = document.createElement('div');
+    grp.className = 'mf';
+    const lab = document.createElement('label');
+    lab.textContent = f.label;
+    lab.htmlFor = 'mf_' + f.key;
+    const sel = document.createElement('select');
+    sel.id = 'mf_' + f.key;
+    sel.title = 'show only hosts with this ' + f.label;
+    sel.onchange = () => applyFilter();
+    const add = (val, text) => {{ const o = document.createElement('option'); o.value = val; o.textContent = text; sel.appendChild(o); }};
+    add('', 'ALL');
+    [...counts.keys()].sort((a, b) => a.localeCompare(b, undefined, {{numeric: true}}))
+      .forEach(v => add(v, v + '  (' + counts.get(v) + ')'));
+    if (nNone) add(NONE_VAL, '(empty)  (' + nNone + ')');
+    if (prev[f.key] !== undefined && [...sel.options].some(o => o.value === prev[f.key])) sel.value = prev[f.key];
+    grp.appendChild(lab);
+    grp.appendChild(sel);
+    box.appendChild(grp);
+  }});
+}}
+// Reset: text filter, Show selection and every inventory drop-down back to 'all'
+// (sort order, IP View and deduplication are display modes, not filters - left alone)
+function resetFilters() {{
+  document.getElementById('search').value = '';
+  document.getElementById('stateFilter').value = '';
+  META_FILTERS.forEach(f => {{ document.getElementById('mf_' + f.key).value = ''; }});
+  applyFilter();
+}}
+function syncMetaSelected() {{
+  META_FILTERS.forEach(f => {{
+    const sel = document.getElementById('mf_' + f.key);
+    if (sel) [...sel.options].forEach(o => o.toggleAttribute('selected', o.value === sel.value));
+  }});
+}}
 function applyFilter() {{
   const qRaw  = document.getElementById('search').value;
   const state = document.getElementById('stateFilter').value;
@@ -1501,12 +1592,17 @@ function applyFilter() {{
     catch (e) {{ qInvalid = true; }}
   }}
   searchEl.classList.toggle('invalid', qInvalid);
+  const metaSel = META_FILTERS.map(f => [f.key, document.getElementById('mf_' + f.key).value]).filter(x => x[1] !== '');
   let filtered = RAW.hosts.filter(h => {{
+    for (const [k, v] of metaSel) {{
+      if (v === NONE_VAL ? !!h[k] : h[k] !== v) return false;
+    }}
     if (qRaw) {{
+      const fields = [h.name, h.ip, ...META_SEARCH.map(k => h[k])].filter(Boolean);
       if (qInvalid) {{
         const q = qRaw.toLowerCase();
-        if (!h.name.toLowerCase().includes(q) && !(h.ip && h.ip.toLowerCase().includes(q))) return false;
-      }} else if (!qRe.test(h.name) && !(h.ip && qRe.test(h.ip))) {{
+        if (!fields.some(f => f.toLowerCase().includes(q))) return false;
+      }} else if (!fields.some(f => qRe.test(f))) {{
         return false;
       }}
     }}
@@ -1576,6 +1672,10 @@ function csvField(v) {{
 function downloadHostListCsv() {{
   const cols = ['name', 'ip', 'state', 'uptime', 'rtt_avg', 'rtt_min', 'rtt_max', 'changes'];
   const header = ['HOST', 'IP', 'STATE', 'UPTIME_PCT', 'AVG_RTT', 'MIN_RTT', 'MAX_RTT', 'CHANGES'];
+  if (META_FILTERS.length || RAW.hosts.some(h => h.serial || h.inv_name)) {{   // inventory columns, if the log has them
+    cols.push(...META_SEARCH);
+    header.push('INV_HOSTNAME', 'SERIAL_NUMBER', 'MODEL', 'LOCATION', 'SYSLOCATION', 'TYPE');
+  }}
   const lines  = [header.join(',')];
   CURRENT_FILTERED.forEach(h => {{
     lines.push(cols.map(c => csvField(h[c])).join(','));
@@ -1758,6 +1858,8 @@ const defaultSorted = [...RAW.hosts].sort((a, b) => {{
 CURRENT_FILTERED = defaultSorted;
 document.getElementById('hostlistCount').textContent = defaultSorted.length;
 renderTable(defaultSorted);
+initMetaFilters();
+if (META_FILTERS.some(f => document.getElementById('mf_' + f.key).value !== '')) applyFilter();
 renderBuckets();
 updateCards();
 // Download saves this DOM as a file - pointless (and confusing) when the report
