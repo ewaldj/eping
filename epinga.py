@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.31'
+VERSION = '2.34'
 version = VERSION   # legacy alias
 
 import re
@@ -251,7 +251,8 @@ class HostStats:
 
 # inventory columns eping.py 3.62+ appends to each log row: report key -> log column
 META_LOG_COLS = (('inv_name', 'INV_HOSTNAME'), ('serial', 'SERIAL_NUMBER'), ('model', 'MODEL'),
-                 ('location', 'LOCATION'), ('sysloc', 'SYSLOCATION'), ('type', 'TYPE'))
+                 ('location', 'LOCATION'), ('sysloc', 'SYSLOCATION'), ('type', 'TYPE'),
+                 ('comment', 'INV_COMMENT'))
 
 # ── stream-parse the CSV ──────────────────────────────────────────────────────
 def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False):
@@ -571,6 +572,7 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
             'location':      (s.meta or {}).get('location', ''),
             'sysloc':        (s.meta or {}).get('sysloc', ''),
             'type':          (s.meta or {}).get('type', ''),
+            'comment':       (s.meta or {}).get('comment', ''),
             'time_up':       fmt_td(s.time_up),
             'time_down':     fmt_td(s.time_down + s.time_nodns),
             'span':          fmt_td(s.total_span),
@@ -730,11 +732,13 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .meta-filters {{ display: flex; gap: 12px; flex: 1 1 320px; flex-wrap: wrap; align-items: center;
                  margin-left: 4px; padding-left: 16px; border-left: 1px solid var(--border); }}
 .meta-filters:empty {{ display: none; }}
-.mf {{ display: flex; flex-direction: column; gap: 3px; flex: 1 1 150px; min-width: 150px; max-width: 280px; }}
+.mf {{ display: flex; flex-direction: column; gap: 3px; flex: 0 0 104px; width: 104px; }}
 .mf label {{ font-size: 11px; color: var(--dim); }}
 .mf select {{ background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
               color: var(--text); font-family: var(--font); font-size: 12px; padding: 6px 10px;
-              outline: none; width: 100%; }}
+              outline: none; width: 100%; text-overflow: ellipsis; }}
+/* narrow until used: grows in the flow while focused, neighbours move aside */
+.mf:focus-within {{ flex-basis: 200px; width: 200px; max-width: 100%; }}
 .mf select:focus {{ border-color: var(--cyan); }}
 .side-widget {{ margin-left: auto; width: 190px; display: flex; justify-content: center; }}
 .cat-link {{ display: block; line-height: 0; }}
@@ -1296,7 +1300,7 @@ function buildDetail(h) {{
       <h4>STATISTICS</h4>
       <div class="stat-list">
         <div class="kv"><span class="k">Ip</span><span class="v">${{escHtml(h.ip || h.name)}}</span></div>
-        ${{[['inv_name', 'Inventory name'], ['serial', 'Serial'], ['model', 'Model'], ['location', 'Location'], ['sysloc', 'sysLocation'], ['type', 'Type']]
+        ${{[['inv_name', 'Name'], ['serial', 'Serial'], ['model', 'Model'], ['location', 'Location'], ['sysloc', 'sysLocation'], ['type', 'Type'], ['comment', 'Comment']]
             .filter(([k]) => h[k]).map(([k, l]) => `<div class="kv"><span class="k">${{l}}</span><span class="v">${{escHtml(h[k])}}</span></div>`).join('')}}
         <div class="kv"><span class="k">Uptime</span><span class="v">${{escHtml(h.time_up)}}</span></div>
         <div class="kv"><span class="k">Downtime</span><span class="v">${{escHtml(h.time_down)}}</span></div>
@@ -1527,12 +1531,13 @@ let CURRENT_FILTERED = [];
 // inventory columns (eping.py 3.62+ logs): one drop-down per column that has any
 // value in this log, listing its distinct values (with host counts)
 const NONE_VAL = '\u0001none';
-const META_SEARCH = ['inv_name', 'serial', 'model', 'location', 'sysloc', 'type'];
+const META_SEARCH = ['inv_name', 'serial', 'model', 'location', 'sysloc', 'type', 'comment'];
 const META_FILTERS = [
   {{key: 'model',    label: 'Model'}},
   {{key: 'location', label: 'Location'}},
   {{key: 'sysloc',   label: 'sysLocation'}},
   {{key: 'type',     label: 'Type'}},
+  {{key: 'comment',  label: 'Comment'}},
 ].filter(f => RAW.hosts.some(h => h[f.key]));
 function initMetaFilters() {{
   const box = document.getElementById('metaFilters');
@@ -1674,7 +1679,7 @@ function downloadHostListCsv() {{
   const header = ['HOST', 'IP', 'STATE', 'UPTIME_PCT', 'AVG_RTT', 'MIN_RTT', 'MAX_RTT', 'CHANGES'];
   if (META_FILTERS.length || RAW.hosts.some(h => h.serial || h.inv_name)) {{   // inventory columns, if the log has them
     cols.push(...META_SEARCH);
-    header.push('INV_HOSTNAME', 'SERIAL_NUMBER', 'MODEL', 'LOCATION', 'SYSLOCATION', 'TYPE');
+    header.push('INV_HOSTNAME', 'SERIAL_NUMBER', 'MODEL', 'LOCATION', 'SYSLOCATION', 'TYPE', 'INV_COMMENT');
   }}
   const lines  = [header.join(',')];
   CURRENT_FILTERED.forEach(h => {{

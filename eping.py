@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.64'
+VERSION = '3.65'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1069,7 +1069,7 @@ def build_display(active_hosts_list, host_state, sort_mode=0, tz_offset=0,
 
 def match_host(pattern, name, ip=''):
     """True if pattern (compiled regex) matches the host name, its IP or any
-    inventory CSV field (hostname, serial, model, location, sysLocation, type)."""
+    inventory CSV field (hostname, serial, model, location, sysLocation, type, comment)."""
     if pattern.search(name) or (ip and pattern.search(ip)):
         return True
     meta = host_meta.get(name) or (host_meta.get(ip) if ip else None)
@@ -1410,10 +1410,10 @@ def sigint_handler(signal, frame):
 # ---- inventory CSV import: hosts + per-device columns carried into the log ----
 LOG_HEADER = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT',
               'NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP',
-              'INV_HOSTNAME','SERIAL_NUMBER','MODEL','LOCATION','SYSLOCATION','TYPE']
-_CSV_META_COLS = ('hostname', 'serial number', 'model', 'location', 'syslocation', 'type')
+              'INV_HOSTNAME','SERIAL_NUMBER','MODEL','LOCATION','SYSLOCATION','TYPE','INV_COMMENT']
+_CSV_META_COLS = ('hostname', 'serial number', 'model', 'location', 'syslocation', 'type', 'comment')
 _EMPTY_META    = ('',) * len(_CSV_META_COLS)
-host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..15)
+host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..16)
 
 def _inventory_header(line):
     """(delimiter, lower-cased column names) if line is an inventory CSV header
@@ -1436,7 +1436,7 @@ def parse_inventory_csv_header(text):
 
 def parse_inventory_csv(text, use_names, stats=None):
     """Parse an inventory CSV (header with 'IP Address' and 'Hostname'; other columns
-    are ignored except Serial Number, Model, Location, sysLocation, Type). One host
+    are ignored except Serial Number, Model, Location, sysLocation, Type, Comment). One host
     per row. The host entry is the IP (rows without a valid IP are skipped), or with
     use_names (PREFER HOSTNAME) the Hostname column - then also rows without an IP;
     the IP is the fallback when the name is not a valid hostname.
