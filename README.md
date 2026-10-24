@@ -1,4 +1,4 @@
-# eping.py 3.69
+# eping.py 3.70
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -20,6 +20,19 @@ Installs/updates `eping.py`, `epinga.py`, `esplit.py`:
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"
 ```
+
+## Windows
+
+Portable Windows version (web GUI only, no installation): download and unpack
+[`eping-windows_v3.70.zip`](https://github.com/ewaldj/eping/blob/main/Windows_Version/eping-windows_v3.70.zip)
+([folder](https://github.com/ewaldj/eping/tree/main/Windows_Version/)), then start `eping.exe`.
+
+- Contains `eping.exe` (small launcher window: web port, Start / Stop / Restart, open web GUI),
+  `eping.py`, `epinga.py`, `fping.exe` + `cygwin1.dll` (fping for Windows) and an embedded Python.
+- The web GUI opens in the browser (default `http://127.0.0.1:8080`); a port already in use is reported
+  and can be changed in the launcher window.
+- No terminal (curses) mode and no `-wv`/`-wvc` on Windows; log file names use `-` instead of `:`.
+- Extra options: put them in `eping-args.txt` next to `eping.exe`. Details: `README-WINDOWS.txt` in the zip.
 
 ## Quick start
 
