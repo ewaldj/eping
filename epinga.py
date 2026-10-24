@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.34'
+VERSION = '2.35'
 version = VERSION   # legacy alias
 
 import re
@@ -744,7 +744,7 @@ a {{ color: var(--cyan); text-decoration: none; }}
 .cat-link {{ display: block; line-height: 0; }}
 .cat {{ height: 90px; width: auto; display: block; filter: drop-shadow(0 4px 10px rgba(0,0,0,.25)); }}
 .cat .tail {{ transform-origin: 152px 300px; animation: wag 2.6s ease-in-out infinite; }}
-.cat .lid  {{ transform-origin: center; animation: blink 5s infinite; }}
+.cat .lid  {{ transform: scaleY(0); transform-origin: center; animation: blink 5s infinite; }}
 @keyframes wag {{ 0%,100%{{ transform: rotate(0deg); }} 50%{{ transform: rotate(-11deg); }} }}
 @keyframes blink {{ 0%,94%,100%{{ transform: scaleY(0); }} 96%,98%{{ transform: scaleY(1); }} }}
 @media (prefers-reduced-motion: reduce) {{ .cat .tail, .cat .lid {{ animation: none; }} }}
@@ -937,7 +937,8 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
   <div class="meta-filters" id="metaFilters"></div>
   <div class="side-widget">
   <a href="https://jeitler.cc/nelly/" class="cat-link" target="_blank" rel="noopener" aria-label="More about Nelly">
-  <svg class="cat" viewBox="0 0 320 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cute cartoon cat">
+  <svg class="cat" viewBox="0 0 320 340" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nelly, a cute cartoon cat">
+    <title>Nelly</title>
     <g class="tail">
       <path d="M152 300 C 220 312, 268 286, 262 236 C 259 208, 232 200, 222 220 C 214 236, 232 244, 240 232"
             pathLength="100" fill="none" stroke="#fdfaf6" stroke-width="17" stroke-linecap="round"/>
@@ -979,6 +980,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <path d="M152 176 L 168 176 L 160 186 Z" fill="#ff9aa8"/>
     <path d="M160 186 C 160 196, 150 198, 145 192 M160 186 C 160 196, 170 198, 175 192"
           fill="none" stroke="#3f3733" stroke-width="3" stroke-linecap="round"/>
+    <ellipse cx="143.3" cy="183.5" rx="4.2" ry="3.6" fill="#f0a049"/>
     <path d="M96 166 L 60 158 M96 176 L 58 178 M96 186 L 62 196" stroke="#c9b8ab" stroke-width="3" stroke-linecap="round"/>
     <path d="M224 166 L 260 158 M224 176 L 262 178 M224 186 L 258 196" stroke="#c9b8ab" stroke-width="3" stroke-linecap="round"/>
   </svg>

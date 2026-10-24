@@ -1,4 +1,4 @@
-# eping.py 3.65
+# eping.py 3.69
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -104,18 +104,20 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
   `Hostname` (case-insensitive); the delimiter (`;`, `,` or tab) is detected.
 - **Columns used**: `IP Address`, `Hostname`, `Serial Number`, `Model`, `Location`,
   `sysLocation`, `Type`, `Comment`. All other columns are ignored.
-- **Host entry**: the IP address; rows without a valid IP are ignored. With PREFER
-  HOSTNAME (`-ph`, or that address mode active when the file is added) the entry is
-  the `Hostname` instead - rows without an IP are then pinged by name too (NO-DNS if it
-  does not resolve); a name that is not a valid hostname falls back to the IP.
-  Rows without a usable entry are ignored.
+- **Host entry**: the `Hostname` (default; rows without an IP are pinged by name too,
+  NO-DNS if it does not resolve). A name that is not a valid hostname falls back to the
+  IP; rows without a usable entry are ignored. In the IP modes (`-ipo`, PREFER IP
+  ADDRESS, also when active while the file is added) the entry is the IP address
+  instead and rows without a valid IP are ignored. `-ph` is not needed for a CSV.
 - **Duplicates**: one host per entry, the first row wins. The count of ignored and
   duplicate rows is reported when the file is added (startup message / web footer).
 - **Log**: the six inventory values and the CSV hostname are written with every row
   of that host, see *Logging*. A `Hostname` that is not the host entry (IP mode) is
   only kept there as information.
-- Plain `.txt` hosts and `SAVE HOSTS FILE` carry no inventory values: a saved hosts
-  file lists only the host entries.
+- **Filters**: `M` matches the inventory values as text, `V` / ADV FILTER selects them
+  (see *ADV FILTER*).
+- **Save**: if the displayed hosts carry inventory values, `SAVE HOSTS FILE` writes an
+  inventory `.csv` (see *Web GUI*); plain `.txt` hosts are saved as `.txt`.
 
 Example (`;` delimited, extra columns are ignored):
 
@@ -129,8 +131,8 @@ sw-access-01;10.0.1.1;FOC5678C3DE;C9200L-24P;Vienna DC1;Rack C1;Switch;
 fw-edge-01;192.0.2.1;JMX2345F6GH;ASA5516;Linz POP;Rack B2;Firewall;ASA 5516 - EoL 2027
 ```
 
-Without `-ph` this gives 5 hosts (the IP addresses); `ap-lobby-01` has no IP and is
-ignored. With `-ph` it gives 6 hosts, named by `Hostname`.
+This gives 6 hosts, named by `Hostname`. In an IP mode it gives 5 hosts (the IP
+addresses); `ap-lobby-01` has no IP and is ignored.
 
 ## CLI mode
 
@@ -141,6 +143,7 @@ DOWN. Columns: hostname/IP, state, RTT (ms), last-change timestamp, change count
 |---|---|
 | `U` | view picker — all 9 views (see *Views and sort orders*) |
 | `M` | match filter — regex on hostname/IP and inventory fields, display only (see *Match filter*) |
+| `V` | ADV FILTER — pick Model/Location/sysLocation/Type/Comment values, display only (see *ADV FILTER*) |
 | `A` | add host — IP, hostname, CIDR (/13…/32), or `ip1-ip2` (max 524288) |
 | `D` | delete host — same formats/limits as add |
 | `F` | add hosts from a file |
@@ -163,7 +166,7 @@ same option set as the matching web GUI dropdown.
 Dialogs: ENTER confirms, ESC/empty cancels. Key bar shortens on narrow terminals.
 `PLEASE WAIT` box with elapsed counter shown until the first round has results.
 
-Ping checks keep running while a dialog (`A`/`D`/`F`/`M`/`T`) is open — same
+Ping checks keep running while a dialog (`A`/`D`/`F`/`M`/`V`/`T`) is open — same
 retry/state/logging logic as the main loop; screen repaints once the dialog closes.
 
 Screen repaints ~7×/s independent of fping. `UP`, `SET REFERENCE`, `DEL HOST`, `ZERO
@@ -198,8 +201,8 @@ Single self-contained page, no external resources.
   - Row 1: view select (9 views), sort order select, SET REFERENCE, ZERO CHANGES,
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, RESET LOG, FILE OPERATIONS
     select, EXIT, font size.
-  - Row 2: match filter (SET/CLEAR), host field (ADD/DELETE), comment field (COMMENT),
-    ADD FILE select, GENERATE REPORT select.
+  - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), comment
+    field (COMMENT), ADD FILE select, GENERATE REPORT select.
   - View select, sort order select, address mode select and ADV OPTIONS all match the
     CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS and ADD FILE > FROM CLIENT/
     FROM SERVER are web-gui-only (no CLI key - CLI already runs on the server's own
@@ -207,7 +210,7 @@ Single self-contained page, no external resources.
 - **FILE OPERATIONS** dropdown, in this order:
   | Entry | Does |
   |---|---|
-  | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched |
+  | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched. If the displayed hosts carry inventory values (CSV import) an inventory `.csv` is written instead (`;` delimited, columns as in *Inventory CSV import*); a `.txt` name or hostfile then becomes `.csv`, the default is `eping-hosts.csv` |
   | UPLOAD FILE TO SERVER | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
   | DOWNLOAD ALL HOSTS | full reference list, plain text |
   | DOWNLOAD ACTIVE HOSTS | currently displayed hosts (view/address mode/filter applied), plain text |
@@ -224,7 +227,7 @@ Single self-contained page, no external resources.
   dropdown; `O` cycles all 5 sort orders one at a time; `P`/`I` toggle PREFER HOSTNAME /
   SWITCH TO IP ONLY directly, the address mode select reaches all 4 modes; `G`/`S`/`Z`/
   `C`/`L`/`E` click the matching button (`E`/`C`/`L` confirm); `A`/`D` focus host field;
-  `M`/`T` focus their field; `F` opens the file picker; `R` forces a status refresh;
+  `M`/`T` focus their field; `V` opens ADV FILTER; `F` opens the file picker; `R` forces a status refresh;
   `+`/`−` font size (works while typing). No keyboard shortcut for `X`/ADV OPTIONS or
   GENERATE REPORT - click required.
 - Host field feeds both ADD/DELETE; ENTER triggers the button used last, ESC clears.
@@ -312,11 +315,13 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | POST | `/api/add_from_server` | `{"names":[...]}` | add hosts from listed `.txt` files |
 | GET | `/api/report` | — | last GENERATE REPORT HTML; `404` until done |
 | POST | `/api/command` | `{"cmd":"...","value":"..."}` | control (see cmd list below) |
+| POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection |
 | POST | `/api/upload` | host list, text | add hosts |
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
-`sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
-`set_option`, `reset_options`, `run_report`, `save_hosts_file`, `exit`. `set_option`
+`adv_filter`, `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
+`set_option`, `reset_options`, `run_report`, `save_hosts_file`, `exit`. `adv_filter` value: JSON object with the keys `model`, `location`, `sysloc`,
+`type`, `comment` (`{}` = off). `set_option`
 value: `key=value`. `reset_log` value: logging off - optional custom file name (blank =
 auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
 custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
@@ -332,7 +337,9 @@ authentication. Default bind `0.0.0.0` — use `-bind 127.0.0.1` outside trusted
 1. Hostnames resolved once (32 parallel), cached around `-dns` seconds (randomized a
    bit so a large batch resolved together doesn't all expire - and need re-resolving -
    in the same round later). Same-address names share one probe. Unresolvable → NO-DNS,
-   no fping call. `-dns 0` = fping-side resolve.
+   no fping call. `-dns 0` = fping-side resolve. A command (filter, add, ...) cuts
+   the name resolution short as well, so it applies at once even with thousands of
+   hostnames.
 2. UP/new hosts get full `-re` retries; confirmed-DOWN hosts get `-dr` retries. Every
    `-fs`-th round probes everything with full retries.
 3. Only 1/`-ds` of DOWN hosts probed per round, strided.
@@ -536,6 +543,26 @@ value turns it off. CLI: replaces the version banner with `MATCH FILTER '<regex>
 active (N of M hosts shown, all still pinged)`. Invalid regex: error shown, previous
 filter unchanged.
 
+## ADV FILTER
+
+Display filter on the inventory values of a CSV import (*Inventory CSV import*): one
+value per field for `Model`, `Location`, `sysLocation`, `Type` and `Comment`. Display
+only - every host keeps being pinged. Needs hosts with inventory values; without them
+the dialog says so.
+
+- **Open**: CLI `V`, web GUI button `ADV FILTER` or key `V`. A separate window; the
+  filter only changes when applied.
+- **Choices**: per field `ALL` (no restriction), the values that occur with their host
+  count, and `(empty)` for hosts without a value. The lists narrow as you select: only
+  values still possible with the other selected fields are offered.
+- **Combination**: ANDed with the match filter (`M`) and the view. While active, the
+  CLI banner shows `DISPLAY FILTER ... ADV <Field>=<value>`.
+- **CLI window**: `↑`/`↓` field, `←`/`→` value, ENTER value list, `A` APPLY, `R` RESET
+  ALL (clears the selection), ESC CANCEL.
+- **Web window**: one drop-down per field, APPLY, RESET ALL, CLOSE.
+- **Reset**: SET REFERENCE and CLEAR ALL turn the filter off. It is not saved
+  with `SAVE HOSTS FILE`.
+
 ## IPv6
 
 IPv4/IPv6 mixed freely. Resolution follows `-4`/`-6` (preference, not restriction; A
@@ -561,7 +588,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.34
+# epinga.py 2.35
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
