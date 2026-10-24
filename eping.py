@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.69'
+VERSION = '3.70'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -160,7 +160,10 @@ import glob
 import math
 import random
 import time
-import curses
+try:
+    import curses
+except ImportError:         # Windows: no curses - web modes only
+    curses = None
 import signal
 import shutil
 import argparse
@@ -169,7 +172,10 @@ import subprocess
 import json
 import threading
 import datetime
-import resource
+try:
+    import resource
+except ImportError:         # Windows: no RLIMIT_NOFILE
+    resource = None
 import http.server
 import socketserver
 import urllib.parse
@@ -224,6 +230,8 @@ def curses_supports_curs_set():
 
 def raise_fd_limit(target=FD_TARGET):
     # Raise soft RLIMIT_NOFILE up to min(target, hard). Hard stays untouched.
+    if resource is None:
+        return
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
         new_soft = min(target, hard) if hard != resource.RLIM_INFINITY else target
@@ -1973,13 +1981,16 @@ def reset_logfile(logfile_file_name):
     except OSError:
         return False
 
+# time separator in log file names - ':' is not allowed in Windows file names
+LOG_TS_FMT = '%Y-%m-%d_%H-%M-%S' if os.name == 'nt' else '%Y-%m-%d_%H:%M:%S'
+
 def new_logfile_name(tz_offset=0):
     """Fresh 'eping-log_<timestamp>.csv' name, same format used at startup."""
     now = datetime.datetime.now() + datetime.timedelta(hours=tz_offset)
-    return 'eping-log_' + now.strftime('%Y-%m-%d_%H:%M:%S') + '.csv'
+    return 'eping-log_' + now.strftime(LOG_TS_FMT) + '.csv'
 
 _rotate_std_re = re.compile(
-    r'^eping-log_(\d{4}-\d{2}-\d{2}_\d{2}:\d{2}:\d{2})(?:-(\d+))?\.csv$')
+    r'^eping-log_(\d{4}-\d{2}-\d{2}_\d{2}[:-]\d{2}[:-]\d{2})(?:-(\d+))?\.csv$')
 _rotate_seq_re = re.compile(r'^(.*)-(\d+)$')
 
 def rotated_logfile_name(current_name, tz_offset=0):
@@ -6372,6 +6383,15 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
 # MAIN MAIN MAIN
 if __name__=='__main__':
 
+    if os.name == 'nt':
+        # portable Windows folder: fping.exe + cygwin1.dll next to this script
+        os.environ['PATH'] = os.path.dirname(os.path.abspath(__file__)) + os.pathsep + os.environ.get('PATH', '')
+        for _s in (sys.stdout, sys.stderr):
+            try:
+                _s.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
     if not is_program_installed("fping"):
         error_handler("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
@@ -6451,6 +6471,10 @@ if __name__=='__main__':
 
     # read arguments from command line
     args = parser.parse_args()
+    if curses is None:
+        if args.web_view or args.web_view_control:
+            error_handler("ERROR: -wv/-wvc need curses (not available here) - use -web")
+        args.web = True
     backoff = args.backoff
     timeout = args.timeout
     retries = args.retries
@@ -6775,7 +6799,7 @@ if __name__=='__main__':
     now_logfile = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
     now_logfile_tmp = datetime.datetime.strptime(now_logfile, "%Y-%m-%d %H:%M:%S.%f")
     now_logfile = now_logfile_tmp + datetime.timedelta(hours=int(args.time_zone_adjust))
-    filename_timextension = (now_logfile.strftime("%Y-%m-%d_%H:%M:%S"))
+    filename_timextension = now_logfile.strftime(LOG_TS_FMT)
     logfile_file_name = 'eping-log_' + filename_timextension +'.csv'
 
     # create logfile
