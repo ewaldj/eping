@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.78'
+VERSION = '3.84'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -461,16 +461,59 @@ def split_hostfile_list(value):
     separated (e.g. 'a.txt,b.txt', 'a.txt b.txt' or a mix), empty parts dropped."""
     return [p for p in re.split(r'[,\s]+', (value or '').strip()) if p]
 
-def create_file_if_not_exists(filename, data):
+SAMPLE_CSV_INFO = ('INFO: File eping-hosts-sample.csv created - a template for an inventory .csv\n'
+                   '      (same hosts, invented Model/Location/sysLocation/Type/Comment values).\n'
+                   '      Use it with: -f eping-hosts-sample.csv - it is NOT loaded now.')
+INFO_DELAY = 6   # seconds the start-up INFO stays readable
+
+def create_file_if_not_exists(filename, data, extra=''):
+    """Create a sample file; extra = more INFO text shown with the same message."""
     if os.path.exists(filename):
         return
-    print('\n\nINFO: File ' + filename + ' does not exist - creating sample file.\n\n')
-    time.sleep(2)
+    print('\n\nINFO: File ' + filename + ' does not exist - creating sample file.'
+          + ('\n' + extra if extra else '') + '\n\n')
+    time.sleep(INFO_DELAY)
     try:
         with open(filename, 'w', encoding='utf-8') as f:
             f.writelines(data)
     except OSError as e:
         raise TypeError('ERROR: Unable to create file: ' + filename + ' (' + str(e) + ')')
+
+SAMPLE_CSV_NAME = 'eping-hosts-sample.csv'
+
+def create_sample_csv(filename=SAMPLE_CSV_NAME):
+    """Write an inventory sample .csv (same hosts as the default eping-hosts.txt, invented
+    values) unless it exists. Never loaded by eping - only a template for ADV FILTER.
+    Returns True if it was created."""
+    if os.path.exists(filename):
+        return False
+    rows = [
+        # hostname, ip, serial, model, location, sysLocation, type, comment
+        ('', '127.0.0.1', 'SN0001', 'Loopback', 'Vienna DC', 'Rack A1', 'Server', ''),
+        ('no-dns.test', '1.1.1.1', 'SN0002', 'C9300-48P', 'Vienna DC', 'Rack A2', 'Switch', 'no DNS entry'),
+        ('', '1.0.0.1', 'SN0003', 'C9300-24T', 'Graz HQ', 'Rack B1', 'Switch', ''),
+        ('', '208.67.222.222', 'SN0004', 'FPR-2130', 'Graz HQ', 'Rack B2', 'Firewall', ''),
+        ('', '208.67.220.220', 'SN0005', 'FPR-2130', 'Graz HQ', 'Rack B2', 'Firewall', 'standby'),
+        ('www.heise.de', '193.99.144.85', 'SN0006', 'ASR1001-X', 'Munich DC', 'Room 3', 'Router', ''),
+        ('www.google.com', '', 'SN0007', 'F5-i5800', 'Munich DC', 'Room 3', 'Load Balancer', ''),
+        ('localhost', '8.8.8.8', 'SN0008', 'C9120AXI-E', 'Linz Office', 'Floor 2', 'Access Point', 'under maintenance'),
+        ('', '8.8.4.4', 'SN0009', 'C9120AXI-E', 'Linz Office', 'Floor 3', 'Access Point', ''),
+        ('ö3.at', '', 'SN0010', 'PowerEdge R650', 'Vienna DC', 'Rack A3', 'Server', ''),
+        ('www.orf.at', '', 'SN0011', 'PowerEdge R650', 'Vienna DC', 'Rack A3', 'Server', ''),
+        ('', '::1', 'SN0012', 'Loopback', 'Vienna DC', 'Rack A1', 'Server', ''),
+        ('ipv4.jeitler.cc', '', 'SN0013', 'C9500-24Y4C', 'Salzburg Office', 'Lobby', 'Switch', ''),
+        ('ipv6.jeitler.cc', '', 'SN0014', 'C9500-24Y4C', 'Salzburg Office', 'Lobby', 'Switch', ''),
+        ('www.jeitler.cc', '', 'SN0015', 'N9K-C93180YC-FX', 'Innsbruck Branch', 'Rack C1', 'Switch', ''),
+        ('', '2603:c020:8016:1313::10', 'SN0016', 'ISR4331', 'Innsbruck Branch', 'Rack C1', 'Router', ''),
+    ]
+    try:
+        with open(filename, 'w', encoding='utf-8', newline='') as f:
+            w = csv.writer(f, delimiter=';')
+            w.writerow(INVENTORY_CSV_HEADER)
+            w.writerows(rows)
+        return True
+    except OSError:
+        return False        # a read-only directory must not stop eping
 
 use_check_source = True   # set from --no_check_source in main
 web_readonly     = False  # True with --web_view: the CLI drives, the browser only looks
@@ -1635,10 +1678,21 @@ def _inventory_header(line):
         return delim, cols
     return None, None
 
+def _csv_lead_line(line):
+    """True for a line before the CSV header that is not the header: blank,
+    '#' comment or 'opt:'/'OPT:' options line (see opt_lines_text)."""
+    t = line.strip()
+    return not t or t.startswith('#') or t.startswith('opt:') or t.startswith('OPT:')
+
+def _csv_header_index(lines):
+    """Index of the first line that can be the CSV header, or None."""
+    return next((i for i, l in enumerate(lines) if not _csv_lead_line(l)), None)
+
 def parse_inventory_csv_header(text):
     """True-ish if text starts with an inventory CSV header line, else None."""
-    first = next((l for l in (text or '').lstrip('\ufeff').splitlines() if l.strip()), None)
-    return _inventory_header(first)[0] if first is not None else None
+    lines = (text or '').lstrip('\ufeff').splitlines()
+    hi = _csv_header_index(lines)
+    return _inventory_header(lines[hi])[0] if hi is not None else None
 
 def parse_inventory_csv(text, use_names, stats=None):
     """Parse an inventory CSV (header with 'IP Address' and 'Hostname'; other columns
@@ -1650,7 +1704,7 @@ def parse_inventory_csv(text, use_names, stats=None):
     The row's values are stored in host_meta for the log. Returns the host list, or
     None if text is not an inventory CSV."""
     lines = (text or '').lstrip('\ufeff').splitlines()
-    hi = next((i for i, l in enumerate(lines) if l.strip()), None)
+    hi = _csv_header_index(lines)
     if hi is None:
         return None
     delim, cols = _inventory_header(lines[hi])
@@ -2357,6 +2411,7 @@ web_state = {
     'datetime'         : '',
     'hostfile_name'    : '',      # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER target,
     'hostfile_active'  : False,   # '' / False if eping.py was started with -df
+    'all_csv'          : False,   # reference list carries inventory values (DOWNLOAD ALL HOSTS = .csv)
     'save_csv'         : False,   # shown hosts carry inventory values: SAVE HOSTS FILE writes a .csv
     'rows'             : [],
     'host_list_shown'  : [],   # DOWNLOAD > SHOWN HOSTS - currently displayed hosts
@@ -2518,6 +2573,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box.wide::-webkit-scrollbar-track{background:var(--panel)}
   .modal-box.wide::-webkit-scrollbar-thumb{background:var(--ctrl-line);border-radius:6px}
   .modal-box.xwide{width:900px}
+  .optchk{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:12px;color:var(--fg);cursor:pointer}
   #advFilterRows{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:0 0 14px}
   .advf-blk{display:flex;flex-direction:column;gap:6px;min-width:0}
   .advf-head{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;font-weight:700}
@@ -2607,9 +2663,25 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <input type="text" id="saveHostsNameInput" maxlength="255"
              placeholder="file name (blank = eping-hosts.txt), .txt added automatically"
              style="width:100%;box-sizing:border-box;margin-bottom:12px" autocomplete="off">
+      <div id="saveHostsOptsRow" style="display:none">
+        <label class="optchk"><input type="checkbox" id="saveHostsOpts" checked> include options (opt: lines)</label>
+        <label class="optchk"><input type="checkbox" id="saveHostsTxt"> save as .txt (hosts only, no inventory)</label>
+      </div>
       <div class="modal-buttons">
         <button id="modalBtnSaveHostsConfirm" class="danger">SAVE (Y)</button>
         <button id="modalBtnSaveHostsCancel">CANCEL (ESC)</button>
+      </div>
+    </div>
+  </div>
+  <div id="dlHostsModal" class="modal-overlay" style="display:none">
+    <div class="modal-box" style="width:420px">
+      <h3 id="dlHostsTitle">DOWNLOAD HOSTS</h3>
+      <p>The hosts carry inventory values (.csv).</p>
+      <label class="optchk"><input type="checkbox" id="dlHostsOpts" checked> include options (opt: lines)</label>
+      <label class="optchk"><input type="checkbox" id="dlHostsTxt"> save as .txt (hosts only, no inventory)</label>
+      <div class="modal-buttons">
+        <button id="modalBtnDlHostsOk">DOWNLOAD (Y)</button>
+        <button id="modalBtnDlHostsCancel">CANCEL (ESC)</button>
       </div>
     </div>
   </div>
@@ -2797,7 +2869,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   <div id="advFilterModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide xwide">
       <h3>ADV FILTER</h3>
-      <p>Display filter on the inventory fields of the hosts .csv, like the Excel filter: check values per field and choose SHOW ONLY CHECKED or HIDE CHECKED. Values of one field are combined with OR, fields with AND, and with the view and the display filter. Nothing checked = field not filtered. Every host keeps being pinged.</p>
+      <p>Inventory filter (hosts .csv). Per field: check values, SHOW ONLY or HIDE. Same field = OR, fields = AND. Nothing checked = field off. Display only, all hosts are still pinged.</p>
       <div id="advFilterRows"></div>
       <div class="modal-buttons">
         <button id="modalBtnAdvFApply">APPLY</button>
@@ -2876,8 +2948,10 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
-      <select id="selDownload" title="download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
+      <select id="selDownload" title="add hosts from a file on the server or from your computer, download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
+        <option value="add_from_server">ADD HOSTS FILE FROM SERVER</option>
+        <option value="add_from_client">ADD HOSTS FILE FROM CLIENT</option>
         <option value="save_hosts_file">SAVE HOSTS FILE ON SERVER</option>
         <option value="hosts_all">DOWNLOAD ALL HOSTS</option>
         <option value="hosts_shown">DOWNLOAD ACTIVE HOSTS</option>
@@ -2915,11 +2989,6 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
-     <select id="selAddFile" title="add hosts from a text file - from your computer, or from a .txt file already on the server">
-       <option value="" selected disabled hidden>ADD FILE</option>
-       <option value="client">FROM CLIENT</option>
-       <option value="server">FROM SERVER</option>
-     </select>
      <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
      <select id="selGenReport" title="analyse a logfile with epinga.py and open the report in a new tab">
        <option value="" selected disabled hidden>GENERATE REPORT</option>
@@ -3503,6 +3572,7 @@ var loggingOn = false;   // kept in sync from every status poll, see render()
 var hostfileActive  = false;   // FILE OPERATIONS > SAVE HOSTS FILE ON SERVER -
 var hostfileName    = '';      // all three kept in sync from every status poll,
 var shownHostsCount = 0;       // see render()
+var allCsv          = false;   // reference list carries inventory values: DOWNLOAD ALL HOSTS is a .csv
 var saveCsv         = false;   // shown hosts carry inventory values: SAVE writes a .csv
 var reportWindow = null; // blank tab opened by GENERATE REPORT, filled in once ready - see poll()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
@@ -3563,6 +3633,9 @@ function openSaveHosts(){
       + shownHostsCount + ' host(s) currently shown' + kind + ' as a new file on the server:';
     input.placeholder = 'file name (blank = eping-hosts' + ext + '), ' + ext + ' added automatically';
   }
+  document.getElementById('saveHostsOpts').checked = true;       // default: with options
+  document.getElementById('saveHostsTxt').checked = false;       // default: inventory .csv
+  document.getElementById('saveHostsOptsRow').style.display = saveCsv ? '' : 'none';
   saveHostsModal.style.display = 'flex';
   input.focus();
 }
@@ -3572,8 +3645,11 @@ function runSaveHostsFile(){
   // hostfile" when one is active, or the default eping-hosts.txt otherwise
   // (see sanitize_hostfile_save_name())
   var name = document.getElementById('saveHostsNameInput').value.trim();
+  var withOpts = !saveCsv || document.getElementById('saveHostsOpts').checked;
+  var asTxt    = saveCsv && document.getElementById('saveHostsTxt').checked;
   closeSaveHosts();
-  post('save_hosts_file', name);
+  post(asTxt ? (withOpts ? 'save_hosts_txt' : 'save_hosts_txt_noopt')
+              : (withOpts ? 'save_hosts_file' : 'save_hosts_noopt'), name);
 }
 document.getElementById('modalBtnSaveHostsConfirm').onclick = runSaveHostsFile;
 document.getElementById('modalBtnSaveHostsCancel').onclick  = closeSaveHosts;
@@ -3907,7 +3983,7 @@ function populateAdvFilter(){
     advRenderList(k);
   });
   if(!any){
-    c.innerHTML = '<p>No inventory values loaded - add a hosts .csv file (header with Hostname and IP Address).</p>';
+    c.innerHTML = '<p>No inventory values loaded - load a hosts .csv, template: eping-hosts-sample.csv (in the working directory).</p>';
   }
   document.getElementById('modalBtnAdvFApply').disabled = !any;
   document.getElementById('modalBtnAdvFReset').disabled = !any;
@@ -3997,12 +4073,6 @@ document.getElementById('btnClear').onclick  = function(){
 
 /* ---- host file upload ---- */
 var fileInput = document.getElementById('fileInput');
-document.getElementById('selAddFile').onchange = function(){
-  var what = this.value;
-  this.value = '';                              // reset - a select, not a toggle
-  if(what === 'client'){ fileInput.click(); }
-  else if(what === 'server'){ openAddFromServer(); }
-};
 fileInput.addEventListener('change', function(){
   var f = fileInput.files && fileInput.files[0];
   if(!f) return;
@@ -4282,6 +4352,8 @@ document.getElementById('selDownload').onchange = function(){
   var label = this.options[this.selectedIndex].text;
   this.value = '';                              // reset - a select, not a toggle
   if(!what) return;
+  if(what === 'add_from_server'){ openAddFromServer(); return; }
+  if(what === 'add_from_client'){ fileInput.click(); return; }
   if(what === 'choose_logfile'){ openChooseLog(); return; }
   if(what === 'delete_files'){ openDeleteFiles(); return; }
   if(what === 'view_file'){ openViewFile(); return; }
@@ -4301,8 +4373,34 @@ document.getElementById('selDownload').onchange = function(){
     startIframeDownload('api/download/logfile', label);
     return;
   }
+  if((what === 'hosts_all' && allCsv) || (what === 'hosts_shown' && saveCsv)){
+    openDlHosts(what, label); return;       // .csv: ask whether the options go in
+  }
+  runDownload(what, label, '');
+};
+var dlHostsModal = document.getElementById('dlHostsModal'), dlHostsWhat = '', dlHostsLabel = '';
+function dlHostsOpen(){ return dlHostsModal.style.display !== 'none'; }
+function closeDlHosts(){ dlHostsModal.style.display = 'none'; }
+function openDlHosts(what, label){
+  dlHostsWhat = what; dlHostsLabel = label;
+  document.getElementById('dlHostsTitle').textContent = label;
+  document.getElementById('dlHostsOpts').checked = true;          // default: with options
+  document.getElementById('dlHostsTxt').checked = false;          // default: inventory .csv
+  dlHostsModal.style.display = 'flex';
+}
+function runDlHosts(){
+  var qa = [];
+  if(!document.getElementById('dlHostsOpts').checked) qa.push('opts=0');
+  if(document.getElementById('dlHostsTxt').checked) qa.push('txt=1');
+  var q = qa.length ? '?' + qa.join('&') : '';
+  closeDlHosts();
+  runDownload(dlHostsWhat, dlHostsLabel, q);
+}
+document.getElementById('modalBtnDlHostsOk').onclick     = runDlHosts;
+document.getElementById('modalBtnDlHostsCancel').onclick = closeDlHosts;
+function runDownload(what, label, query){
   note('downloading ' + label + ' ...', true);
-  fetch('api/download/' + what).then(function(r){
+  fetch('api/download/' + what + query).then(function(r){
     if(!r.ok){
       return r.text().then(function(t){ note(label + ': ' + (t || 'download failed'), false); });
     }
@@ -4318,7 +4416,7 @@ document.getElementById('selDownload').onchange = function(){
       note(label + ': downloaded', false);
     });
   }).catch(function(){ note(label + ': download failed', false); });
-};
+}
 /* drag & drop a host file anywhere on the page */
 document.addEventListener('dragover', function(e){ e.preventDefault(); });
 document.addEventListener('drop', function(e){
@@ -4361,6 +4459,11 @@ document.addEventListener('keydown', function(e){
       e.preventDefault();
     }
     return;   // any other key is ignored, the modal stays open
+  }
+  if(dlHostsOpen()){
+    if(e.key === 'Escape'){ closeDlHosts(); e.preventDefault(); return; }
+    if(e.key.toLowerCase() === 'y' || e.key === 'Enter'){ runDlHosts(); e.preventDefault(); }
+    return;
   }
   if(saveHostsOpen()){
     if(e.key === 'Escape'){ closeSaveHosts(); e.preventDefault(); return; }
@@ -4424,7 +4527,7 @@ document.addEventListener('keydown', function(e){
     case 'o': cycleSortMode(); break;
     case 'a': setMode('add'); document.getElementById('addInput').focus(); break;
     case 'd': setMode('del'); document.getElementById('addInput').focus(); break;
-    case 'f': document.getElementById('btnUpload').click(); break;
+    case 'f': fileInput.click(); break;
     case 's': document.getElementById('btnSetRef').click(); break;
     case 'z': document.getElementById('btnZero').click(); break;
     case 't': document.getElementById('commentInput').focus(); break;
@@ -4780,6 +4883,7 @@ function poll(){
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
     saveCsv        = !!s.save_csv;
+    allCsv         = !!s.all_csv;
     hostfileActive = !!s.hostfile_active;
     hostfileName   = s.hostfile_name || '';
     shownHostsCount = s.hosts_shown || 0;
@@ -5160,18 +5264,22 @@ def sanitize_hostfile_save_name(name, as_csv=False):
     return name if safe_cwd_filename(name, ('.txt', '.csv')) else None
 
 
-def resolve_save_target(args, typed, shown_hosts):
+def resolve_save_target(args, typed, shown_hosts, force_txt=False):
     """(target path or None, as_csv) for SAVE HOSTS FILE ON SERVER. A typed name
     always saves as that (possibly new) file, even with a hostfile already active;
     blank overwrites the active hostfile, or falls back to the default name if none
-    is active. as_csv: the shown hosts carry inventory values - written as .csv."""
-    as_csv = hosts_have_inventory(shown_hosts)
+    is active. as_csv: the shown hosts carry inventory values - written as .csv, unless
+    force_txt (hosts only, no inventory: a .csv name becomes .txt)."""
+    as_csv = hosts_have_inventory(shown_hosts) and not force_txt
     typed  = (typed or '').strip()
     if typed:
-        return sanitize_hostfile_save_name(typed, as_csv), as_csv
-    target = hostfile_save_target(args, as_csv)
-    if target is None:
-        target = sanitize_hostfile_save_name('', as_csv)
+        target = sanitize_hostfile_save_name(typed, as_csv)
+    else:
+        target = hostfile_save_target(args, as_csv)
+        if target is None:
+            target = sanitize_hostfile_save_name('', as_csv)
+    if force_txt and target and target.lower().endswith('.csv'):
+        target = os.path.splitext(target)[0] + '.txt'
     return target, as_csv
 
 
@@ -5192,13 +5300,88 @@ def inventory_csv_text(hosts):
     return out.getvalue()
 
 
-def save_hosts_file(path, hosts):
-    """Overwrite path - FILE OPERATIONS > SAVE HOSTS FILE ON SERVER: an inventory
-    CSV (see inventory_csv_text) for a .csv path, else one host per line (LF).
-    Returns True on success, False on any OSError."""
+# set in main(): the parsed arguments and the parser defaults (see opt_lines_text)
+_OPT_ARGS     = None
+_ARG_DEFAULTS = {}
+# flag-less switches: dest -> flag
+_OPT_SWITCHES = (('disable_versioncheck', '-du'), ('force_ipv4', '-4'), ('force_ipv6', '-6'),
+                 ('diag', '-dg'), ('no_check_source', '-ncs'), ('web', '-web'),
+                 ('web_view', '-wv'), ('web_view_control', '-wvc'))
+# ADV OPTIONS key -> argparse dest of its default
+_OPT_KEY_DEST = {'backoff': 'backoff', 'timeout': 'timeout', 'retries': 'retries',
+                 'down_retries': 'down_retries', 'interval': 'interval',
+                 'num_of_threads': 'num_of_threads', 'waittime': 'waittime',
+                 'confirm': 'confirm', 'rate_pps': 'rate_pps', 'flap_window': 'flap_window',
+                 'down_slices': 'down_slices', 'full_sweep': 'full_sweep',
+                 'dns_ttl': 'dns_ttl', 'tz_offset': 'time_zone_adjust',
+                 'log_max_size': 'log_max_size', 'log_max_files': 'log_max_files'}
+
+def _same_opt_value(a, b):
     try:
-        text = (inventory_csv_text(hosts) if path.lower().endswith('.csv')
-                else ''.join(h + '\n' for h in hosts))
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+def opt_lines_text(args, options=None, addr_mode=None, logging_on=None):
+    """'opt: <flag> <value>' lines (one per option) for every option that differs from
+    the parser default - start-up flags plus live ADV OPTIONS changes ('options' as from
+    adv_option_values(), 'addr_mode' 0..3, 'logging_on'). Written at the top of saved/
+    downloaded host files, read back at start-up by extract_opt_lines().
+    Not included: -f/-df/-n/-r (host sources), -o/-up/-setref/-gn/-cl (one-shot)."""
+    if args is None or not _ARG_DEFAULTS:
+        return ''
+    d, out = _ARG_DEFAULTS, []
+    opts = options or {}
+    for key, flag in ADV_OPTION_CLI_FLAG.items():
+        cur = opts.get(key)
+        if cur is None:
+            cur = getattr(args, _OPT_KEY_DEST[key], None)
+            if key == 'interval' and cur == '':
+                cur = '-1'
+            if key == 'num_of_threads' and cur == 'auto':
+                cur = '0'
+        dflt = d.get(_OPT_KEY_DEST[key])
+        if dflt == '' and key == 'interval':
+            dflt = '-1'
+        if dflt == 'auto' and key == 'num_of_threads':
+            dflt = '0'
+        if cur is not None and not _same_opt_value(cur, dflt):
+            out.append('opt: ' + flag + ' ' + ('auto' if (key == 'num_of_threads' and str(cur) == '0') else str(cur)))
+    for dest, flag in _OPT_SWITCHES:
+        if getattr(args, dest, False):
+            out.append('opt: ' + flag)
+    mode = addr_mode if addr_mode is not None else (3 if args.ip_only else (1 if args.prefer_hostname else 0))
+    if mode == 1:
+        out.append('opt: -ph')
+    elif mode == 3:
+        out.append('opt: -ipo')
+    on = logging_on if logging_on is not None else args.disable_logging
+    if not on:
+        out.append('opt: -dl')
+    if not _same_opt_value(args.web_port, d.get('web_port')):
+        out.append('opt: -port ' + str(args.web_port))
+    if args.web_bind != d.get('web_bind'):
+        out.append('opt: -bind ' + str(args.web_bind))
+    return ''.join(l + '\n' for l in out)
+
+
+def hosts_file_text(hosts, as_csv=None, opt_text=''):
+    """Content of a host file: opt_text (the options) first, then an inventory CSV when
+    the hosts carry inventory values (or as_csv), else one host per line.
+    Returns (text, is_csv)."""
+    if as_csv is None:
+        as_csv = hosts_have_inventory(hosts)
+    body = inventory_csv_text(hosts) if as_csv else ''.join(h + '\n' for h in hosts)
+    return opt_text + body, as_csv
+
+
+def save_hosts_file(path, hosts, opt_text=''):
+    """Overwrite path - FILE OPERATIONS > SAVE HOSTS FILE ON SERVER: an inventory
+    CSV (see inventory_csv_text) for a .csv path, else one host per line (LF),
+    preceded by opt_text (the non-default options). Returns True on success,
+    False on any OSError."""
+    try:
+        text = hosts_file_text(hosts, path.lower().endswith('.csv'), opt_text)[0]
         with open(path, 'w', encoding='utf-8', newline='') as f:
             f.write(text)
         return True
@@ -5206,6 +5389,8 @@ def save_hosts_file(path, hosts):
         return False
 
 
+# SAVE HOSTS FILE variants: '_noopt' = without the opt: lines, '_txt' = hosts only (.txt)
+SAVE_HOSTS_CMDS = ('save_hosts_file', 'save_hosts_noopt', 'save_hosts_txt', 'save_hosts_txt_noopt')
 WEB_COMMANDS_MAX = 1000   # queued browser commands before the server answers 429
 REPORT_MAX_FILES = 25     # GENERATE REPORT: max *.csv files mergeable into one report
 
@@ -5397,16 +5582,26 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'files': files}))
         elif path in ('/api/download/hosts_shown', 'api/download/hosts_shown',
                       '/api/download/hosts_all', 'api/download/hosts_all'):
-            # DOWNLOAD > SHOWN HOSTS / ALL HOSTS - one host per line, same
-            # plain-text format ADD FILE/upload accept.
+            # DOWNLOAD > SHOWN HOSTS / ALL HOSTS - the non-default options ('opt:' lines)
+            # first, then an inventory .csv if the hosts carry inventory values, else
+            # one host per line (.txt) - both formats can be loaded again.
             key = 'host_list_shown' if 'hosts_shown' in path else 'host_list_all'
             with web_lock:
                 hosts = list(web_state.get(key) or [])
-            body = ''.join(h + chr(10) for h in hosts)
+            with web_lock:
+                _o, _am, _lg = (dict(web_state.get('options') or {}), web_state.get('addr_mode'),
+                                web_state.get('logging'))
+            _q = urllib.parse.parse_qs(self.path.partition('?')[2])
+            _noopt = _q.get('opts', ['1'])[0] == '0'      # opts=0: no opt: lines
+            _txt   = _q.get('txt', ['0'])[0] == '1'       # txt=1: hosts only, no inventory
+            body, is_csv = hosts_file_text(hosts, False if _txt else None,
+                                           '' if _noopt else opt_lines_text(_OPT_ARGS, _o, _am, _lg))
             tag   = 'shown' if key == 'host_list_shown' else 'all'
             fname = ('eping-hosts_' + tag + '_'
-                    + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S') + '.txt')
-            self._respond(200, 'text/plain; charset=utf-8', body, fname)
+                    + datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S')
+                    + ('.csv' if is_csv else '.txt'))
+            self._respond(200, 'text/csv; charset=utf-8' if is_csv else 'text/plain; charset=utf-8',
+                          body, fname)
         elif path in ('/api/download/logfile', 'api/download/logfile'):
             # DOWNLOAD > ACTIVE LOGFILE - the currently active CSV log, read
             # fresh from disk (not cached) so the download always reflects the
@@ -5675,7 +5870,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:(8192 if cmd == 'adv_filter' else 256)]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'adv_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report', 'save_hosts_file'):
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'adv_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report') + SAVE_HOSTS_CMDS:
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         if cmd == 'run_report':
@@ -5841,6 +6036,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'adv_filter'      : adv_export(),
             'adv_values'      : adv_values(original_hosts_list or [], adv_filter),
             'save_csv'        : hosts_have_inventory(r['host'] for r in rows),
+            'all_csv'         : hosts_have_inventory(original_hosts_list or []),
             'options'         : options if options is not None else web_state.get('options', {}),
         })
 
@@ -6174,7 +6370,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     if args.disable_logging:
         print(' logging to ' + logfile_file_name)
     if not original_hosts_list:
-        print(' no hosts yet - use ADD or ADD FILE in the web gui')
+        print(' no hosts yet - use ADD or FILE OPERATIONS > ADD HOSTS FILE in the web gui')
     print(' press CTRL-C to stop\n')
 
     with web_lock:
@@ -6509,7 +6705,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message = 'failed to create new logfile'
                     else:
                         message = 'reset cancelled'
-            elif cmd == 'save_hosts_file':
+            elif cmd in SAVE_HOSTS_CMDS:
                 # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - client already
                 # asked for confirmation. A typed name always saves as that
                 # (possibly new) file, even with a hostfile already active;
@@ -6517,11 +6713,14 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # default name if none is active (sanitize_hostfile_save_name())
                 with web_lock:
                     shown_now = list(web_state.get('host_list_shown') or [])
-                target, _as_csv = resolve_save_target(args, value, shown_now)
+                target, _as_csv = resolve_save_target(args, value, shown_now, '_txt' in cmd)
                 if target is None:
                     message = 'invalid file name - hosts file not saved'
                 else:
-                    if save_hosts_file(target, shown_now):
+                    if save_hosts_file(target, shown_now, ('' if 'noopt' in cmd else opt_lines_text(
+                            args, adv_option_values(args, down_retries, flap_window, confirm,
+                                                    down_slices, full_sweep, tz_offset),
+                            addr_mode, args.disable_logging))):
                         message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
                         write_log_info(args.disable_logging, logfile_file_name,
                                        'SAVE HOSTS FILE: ' + target, tz_offset)
@@ -6671,6 +6870,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['adv_filter']   = adv_export()
                 web_state['adv_values']   = adv_values(original_hosts_list, adv_filter)
                 web_state['save_csv']     = hosts_have_inventory(web_state['host_list_shown'])
+                web_state['all_csv']      = hosts_have_inventory(original_hosts_list)
                 # logging state can flip live (START LOG) - keep the quick path in sync too
                 web_state['logging']      = bool(args.disable_logging)
                 web_state['logfile']      = logfile_file_name if args.disable_logging else ''
@@ -6883,7 +7083,9 @@ if __name__=='__main__':
                 # reports it properly once -f itself is actually validated
 
     # read arguments from command line
+    _ARG_DEFAULTS = vars(parser.parse_args([]))
     args = parser.parse_args()
+    _OPT_ARGS = args
     if curses is None:
         if args.web_view or args.web_view_control:
             error_handler("ERROR: -wv/-wvc need curses (not available here) - use -web")
@@ -7149,7 +7351,16 @@ if __name__=='__main__':
                 "# opt: -bind 0.0.0.0                # bind address for -web / -wv\n",
                 ]
         try:
-            create_file_if_not_exists(default_hostfile,data)
+            _txt_new = not os.path.exists(default_hostfile)
+            _csv_new = not os.path.exists(SAMPLE_CSV_NAME)
+            if _csv_new and _txt_new:
+                create_sample_csv()          # shown together with the hosts file INFO
+                create_file_if_not_exists(default_hostfile, data, SAMPLE_CSV_INFO)
+            else:
+                create_file_if_not_exists(default_hostfile, data)
+                if create_sample_csv():
+                    print('\n\n' + SAMPLE_CSV_INFO + '\n\n')
+                    time.sleep(INFO_DELAY)
         except TypeError as error_msg:
             error_handler(error_msg)
 
@@ -7588,7 +7799,7 @@ if __name__=='__main__':
         vals   = adv_values(original_hosts_list)
         fields = [(k, label) for k, label, _i in ADV_FIELDS if k in vals]
         if not fields:
-            notice('ADV FILTER: NO INVENTORY VALUES (ADD A HOSTS .CSV FILE)', 3)
+            notice('ADV FILTER: NO INVENTORY VALUES - SEE ' + SAMPLE_CSV_NAME, 3)
             return
         draft = {k: v for k, v in adv_filter.items() if k in vals}     # key -> (mode, values)
 
@@ -8289,7 +8500,7 @@ if __name__=='__main__':
                 notice('RESET CANCELLED', 3)
                 message = 'reset cancelled'
 
-        elif bcmd == 'save_hosts_file':
+        elif bcmd in SAVE_HOSTS_CMDS:
             # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER - client already asked
             # for confirmation. A typed name always saves as that (possibly new)
             # file, even with a hostfile already active; blank overwrites the
@@ -8297,12 +8508,16 @@ if __name__=='__main__':
             # active (sanitize_hostfile_save_name())
             with web_lock:
                 shown_now = list(web_state.get('host_list_shown') or [])
-            target, _as_csv = resolve_save_target(args, bval, shown_now)
+            target, _as_csv = resolve_save_target(args, bval, shown_now, '_txt' in bcmd)
             if target is None:
                 notice('INVALID FILE NAME - HOSTS FILE NOT SAVED', 3)
                 message = 'invalid file name - hosts file not saved'
             else:
-                if save_hosts_file(target, shown_now):
+                if save_hosts_file(target, shown_now, ('' if 'noopt' in bcmd else opt_lines_text(
+                        args, adv_option_values(args, down_retries, flap_window, confirm,
+                                                down_slices, full_sweep, tz_offset),
+                        (3 if ip_only_mode else (2 if prefer_ip else (1 if prefer_hostname else 0))),
+                        args.disable_logging))):
                     notice('SAVED ' + str(len(shown_now)) + ' HOST(S) TO ' + target, 2)
                     message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
                     write_log_info(args.disable_logging, logfile_file_name,
