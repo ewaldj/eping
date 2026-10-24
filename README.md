@@ -1,4 +1,4 @@
-# eping.py 3.78
+# eping.py 3.84
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -45,7 +45,7 @@ Portable Windows version (web GUI only, no installation): download and unpack
 ./eping.py -wvc                        # CLI + controllable web view
 ```
 
-No args: creates a sample `eping-hosts.txt`. `-df`: start with no hosts, add at runtime.
+No args: creates a sample `eping-hosts.txt` and `eping-hosts-sample.csv` (same hosts with invented inventory values, a template for the *Inventory CSV import*; never loaded by eping). `-df`: start with no hosts, add at runtime.
 
 ### Running unattended (screen / tmux)
 
@@ -70,7 +70,7 @@ expansion includes network/broadcast. Several `-f` files are combined before ded
 
 ### Host file format
 
-Same parser for `-f`, `F`/ADD FILE (CLI), and web GUI ADD FILE:
+Same parser for `-f`, `F`/ADD FILE (CLI), and web GUI ADD HOSTS FILE:
 
 ```
 # comment to end of line
@@ -83,7 +83,7 @@ www.google.com            # hostname/FQDN
 2606:4700:4700::1111/128  # IPv6 with /128 - single host
 ```
 
-Network mask range /13…/32 everywhere (host file, ADD FILE, web upload, ADD/DELETE
+Network mask range /13…/32 everywhere (host file, ADD HOSTS FILE, web upload, ADD/DELETE
 host input); out of range is rejected (message names the allowed range; `-f` warns and
 ignores). IPv6: only `/128` accepted, any other mask rejected. Anything else is ignored.
 
@@ -101,8 +101,10 @@ opt: -web -port 9000
 Multiple `opt:` lines join in file order. `#` comments out the rest of the line (or
 the whole line at the start). Quote values with spaces: `opt: -f "my hosts.txt"`. A
 flag typed on the command line wins over the same flag from a file. Only applies to
-the initial `-f` read at startup — `F`/ADD FILE (CLI or web, FROM CLIENT/FROM SERVER)
+the initial `-f` read at startup — `F`/ADD FILE (CLI) and ADD HOSTS FILE (web)
 never parse `opt:` lines, they're just text.
+
+`opt:` lines also work at the top of an inventory `.csv`. SAVE HOSTS FILE and DOWNLOAD ALL/ACTIVE HOSTS write every option that differs from the default there (start-up flags and live ADV OPTIONS changes; not `-f -df -n -r -o -up -setref -gn -cl`).
 
 The default `eping-hosts.txt`: sample hosts, this section, then every CLI option as a
 commented-out `opt:` line with its default (remove `# ` to activate).
@@ -110,10 +112,10 @@ commented-out `opt:` line with its default (remove `# ` to activate).
 ## Inventory CSV import
 
 A `.csv` inventory export (one device per row) can be used as host file: `-f FILE.csv`,
-`F`/ADD FILE (CLI), web GUI ADD FILE (FROM CLIENT, FROM SERVER, drag and drop). Files
+`F`/ADD FILE (CLI), web GUI FILE OPERATIONS > ADD HOSTS FILE (FROM CLIENT, FROM SERVER, drag and drop). Files
 named `*.txt` are never treated as CSV - they keep the plain host file format above.
 
-- **Detection**: first non-empty line is a header with the columns `IP Address` and
+- **Detection**: first line that is not blank, a `#` comment or an `opt:` line is a header with the columns `IP Address` and
   `Hostname` (case-insensitive); the delimiter (`;`, `,` or tab) is detected.
 - **Columns used**: `IP Address`, `Hostname`, `Serial Number`, `Model`, `Location`,
   `sysLocation`, `Type`, `Comment`. All other columns are ignored.
@@ -204,9 +206,9 @@ Single self-contained page, no external resources.
 
 - Table: CLI-style columns, filled top-down then next column right. Horizontal scroll
   if needed ("SCROLL RIGHT FOR MORE" hint in the stats bar).
-- Footer stats: RUNTIME, HOST UP/DOWN/FLAPPING, for the whole current view regardless
-  of the match filter. RUNTIME shows `n/a` briefly during a background round.
-- Adding many hosts (`ADD`, `ADD FILE`, upload) shows "added N host(s) - please wait,
+- Footer stats: HOSTS, RUNTIME, HOST UP/DOWN/FLAPPING, for the whole current view regardless
+  of the match filter and the ADV FILTER (HOSTS-SHOWN = shown count). The CLI footer counts the same way. RUNTIME shows `n/a` briefly during a background round.
+- Adding many hosts (`ADD`, ADD HOSTS FILE, upload) shows "added N host(s) - please wait,
   pinging ..." until they appear with a state, then `done`.
 - Font size 6–28px (slider, `A−`/`A+`, `+`/`−` keys), stored in `localStorage`.
 - Column headers sort the list (IPv4-aware).
@@ -215,32 +217,31 @@ Single self-contained page, no external resources.
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, RESET LOG, FILE OPERATIONS
     select, EXIT, font size.
   - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), comment
-    field (COMMENT), ADD FILE select, GENERATE REPORT select.
+    field (COMMENT), GENERATE REPORT select.
   - View select, sort order select, address mode select and ADV OPTIONS all match the
-    CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS and ADD FILE > FROM CLIENT/
-    FROM SERVER are web-gui-only (no CLI key - CLI already runs on the server's own
+    CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS (incl. ADD HOSTS FILE FROM CLIENT/
+    FROM SERVER) is web-gui-only (no CLI key - CLI already runs on the server's own
     filesystem).
 - **FILE OPERATIONS** dropdown, in this order:
   | Entry | Does |
   |---|---|
-  | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched. If the displayed hosts carry inventory values (CSV import) an inventory `.csv` is written instead (`;` delimited, columns as in *Inventory CSV import*); a `.txt` name or hostfile then becomes `.csv`, the default is `eping-hosts.csv` |
+  | ADD HOSTS FILE FROM SERVER | picks one or more `.txt` files or inventory `.csv` files already on the server, adds their hosts; a `.csv` without the inventory header, e.g. an eping log, is refused |
+  | ADD HOSTS FILE FROM CLIENT | local file picker (`.txt`/`.csv`), adds the hosts; a file can also be dropped anywhere on the page |
+  | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched. If the displayed hosts carry inventory values (CSV import) an inventory `.csv` is written instead (`;` delimited, columns as in *Inventory CSV import*); a `.txt` name or hostfile then becomes `.csv`, the default is `eping-hosts.csv`. The options that differ from the default are written first as `opt:` lines (see *Host file format*); for a `.csv` the checkboxes `include options (opt: lines)` (default on) and `save as .txt (hosts only, no inventory)` (default off) are offered |
   | UPLOAD FILE TO SERVER | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
-  | DOWNLOAD ALL HOSTS | full reference list, plain text |
-  | DOWNLOAD ACTIVE HOSTS | currently displayed hosts (view/address mode/filter applied), plain text |
+  | DOWNLOAD ALL HOSTS | full reference list: inventory `.csv` if the hosts carry inventory values, else `.txt`; non-default options first as `opt:` lines (`.csv`: checkboxes `include options`, default on, and `save as .txt`, default off) |
+  | DOWNLOAD ACTIVE HOSTS | currently displayed hosts (view/address mode/filter applied), same format and options as DOWNLOAD ALL HOSTS |
   | DOWNLOAD ACTIVE LOGFILE | active CSV log, zipped; disabled while logging off |
   | DOWNLOAD SELECTED FILES | picker: every `.csv`/`.txt`/`.html` in the working dir, table (name/size/date), extension filter, "select all", "no compression" checkbox (single-file selection only); multi-select bundles into one ZIP |
   | DELETE FILES FROM SERVER | same picker as DOWNLOAD SELECTED FILES, red DELETE button, confirms with file count; active logfile can't be deleted |
   | VIEW FILE FROM SERVER | picker: every `.csv`/`.txt` in the working dir, table (name/size/date), "select all"; opens each picked file read-only, raw content, COPY/DOWNLOAD buttons - see *VIEW FILE FROM SERVER* below |
-- **ADD FILE** dropdown: `FROM CLIENT` (local file picker) / `FROM SERVER` (picks one
-  or more `.txt` files or inventory `.csv` files already on the server, adds their
-  hosts; a `.csv` without the inventory header, e.g. an eping log, is refused).
 - Keyboard shortcuts (no modifier, only while no text field has focus; own quick
   variants, not the CLI's picker keys of the same letter): `U` cycles the original 3
   views (ALL HOSTS → CURRENTLY-UP → UP+FLAPPING → ALL HOSTS), the other 6 need the
   dropdown; `O` cycles all 5 sort orders one at a time; `P`/`I` toggle PREFER HOSTNAME /
   SWITCH TO IP ONLY directly, the address mode select reaches all 4 modes; `G`/`S`/`Z`/
   `C`/`L`/`E` click the matching button (`E`/`C`/`L` confirm); `A`/`D` focus host field;
-  `M`/`T` focus their field; `V` opens ADV FILTER; `F` opens the file picker; `R` forces a status refresh;
+  `M`/`T` focus their field; `V` opens ADV FILTER; `F` opens the ADD HOSTS FILE FROM CLIENT picker; `R` forces a status refresh;
   `+`/`−` font size (works while typing). No keyboard shortcut for `X`/ADV OPTIONS or
   GENERATE REPORT - click required.
 - Host field feeds both ADD/DELETE; ENTER triggers the button used last, ESC clears.
@@ -327,7 +328,7 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan/phase info |
 | GET | `/api/host?name=...` | — | JSON: all known data and history of one host (mouse-over popup) |
-| GET | `/api/logfiles` | — | JSON list of `.csv`/`.txt`/`.html` files (FILE OPERATIONS, ADD FILE > FROM SERVER) |
+| GET | `/api/logfiles` | — | JSON list of `.csv`/`.txt`/`.html` files (FILE OPERATIONS > ADD HOSTS FILE FROM SERVER) |
 | GET | `/api/download/hosts_all` | — | full reference list, `.txt` |
 | GET | `/api/download/hosts_shown` | — | shown hosts, `.txt` |
 | GET | `/api/download/logfile` | — | active CSV log, zipped; `404` if logging off |
