@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.65'
+VERSION = '3.69'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -645,6 +645,12 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
         up_seen.add(new)
     if old in down_streak:
         down_streak[new] = down_streak.pop(old)
+    if old in host_meta and new not in host_meta:
+        host_meta[new] = host_meta[old]          # inventory values follow the host
+    if is_ip_host(old):
+        host_csv_ip.setdefault(new, host_csv_ip.get(old, old))
+    elif old in host_csv_ip:
+        host_csv_ip.setdefault(new, host_csv_ip[old])
     forget_names([new])   # force a fresh forward lookup for the new identity
 
 def _forward_confirms(name, ip):
@@ -798,11 +804,14 @@ def get_names_finish(candidates, result_holder, original_hosts_list, active_host
     return _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
                             host_state, up_seen, down_streak)
 
-def prepare_targets(hosts, ttl):
+def prepare_targets(hosts, ttl, progress_cb=None):
     """Map the host list to what is actually handed to fping.
 
     Returns (targets, target -> [display names], unresolved names).
     With ttl <= 0 nothing is cached and fping does the resolving itself (old behaviour).
+    progress_cb(elapsed) -> True cuts the name lookups short (a keypress/browser
+    command is waiting): nothing is returned for this round ([], {}, []), the lookups
+    already running still fill the cache, so the next round only resolves the rest.
     """
     if ttl <= 0:
         return list(hosts), dict((h, [h]) for h in hosts), []
@@ -816,7 +825,20 @@ def prepare_targets(hosts, ttl):
             entry = _dns_cache.get(h)
             if not entry or entry[1] <= now:
                 pending.append(h)
-    if pending:
+    if pending and progress_cb is not None:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(DNS_RESOLVERS, len(pending))))
+        futs = [pool.submit(resolve_name, n, ttl) for n in pending]
+        t0   = time.time()
+        try:
+            while not all(f.done() for f in futs):
+                if progress_cb(time.time() - t0):
+                    for f in futs:
+                        f.cancel()                 # not started yet: dropped
+                    return [], {}, []
+                time.sleep(0.1)
+        finally:
+            pool.shutdown(wait=False)
+    elif pending:
         workers = max(1, min(DNS_RESOLVERS, len(pending)))
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -1075,6 +1097,81 @@ def match_host(pattern, name, ip=''):
     meta = host_meta.get(name) or (host_meta.get(ip) if ip else None)
     return bool(meta) and any(v and pattern.search(v) for v in meta)
 
+# ---- ADV FILTER: display-only filter on the inventory fields (see host_meta) ----
+# One exact value per field, fields ANDed, applied on top of the view and the [M] regex.
+ADV_FIELDS = (('model', 'Model', 2), ('location', 'Location', 3),
+              ('sysloc', 'sysLocation', 4), ('type', 'Type', 5), ('comment', 'Comment', 6))
+ADV_NONE   = '\x01none'   # wanted value: hosts without a value in that field
+adv_filter = {}           # field key -> wanted value (or ADV_NONE); empty = filter off
+
+def _adv_ok(meta, sel, skip=None):
+    """True if the inventory values 'meta' (or None) fit every wanted field in
+    'sel' (the field 'skip' is not checked)."""
+    for key, _label, idx in ADV_FIELDS:
+        want = sel.get(key)
+        if want is None or key == skip:
+            continue
+        have = meta[idx] if meta else ''
+        if (have != '') if want == ADV_NONE else (have != want):
+            return False
+    return True
+
+def adv_match(name, ip=''):
+    """True if the host passes the ADV FILTER (always True while it is off)."""
+    if not adv_filter:
+        return True
+    return _adv_ok(host_meta.get(name) or (host_meta.get(ip) if ip else None), adv_filter)
+
+def host_visible(pattern, name, ip=''):
+    """[M] regex (pattern, may be None) AND ADV FILTER."""
+    return (pattern is None or match_host(pattern, name, ip)) and adv_match(name, ip)
+
+def adv_values(hosts, selection=None):
+    """Selectable values per ADV FILTER field over the given host entries:
+    {key: {'values': [[value, host_count], ...] sorted, 'empty': hosts_without}}.
+    With a selection ({field: wanted}) each field only offers what is still possible
+    given the OTHER fields' selection (its own selection does not narrow its list).
+    Fields without any value in any host are left out."""
+    sel   = selection or {}
+    metas = [host_meta.get(h) for h in hosts]
+    out = {}
+    for k, _l, idx in ADV_FIELDS:
+        if not any(m and m[idx] for m in metas):
+            continue
+        counts, empty = {}, 0
+        for m in metas:
+            if not _adv_ok(m, sel, k):
+                continue
+            v = m[idx] if m else ''
+            if v:
+                counts[v] = counts.get(v, 0) + 1
+            else:
+                empty += 1
+        out[k] = {'values': [[v, counts[v]] for v in
+                             sorted(counts, key=lambda x: (x.lower(), x))],
+                  'empty': empty}
+    return out
+
+def adv_text():
+    """Short description of the active ADV FILTER, e.g. 'Model=C9300, Type=(empty)'."""
+    return ', '.join('%s=%s' % (label, '(empty)' if adv_filter[k] == ADV_NONE else adv_filter[k])
+                     for k, label, _i in ADV_FIELDS if k in adv_filter)
+
+def adv_filter_set(text):
+    """Replace the ADV FILTER from a JSON object {field: value} ('{}' = off).
+    Returns an error text, or '' on success."""
+    try:
+        d = json.loads(text) if text.strip() else {}
+    except ValueError:
+        return 'invalid filter'
+    if not isinstance(d, dict):
+        return 'invalid filter'
+    known = {k for k, _l, _i in ADV_FIELDS}
+    new = {k: v for k, v in d.items() if k in known and isinstance(v, str) and v != ''}
+    adv_filter.clear()
+    adv_filter.update(new)
+    return ''
+
 def apply_match_filter(rows, pattern):
     """Pure display filter: keep only rows whose display name (rows[i][0]),
     resolved/pinged IP (rows[i][8], when present) or inventory CSV field (see
@@ -1082,11 +1179,11 @@ def apply_match_filter(rows, pattern):
     compiled regex). This is applied after build_display(), on the rows about to be
     shown - it never touches active_hosts_list, so every host keeps being pinged on
     every round regardless of what the filter currently hides. Pass pattern=None for
-    no-op (filter off)."""
-    if pattern is None:
+    no-op (filter off). The ADV FILTER (adv_filter) is ANDed in."""
+    if pattern is None and not adv_filter:
         return rows
     return [r for r in rows
-            if match_host(pattern, r[0], r[8] if len(r) > 8 and r[8] else '')]
+            if host_visible(pattern, r[0], r[8] if len(r) > 8 and r[8] else '')]
 
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF, up_seen=None):
@@ -1414,6 +1511,7 @@ LOG_HEADER = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT',
 _CSV_META_COLS = ('hostname', 'serial number', 'model', 'location', 'syslocation', 'type', 'comment')
 _EMPTY_META    = ('',) * len(_CSV_META_COLS)
 host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..16)
+host_csv_ip    = {}   # host entry -> its 'IP Address' from the inventory CSV (SAVE HOSTS FILE)
 
 def _inventory_header(line):
     """(delimiter, lower-cased column names) if line is an inventory CSV header
@@ -1437,9 +1535,10 @@ def parse_inventory_csv_header(text):
 def parse_inventory_csv(text, use_names, stats=None):
     """Parse an inventory CSV (header with 'IP Address' and 'Hostname'; other columns
     are ignored except Serial Number, Model, Location, sysLocation, Type, Comment). One host
-    per row. The host entry is the IP (rows without a valid IP are skipped), or with
-    use_names (PREFER HOSTNAME) the Hostname column - then also rows without an IP;
-    the IP is the fallback when the name is not a valid hostname.
+    per row. The host entry is the Hostname column (also for rows without an IP) when
+    use_names is set - the callers' default for a CSV, only the IP modes (IP ONLY,
+    PREFER IP ADDRESS) turn it off - else the IP (rows without a valid IP are skipped).
+    The IP is the fallback when the name is not a valid hostname.
     The row's values are stored in host_meta for the log. Returns the host list, or
     None if text is not an inventory CSV."""
     lines = (text or '').lstrip('\ufeff').splitlines()
@@ -1462,7 +1561,7 @@ def parse_inventory_csv(text, use_names, stats=None):
             name  = cell(row, 'hostname')
             ip_ok = is_ip_host(ip)
             if use_names and match_re(name, fqdn_re) and not is_ip_host(name):
-                key = name                 # PREFER HOSTNAME: also rows without an IP
+                key = name                 # hostname entry: also rows without an IP
             elif ip_ok:
                 key = ip
             else:
@@ -1477,6 +1576,8 @@ def parse_inventory_csv(text, use_names, stats=None):
             hosts.append(key)
             meta = tuple(neutralize_csv_formula(cell(row, c)) for c in _CSV_META_COLS)
             host_meta[key] = meta
+            if ip_ok:
+                host_csv_ip[key] = ip      # kept for SAVE HOSTS FILE (.csv)
             if ip_ok and ip not in seen_ips:
                 seen_ips.add(ip)
                 host_meta[ip] = meta     # lookup by pinged address when the key was renamed
@@ -1989,7 +2090,7 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
 
     # resolve hostnames from the cache and ping addresses instead of names
     _t = time.time()
-    targets, name_map, unresolved = prepare_targets(active_hosts_list, dns_ttl)
+    targets, name_map, unresolved = prepare_targets(active_hosts_list, dns_ttl, progress_cb)
     timings['dns'] = time.time() - _t
 
     # --- split into retry classes ---
@@ -2136,6 +2237,7 @@ web_state = {
     'datetime'         : '',
     'hostfile_name'    : '',      # FILE OPERATIONS > SAVE HOSTS FILE ON SERVER target,
     'hostfile_active'  : False,   # '' / False if eping.py was started with -df
+    'save_csv'         : False,   # shown hosts carry inventory values: SAVE HOSTS FILE writes a .csv
     'rows'             : [],
     'host_list_shown'  : [],   # DOWNLOAD > SHOWN HOSTS - currently displayed hosts
     'host_list_all'    : [],   # DOWNLOAD > ALL HOSTS - the full reference list
@@ -2145,6 +2247,8 @@ web_state = {
     'hosts_flap'       : 0,
     'pending_wait'     : False,
     'hosts_shown'      : 0,   # after the [M] display filter narrows the view
+    'adv_filter'       : {},  # ADV FILTER selection, see adv_filter
+    'adv_values'       : {},  # ADV FILTER choices, see adv_values()
     'run_counter'      : 0,
     'run_time'         : '0.00',
     'logging'          : False,
@@ -2270,6 +2374,9 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box.wide::-webkit-scrollbar-track{background:var(--panel)}
   .modal-box.wide::-webkit-scrollbar-thumb{background:var(--ctrl-line);border-radius:6px}
   .modal-box.xwide{width:900px}
+  .advf-row{display:flex;align-items:center;gap:10px;margin:0 0 10px}
+  .advf-row label{flex:0 0 110px;font-size:12px;color:var(--fg);font-weight:700}
+  .advf-row select{flex:1 1 auto;min-width:0;width:100%}
   .adv-row{display:flex;flex-direction:column;gap:3px;margin:0 0 12px}
   .adv-row label{font-size:11px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
   .adv-row label .adv-desc{color:var(--dim);font-weight:400;letter-spacing:normal}
@@ -2532,6 +2639,18 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="advFilterModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>ADV FILTER</h3>
+      <p>Display filter on the inventory fields of the hosts .csv. One value per field, fields are combined with AND, and with the view and the display filter. Every host keeps being pinged.</p>
+      <div id="advFilterRows"></div>
+      <div class="modal-buttons">
+        <button id="modalBtnAdvFApply">APPLY</button>
+        <button id="modalBtnAdvFReset" class="danger">RESET ALL</button>
+        <button id="modalBtnAdvFClose">CLOSE</button>
+      </div>
+    </div>
+  </div>
   <div id="advOptionsModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>ADV OPTIONS</h3>
@@ -2627,6 +2746,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="Display filter: regex">
       <button id="btnMatchFilter" title="apply display filter">SET</button>
       <button id="btnClearFilter" title="clear display filter">CLEAR</button>
+      <button id="btnAdvFilter" title="ADV FILTER (V): display filter on the inventory fields Model, Location, sysLocation, Type, Comment - only matching hosts are shown, every host keeps being pinged">ADV FILTER</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
      <span class="grp">
@@ -2777,6 +2897,7 @@ var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', so
                addr_mode:'switching address mode ...',
                get_names:'resolving names ...',
                match_filter:'applying filter ...',
+               adv_filter:'applying adv filter ...',
                add_comment:'logging comment ...',
                reset_log:'resetting log ...',
                set_option:'applying option ...',
@@ -3227,6 +3348,7 @@ var loggingOn = false;   // kept in sync from every status poll, see render()
 var hostfileActive  = false;   // FILE OPERATIONS > SAVE HOSTS FILE ON SERVER -
 var hostfileName    = '';      // all three kept in sync from every status poll,
 var shownHostsCount = 0;       // see render()
+var saveCsv         = false;   // shown hosts carry inventory values: SAVE writes a .csv
 var reportWindow = null; // blank tab opened by GENERATE REPORT, filled in once ready - see poll()
 function resetLogOpen(){ return resetLogModal.style.display !== 'none'; }
 function closeResetLog(){ resetLogModal.style.display = 'none'; }
@@ -3272,15 +3394,19 @@ function openSaveHosts(){
   var text  = document.getElementById('saveHostsText');
   input.value = '';
   input.style.display = '';
+  var ext  = saveCsv ? '.csv' : '.txt';
+  // an inventory is saved as .csv - same rule as resolve_save_target() server-side
+  var tgt  = (saveCsv && !/\.csv$/i.test(hostfileName)) ? hostfileName.replace(/\.[^.\/\\]*$/, '') + '.csv' : hostfileName;
+  var kind = saveCsv ? ' (inventory .csv with the Model/Location/... columns)' : '';
   if(hostfileActive){
-    text.innerHTML = 'Overwrite <b>' + esc(hostfileName) + '</b> on the server with the '
-      + shownHostsCount + ' host(s) currently shown - or type a new name below to '
+    text.innerHTML = 'Overwrite <b>' + esc(tgt) + '</b> on the server with the '
+      + shownHostsCount + ' host(s) currently shown' + kind + ' - or type a new name below to '
       + 'save as a different file instead:';
-    input.placeholder = 'blank = overwrite ' + hostfileName + ', or new file name (.txt added automatically)';
+    input.placeholder = 'blank = overwrite ' + tgt + ', or new file name (' + ext + ' added automatically)';
   } else {
     text.innerHTML = 'eping.py was started without a hosts file. Save the '
-      + shownHostsCount + ' host(s) currently shown as a new file on the server:';
-    input.placeholder = 'file name (blank = eping-hosts.txt), .txt added automatically';
+      + shownHostsCount + ' host(s) currently shown' + kind + ' as a new file on the server:';
+    input.placeholder = 'file name (blank = eping-hosts' + ext + '), ' + ext + ' added automatically';
   }
   saveHostsModal.style.display = 'flex';
   input.focus();
@@ -3475,6 +3601,96 @@ function openAdvOptions(){
 }
 function closeAdvOptions(){ advOptionsModal.style.display = 'none'; }
 function advOptionsOpen(){ return advOptionsModal.style.display !== 'none'; }
+
+/* ---------------- ADV FILTER ---------------- */
+var advFilterModal = document.getElementById('advFilterModal');
+var lastAdv = {values: {}, filter: {}};     // latest snapshot from the server, see poll()
+var ADV_NONE = '\u0001none';
+var ADV_FIELD_UI = [['model', 'Model'], ['location', 'Location'], ['sysloc', 'sysLocation'],
+                    ['type', 'Type'], ['comment', 'Comment']];
+// (re)fill one drop-down with the given choices, keeping 'cur' selected - a
+// selection that is no longer possible stays visible with (0)
+function fillAdvSelect(sel, v, cur){
+  var add = function(val, text){
+    var o = document.createElement('option');
+    o.value = val; o.textContent = text; sel.appendChild(o);
+  };
+  sel.innerHTML = '';
+  add('', 'ALL');
+  v.values.forEach(function(x){ add(x[0], x[0] + '  (' + x[1] + ')'); });
+  if(v.empty) add(ADV_NONE, '(empty)  (' + v.empty + ')');
+  if(cur !== undefined && cur !== ''){
+    var known = false;
+    for(var i = 0; i < sel.options.length; i++) if(sel.options[i].value === cur) known = true;
+    if(!known) add(cur, cur + '  (0)');
+    sel.value = cur;
+  }
+}
+// each drop-down only offers what is still possible with the OTHER drop-downs'
+// choice - asks the server (draft selection, nothing applied yet)
+var advReqSeq = 0;
+function advFilterChanged(changedKey){
+  var selection = advFilterSelection(), seq = ++advReqSeq;
+  fetch('api/advvalues', {method: 'POST', headers: {'Content-Type': 'application/json'},
+                          body: JSON.stringify({filter: selection})})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if(seq !== advReqSeq || !d || !d.values) return;     // a newer change is on its way
+      ADV_FIELD_UI.forEach(function(f){
+        var sel = document.getElementById('advf_' + f[0]);
+        if(sel && f[0] !== changedKey && d.values[f[0]]) fillAdvSelect(sel, d.values[f[0]], selection[f[0]]);
+      });
+    }).catch(function(){});
+}
+function populateAdvFilter(){
+  var c = document.getElementById('advFilterRows');
+  c.innerHTML = '';
+  var any = false;
+  ADV_FIELD_UI.forEach(function(f){
+    var v = lastAdv.values[f[0]];
+    if(!v) return;
+    any = true;
+    var row = document.createElement('div');
+    row.className = 'advf-row';
+    var lab = document.createElement('label');
+    lab.textContent = f[1];
+    lab.htmlFor = 'advf_' + f[0];
+    var sel = document.createElement('select');
+    sel.id = 'advf_' + f[0];
+    sel.setAttribute('data-key', f[0]);
+    fillAdvSelect(sel, v, lastAdv.filter[f[0]]);
+    sel.onchange = function(){ advFilterChanged(f[0]); };
+    row.appendChild(lab); row.appendChild(sel); c.appendChild(row);
+  });
+  if(!any){
+    c.innerHTML = '<p>No inventory values loaded - add a hosts .csv file (header with Hostname and IP Address).</p>';
+  }
+  document.getElementById('modalBtnAdvFApply').disabled = !any;
+  document.getElementById('modalBtnAdvFReset').disabled = !any;
+}
+function advFilterSelection(){
+  var o = {};
+  var sels = document.querySelectorAll('#advFilterRows select');
+  for(var i = 0; i < sels.length; i++){
+    if(sels[i].value !== '') o[sels[i].getAttribute('data-key')] = sels[i].value;
+  }
+  return o;
+}
+function openAdvFilter(){ populateAdvFilter(); advFilterModal.style.display = 'flex'; }
+function closeAdvFilter(){ advFilterModal.style.display = 'none'; }
+function advFilterOpen(){ return advFilterModal.style.display !== 'none'; }
+document.getElementById('btnAdvFilter').onclick = openAdvFilter;
+document.getElementById('modalBtnAdvFClose').onclick = closeAdvFilter;
+document.getElementById('modalBtnAdvFApply').onclick = function(){
+  post('adv_filter', JSON.stringify(advFilterSelection()));
+  closeAdvFilter();
+};
+document.getElementById('modalBtnAdvFReset').onclick = function(){
+  var sels = document.querySelectorAll('#advFilterRows select');
+  for(var i = 0; i < sels.length; i++) sels[i].value = '';
+  advFilterChanged('');            // full lists again
+  post('adv_filter', '{}');
+};
 
 var stoppedModal        = document.getElementById('stoppedModal');
 var stoppedMsg           = document.getElementById('stoppedMsg');
@@ -3934,6 +4150,10 @@ document.addEventListener('keydown', function(e){
     if(e.key === 'Escape'){ closeDeleteFiles(); e.preventDefault(); }
     return;
   }
+  if(advFilterOpen()){
+    if(e.key === 'Escape'){ closeAdvFilter(); e.preventDefault(); }
+    return;
+  }
   if(advOptionsOpen()){
     if(e.key === 'Escape'){ closeAdvOptions(); e.preventDefault(); }
     else if(e.key.toLowerCase() === 'r' && document.activeElement.tagName !== 'INPUT'){
@@ -3966,6 +4186,7 @@ document.addEventListener('keydown', function(e){
     case 'g': document.getElementById('btnGetNames').click(); break;
     case 'm': document.getElementById('matchInput').focus();
               document.getElementById('matchInput').select(); break;
+    case 'v': document.getElementById('btnAdvFilter').click(); break;
     case 'o': cycleSortMode(); break;
     case 'a': setMode('add'); document.getElementById('addInput').focus(); break;
     case 'd': setMode('del'); document.getElementById('addInput').focus(); break;
@@ -4152,7 +4373,10 @@ function poll(){
     document.getElementById('sDown').textContent    = s.hosts_down;
     document.getElementById('sFlap').textContent    = s.hosts_flap;
     var swrap = document.getElementById('sShownWrap');
-    swrap.style.display = s.match_filter ? '' : 'none';
+    var advOn = !!(s.adv_filter && Object.keys(s.adv_filter).length);
+    swrap.style.display = (s.match_filter || advOn) ? '' : 'none';
+    lastAdv = {values: s.adv_values || {}, filter: s.adv_filter || {}};
+    document.getElementById('btnAdvFilter').className = advOn ? 'on' : '';
     document.getElementById('sShown').textContent   = s.hosts_shown;
     lastOptions = s.options || {};
     advPollCheck();
@@ -4169,6 +4393,7 @@ function poll(){
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
+    saveCsv        = !!s.save_csv;
     hostfileActive = !!s.hostfile_active;
     hostfileName   = s.hostfile_name || '';
     shownHostsCount = s.hosts_shown || 0;
@@ -4502,40 +4727,93 @@ def safe_cwd_filename(name, exts):
     return not os.path.islink(name)
 
 
-def hostfile_save_target(args):
+def hosts_have_inventory(hosts):
+    """True if any of the host entries carries inventory CSV values."""
+    return any(h in host_meta for h in hosts)
+
+
+def hostfile_save_target(args, as_csv=False):
     """The file FILE OPERATIONS > SAVE HOSTS FILE ON SERVER overwrites - the
-    first -f/--hostfile path if eping.py was started with one, else None (no
-    hostfile is active - the caller falls back to sanitize_hostfile_save_name()
-    to ask for a name instead)."""
+    first -f/--hostfile path if eping.py was started with one (as_csv: with its
+    extension changed to .csv, so an inventory is never written into a .txt), else
+    None (no hostfile is active - the caller falls back to
+    sanitize_hostfile_save_name() to ask for a name instead)."""
     if args.disable_hostfile:
         return None
     paths = split_hostfile_list(args.hostfile)
-    return paths[0] if paths else None
+    if not paths:
+        return None
+    path = paths[0]
+    if as_csv and not path.lower().endswith('.csv'):
+        path = os.path.splitext(path)[0] + '.csv'
+    return path
 
 
-def sanitize_hostfile_save_name(name):
-    """Turn a user-typed 'save hosts file' name into a safe .txt filename, or
-    None if unusable - used when hostfile_save_target() returned None (eping.py
-    was started with -df, nothing to overwrite). Blank defaults to
-    'eping-hosts.txt'; '.txt' is appended once (not doubled if already given);
-    rejects path separators/traversal via safe_cwd_filename(). Existing files
-    ARE allowed - this command's whole purpose is (over)writing a hosts file,
-    and the client already asks for confirmation before sending the request.
+def sanitize_hostfile_save_name(name, as_csv=False):
+    """Turn a user-typed 'save hosts file' name into a safe .txt (as_csv: .csv)
+    filename, or None if unusable - used when hostfile_save_target() returned
+    None (eping.py was started with -df, nothing to overwrite). Blank defaults to
+    'eping-hosts.txt' / '.csv'; the extension is appended once (not doubled; a
+    .txt name becomes .csv when as_csv); rejects path separators/traversal via
+    safe_cwd_filename(). Existing files ARE allowed - this command's whole purpose
+    is (over)writing a hosts file, and the client already asks for confirmation
+    before sending the request.
     """
     name = (name or '').strip()
+    ext  = '.csv' if as_csv else '.txt'
     if not name:
-        name = 'eping-hosts.txt'
-    elif not name.lower().endswith('.txt'):
+        name = 'eping-hosts' + ext
+    elif as_csv:
+        if name.lower().endswith('.txt'):
+            name = name[:-4]
+        if not name.lower().endswith('.csv'):
+            name += '.csv'
+    elif not name.lower().endswith(('.txt', '.csv')):
         name += '.txt'
-    return name if safe_cwd_filename(name, ('.txt',)) else None
+    return name if safe_cwd_filename(name, ('.txt', '.csv')) else None
+
+
+def resolve_save_target(args, typed, shown_hosts):
+    """(target path or None, as_csv) for SAVE HOSTS FILE ON SERVER. A typed name
+    always saves as that (possibly new) file, even with a hostfile already active;
+    blank overwrites the active hostfile, or falls back to the default name if none
+    is active. as_csv: the shown hosts carry inventory values - written as .csv."""
+    as_csv = hosts_have_inventory(shown_hosts)
+    typed  = (typed or '').strip()
+    if typed:
+        return sanitize_hostfile_save_name(typed, as_csv), as_csv
+    target = hostfile_save_target(args, as_csv)
+    if target is None:
+        target = sanitize_hostfile_save_name('', as_csv)
+    return target, as_csv
+
+
+INVENTORY_CSV_HEADER = ['Hostname', 'IP Address', 'Serial Number', 'Model', 'Location',
+                        'sysLocation', 'Type', 'Comment']
+
+def inventory_csv_text(hosts):
+    """Inventory CSV (';' delimited, same columns eping.py reads) for the host
+    entries: the inventory values where known, else just Hostname or IP Address."""
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=';', lineterminator='\n')
+    w.writerow(INVENTORY_CSV_HEADER)
+    for h in hosts:
+        meta = host_meta.get(h) or _EMPTY_META
+        is_ip = is_ip_host(h)
+        ip = host_csv_ip.get(h) or (h if is_ip else '')
+        w.writerow([meta[0] or ('' if is_ip else h), ip] + list(meta[1:]))
+    return out.getvalue()
 
 
 def save_hosts_file(path, hosts):
-    """Overwrite path with one host per line (LF) - FILE OPERATIONS > SAVE
-    HOSTS FILE ON SERVER. Returns True on success, False on any OSError."""
+    """Overwrite path - FILE OPERATIONS > SAVE HOSTS FILE ON SERVER: an inventory
+    CSV (see inventory_csv_text) for a .csv path, else one host per line (LF).
+    Returns True on success, False on any OSError."""
     try:
+        text = (inventory_csv_text(hosts) if path.lower().endswith('.csv')
+                else ''.join(h + '\n' for h in hosts))
         with open(path, 'w', encoding='utf-8', newline='') as f:
-            f.write(''.join(h + '\n' for h in hosts))
+            f.write(text)
         return True
     except OSError:
         return False
@@ -4860,6 +5138,22 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                           json.dumps({'ok': False, 'error': 'read only view'}))
             return
 
+        # --- ADV FILTER window: what is still selectable given a draft selection ---
+        if path in ('/api/advvalues', 'api/advvalues'):
+            raw = self._read_body(65536) or b'{}'
+            try:
+                sel = json.loads(raw.decode('utf-8') or '{}').get('filter') or {}
+            except Exception:
+                sel = {}
+            known = {k for k, _l, _i in ADV_FIELDS}
+            sel = {k: v for k, v in sel.items() if k in known and isinstance(v, str)} \
+                  if isinstance(sel, dict) else {}
+            with web_lock:
+                hosts = list(web_state.get('host_list_all') or [])
+            self._respond(200, 'application/json; charset=utf-8',
+                          json.dumps({'ok': True, 'values': adv_values(hosts, sel)}))
+            return
+
         # --- host file upload (plain text body) ---
         if path in ('/api/upload', 'api/upload'):
             raw = self._read_body(WEB_MAX_UPLOAD)
@@ -4984,8 +5278,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         except Exception:
             payload = {}
         cmd   = str(payload.get('cmd', ''))
-        value = str(payload.get('value', ''))[:256]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report', 'save_hosts_file'):
+        value = str(payload.get('value', ''))[:(8192 if cmd == 'adv_filter' else 256)]
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'adv_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report', 'save_hosts_file'):
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         if cmd == 'run_report':
@@ -5122,6 +5416,9 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'message'         : message,
             'scan_info'       : scan_info,
             'match_filter'    : match_filter,
+            'adv_filter'      : dict(adv_filter),
+            'adv_values'      : adv_values(original_hosts_list or [], adv_filter),
+            'save_csv'        : hosts_have_inventory(r['host'] for r in rows),
             'options'         : options if options is not None else web_state.get('options', {}),
         })
 
@@ -5623,6 +5920,14 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         message = 'display filter: on'
                     except re.error as e:
                         message = 'display filter: invalid regex - ' + str(e)
+            elif cmd == 'adv_filter':
+                err = adv_filter_set(value)
+                if err:
+                    message = 'adv filter: ' + err
+                elif adv_filter:
+                    message = 'adv filter: on (' + adv_text() + ')'
+                else:
+                    message = 'adv filter: off'
             elif cmd == 'sort':
                 try:
                     sort_mode = int(value) % len(SORT_MODES)
@@ -5664,7 +5969,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                        host_spec_cli('DEL', value), tz_offset)
             elif cmd == 'upload':
                 up_stats  = {}
-                new_hosts = parse_hosts_from_text(value, up_stats, addr_mode == 1)
+                new_hosts = parse_hosts_from_text(value, up_stats, addr_mode not in (2, 3))
                 if not new_hosts and up_stats.get('skipped'):
                     message = ('upload: mask must be /%d../%d: %s'
                                % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0]))
@@ -5697,9 +6002,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # narrows it further) both apply, see quick/quick_rows just below
                 shown_hosts = [o[0] for o in build_display(active_hosts_list, host_state,
                                                             sort_mode, tz_offset, flap_window)]
-                if match_filter_re is not None:
+                if match_filter_re is not None or adv_filter:
                     shown_hosts = [h for h in shown_hosts
-                                  if match_host(match_filter_re, h,
+                                  if host_visible(match_filter_re, h,
                                                 host_state[h][8] if h in host_state and len(host_state[h]) > 8 else '')]
                 _keep = set(shown_hosts)   # built once - a set() per element made this O(n^2)
                 dropped = [h for h in original_hosts_list if h not in _keep]
@@ -5708,6 +6013,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 active_hosts_list      = shown_hosts
                 filter_mode = 0
                 match_filter_re, match_filter_text = None, ''
+                adv_filter.clear()
                 message = 'reference set to the ' + str(len(shown_hosts)) + ' host(s) shown'
                 write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
             elif cmd == 'zero':
@@ -5786,18 +6092,12 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # (possibly new) file, even with a hostfile already active;
                 # blank overwrites the active hostfile, or falls back to the
                 # default name if none is active (sanitize_hostfile_save_name())
-                _save_name = str(value).strip()
-                if _save_name:
-                    target = sanitize_hostfile_save_name(_save_name)
-                else:
-                    target = hostfile_save_target(args)
-                    if target is None:
-                        target = sanitize_hostfile_save_name(value)
+                with web_lock:
+                    shown_now = list(web_state.get('host_list_shown') or [])
+                target, _as_csv = resolve_save_target(args, value, shown_now)
                 if target is None:
                     message = 'invalid file name - hosts file not saved'
                 else:
-                    with web_lock:
-                        shown_now = list(web_state.get('host_list_shown') or [])
                     if save_hosts_file(target, shown_now):
                         message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
                         write_log_info(args.disable_logging, logfile_file_name,
@@ -5876,6 +6176,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 original_hosts_list[:] = []
                 host_state.clear()
                 host_meta.clear()
+                host_csv_ip.clear()
+                adv_filter.clear()
                 up_seen.clear()
                 down_streak.clear()
                 _dns_cache.clear()
@@ -5922,7 +6224,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                      tz_offset, flap_window)
             quick_up = sum(1 for e in quick if 'UP' in e[1])
             quick_total = len(quick)
-            if match_filter_re is not None:
+            if match_filter_re is not None or adv_filter:
                 quick = apply_match_filter(quick, match_filter_re)
             with web_lock:
                 web_state['message']      = message
@@ -5942,6 +6244,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['addr_mode'] = addr_mode
                 web_state['sort_mode']    = sort_mode
                 web_state['match_filter'] = match_filter_text
+                web_state['adv_filter']   = dict(adv_filter)
+                web_state['adv_values']   = adv_values(original_hosts_list, adv_filter)
+                web_state['save_csv']     = hosts_have_inventory(web_state['host_list_shown'])
                 # logging state can flip live (START LOG) - keep the quick path in sync too
                 web_state['logging']      = bool(args.disable_logging)
                 web_state['logfile']      = logfile_file_name if args.disable_logging else ''
@@ -6021,7 +6326,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         hosts_count_down = len(display_list) - hosts_count_up
         hosts_count_flap = sum(1 for e in display_list
                                if host_is_flapping(e, now_local(tz_offset), flap_window))
-        if match_filter_re is not None:
+        if match_filter_re is not None or adv_filter:
             display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_shown = len(display_list)
         phase['build'] = time.time() - _t
@@ -6427,7 +6732,7 @@ if __name__=='__main__':
             except Exception:
                 error_handler('ERROR: Unable to open hosts file: ' + str(hostfile_path))
             file_stats = {}
-            for entry in parse_hosts_from_text(hostfile_text, file_stats, args.prefer_hostname, hostfile_path):
+            for entry in parse_hosts_from_text(hostfile_text, file_stats, not args.ip_only, hostfile_path):
                 if is_ip_host(entry):
                     hosts_list_ipv4.append(entry)
                 else:
@@ -6746,6 +7051,134 @@ if __name__=='__main__':
             draw_screen()
             screen.refresh()
         return result
+
+    def adv_filter_dialog():
+        """[V] ADV FILTER window: pick one value per inventory field (Model, Location,
+        sysLocation, Type, Comment) - display only, ANDed with the view and the [M]
+        regex, every host keeps being pinged. Works on a draft; APPLY activates it,
+        ESC discards it. Pinging keeps running while the window is open."""
+        vals   = adv_values(original_hosts_list)
+        fields = [(k, label) for k, label, _i in ADV_FIELDS if k in vals]
+        if not fields:
+            notice('ADV FILTER: NO INVENTORY VALUES (ADD A HOSTS .CSV FILE)', 3)
+            return
+        draft = {k: v for k, v in adv_filter.items() if k in vals}
+
+        def choices(k):
+            ch = [('', 'ALL')] + [(v, '%s  (%d)' % (v, c)) for v, c in vals[k]['values']]
+            if vals[k]['empty']:
+                ch.append((ADV_NONE, '(empty)  (%d)' % vals[k]['empty']))
+            if draft.get(k) and draft[k] not in [c[0] for c in ch]:
+                ch.append((draft[k], draft[k] + '  (0)'))     # value no longer in the list
+            return ch
+
+        items  = fields + [('@apply', 'APPLY'), ('@reset', 'RESET ALL'), ('@cancel', 'CANCEL')]
+        sel    = 0
+        result = None
+        lw     = max(len(label) for _k, label in fields)
+        screen.nodelay(False)
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        try:
+            while True:
+                # each field only offers what is still possible with the others' choice
+                vals = adv_values(original_hosts_list, draft)
+                for _k, _l in fields:
+                    vals.setdefault(_k, {'values': [], 'empty': 0})
+                rows, cols = screen.getmaxyx()
+                dialog_w = min(78, max(30, cols - 4))
+                dialog_h = len(items) + 6
+                dialog_y = max(0, rows // 2 - dialog_h // 2)
+                dialog_x = max(0, cols // 2 - dialog_w // 2)
+                for dy in range(dialog_h):
+                    screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
+                screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
+                screen_output(dialog_y + 1, dialog_x, '│' + ' ADV FILTER '.center(dialog_w - 2) + '│', 1, 1)
+                screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+                for i, (k, label) in enumerate(items):
+                    if k.startswith('@'):
+                        line = ('> ' if i == sel else '  ') + '[ ' + label + ' ]'
+                    else:
+                        cur  = dict(choices(k)).get(draft.get(k, ''), 'ALL')
+                        line = ('> ' if i == sel else '  ') + label.ljust(lw) + ' : ' + cur
+                    screen_output(dialog_y + 3 + i, dialog_x,
+                                  '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│',
+                                  2 if i == sel else 1, 1 if i == sel else 0)
+                footer = ' [UP/DN]=field [LF/RT]=value [ENTER]=list [A]=apply [R]=reset [ESC]=cancel'
+                screen_output(dialog_y + 3 + len(items), dialog_x,
+                              '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+                screen_output(dialog_y + 4 + len(items), dialog_x,
+                              '│' + footer[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+                screen_output(dialog_y + dialog_h - 1, dialog_x,
+                              '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
+                screen.refresh()
+
+                ch = screen.getch()
+                k = items[sel][0]
+                if ch in (curses.KEY_UP, ord('k')):
+                    sel = (sel - 1) % len(items)
+                elif ch in (curses.KEY_DOWN, ord('j'), 9):
+                    sel = (sel + 1) % len(items)
+                elif ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and not k.startswith('@'):
+                    ch_list = choices(k)
+                    pos = [c[0] for c in ch_list].index(draft.get(k, ''))
+                    pos = (pos + (1 if ch == curses.KEY_RIGHT else -1)) % len(ch_list)
+                    if ch_list[pos][0]:
+                        draft[k] = ch_list[pos][0]
+                    else:
+                        draft.pop(k, None)
+                elif ch in (ord('r'), ord('R')):
+                    draft.clear()
+                elif ch in (ord('a'), ord('A')):
+                    result = dict(draft)
+                    break
+                elif ch == 27:
+                    break
+                elif ch in (10, 13):
+                    if k == '@apply':
+                        result = dict(draft)
+                        break
+                    elif k == '@reset':
+                        draft.clear()
+                    elif k == '@cancel':
+                        break
+                    else:
+                        # the picker runs its own background pings - hand over
+                        stop_event.set()
+                        bg_thread.join(timeout=float(args.waittime) + 10.0)
+                        ch_list = choices(k)
+                        cur_pos = [c[0] for c in ch_list].index(draft.get(k, ''))
+                        picked  = list_picker_dialog(dict(fields)[k].upper(),
+                                                     [c[1] for c in ch_list], cur_pos)
+                        screen.nodelay(False)
+                        stop_event = threading.Event()
+                        bg_thread  = threading.Thread(target=run_background_pings,
+                                                      args=(stop_event,), daemon=True)
+                        bg_thread.start()
+                        if picked is not None:
+                            if ch_list[picked][0]:
+                                draft[k] = ch_list[picked][0]
+                            else:
+                                draft.pop(k, None)
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
+
+        screen.nodelay(True)
+        screen.clear()
+        if result is not None:
+            adv_filter.clear()
+            adv_filter.update(result)
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+        if result is not None:
+            if adv_filter:
+                notice('ADV FILTER: ON (%d OF %d SHOWN)' % (len(display_list), len(active_hosts_list)), 2)
+            else:
+                notice('ADV FILTER: OFF', 2)
 
     def list_picker_dialog(title, items, current_idx):
         """[V] view-filter picker (and reusable for any future single-choice list):
@@ -7140,7 +7573,7 @@ if __name__=='__main__':
 
         elif bcmd == 'upload':
             up_stats  = {}
-            new_hosts = parse_hosts_from_text(bval, up_stats, prefer_hostname)
+            new_hosts = parse_hosts_from_text(bval, up_stats, not (prefer_ip or ip_only_mode))
             if not new_hosts and up_stats.get('skipped'):
                 err_text = ('upload: mask must be /%d..%d: %s'
                            % (CIDR_MIN_MASK, CIDR_MAX_MASK, up_stats['skipped'][0]))
@@ -7177,6 +7610,7 @@ if __name__=='__main__':
             active_hosts_list      = shown_hosts
             filter_mode = 0
             match_filter_re, match_filter_text = None, ''
+            adv_filter.clear()
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
             message = 'reference set to the ' + str(len(shown_hosts)) + ' host(s) shown'
@@ -7186,6 +7620,8 @@ if __name__=='__main__':
             original_hosts_list[:] = []
             host_state.clear()
             host_meta.clear()
+            host_csv_ip.clear()
+            adv_filter.clear()
             up_seen.clear()
             down_streak.clear()
             _dns_cache.clear()
@@ -7235,6 +7671,21 @@ if __name__=='__main__':
                     match_filter_re, match_filter_text = new_re, bval
                     notice('DISPLAY FILTER: ON', 2)
                     message = 'display filter: on'
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+
+        elif bcmd == 'adv_filter':
+            err = adv_filter_set(bval)
+            if err:
+                notice(('ADV FILTER: ' + err).upper(), 3)
+                message = 'adv filter: ' + err
+            elif adv_filter:
+                notice('ADV FILTER: ON', 2)
+                message = 'adv filter: on (' + adv_text() + ')'
+            else:
+                notice('ADV FILTER: OFF', 2)
+                message = 'adv filter: off'
             rebuild_display()
             draw_screen()
             screen.refresh()
@@ -7314,19 +7765,13 @@ if __name__=='__main__':
             # file, even with a hostfile already active; blank overwrites the
             # active hostfile, or falls back to the default name if none is
             # active (sanitize_hostfile_save_name())
-            _save_name = str(bval).strip()
-            if _save_name:
-                target = sanitize_hostfile_save_name(_save_name)
-            else:
-                target = hostfile_save_target(args)
-                if target is None:
-                    target = sanitize_hostfile_save_name(bval)
+            with web_lock:
+                shown_now = list(web_state.get('host_list_shown') or [])
+            target, _as_csv = resolve_save_target(args, bval, shown_now)
             if target is None:
                 notice('INVALID FILE NAME - HOSTS FILE NOT SAVED', 3)
                 message = 'invalid file name - hosts file not saved'
             else:
-                with web_lock:
-                    shown_now = list(web_state.get('host_list_shown') or [])
                 if save_hosts_file(target, shown_now):
                     notice('SAVED ' + str(len(shown_now)) + ' HOST(S) TO ' + target, 2)
                     message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
@@ -7534,7 +7979,7 @@ if __name__=='__main__':
         global display_list, hosts_count_up, hosts_count_down, hosts_count_flap
         display_list = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
-        if match_filter_re is not None:
+        if match_filter_re is not None or adv_filter:
             display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
@@ -7554,10 +7999,15 @@ if __name__=='__main__':
         elif gn_thread is not None and gn_thread.is_alive():
             screen_print_center_top(
                 'GET NAMES running in background (%d host(s))...' % len(gn_candidates), 2)
-        elif match_filter_re is not None:
+        elif match_filter_re is not None or adv_filter:
+            _ft = []
+            if match_filter_re is not None:
+                _ft.append("'%s'" % match_filter_text)
+            if adv_filter:
+                _ft.append('ADV ' + adv_text())
             screen_print_center_top(
-                "DISPLAY FILTER '%s' active (%d of %d hosts shown, all still pinged)"
-                % (match_filter_text, len(display_list), len(active_hosts_list)), 2)
+                ("DISPLAY FILTER %s active (%d of %d hosts shown, all still pinged)"
+                 % (' + '.join(_ft), len(display_list), len(active_hosts_list)))[:max(10, cols - 4)], 2)
         else:
             screen_print_center_top('eping.py version ' + version + ' by Ewald Jeitler', 1)
 
@@ -7672,27 +8122,28 @@ if __name__=='__main__':
         l_full  = ' [L]=RESET LOGGING ' if args.disable_logging else ' [L]=START LOG '
         l_short = ' [L]=RESET LOG '     if args.disable_logging else ' [L]=START LOG '
         l_tiny  = ' [L]RSTLOG '         if args.disable_logging else ' [L]STARTLOG '
-        keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=DISPLAY FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
+        keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=DISPLAY FILTER ', ' [V]=ADV FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [P]=ADDR MODE ', ' [X]=ADV OPTIONS ',
                       ' [N]=ANALYSE NOW ', ' [G]=GET NAMES ', ' [R]=SCREEN REFRESH ', l_full, ' [E]=EXIT ']
-        keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
+        keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [V]=ADV FLT ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
                       ' [O]=' + sm[1] + ' ', ' [T]=COMMENT ', ' [S]=SET REF ', ' [Z]=ZERO ',
                       ' [C]=CLEAR ', ' [P]=ADDR ', ' [X]=ADV OPT ',
                       ' [N]=ANALYSE ', ' [G]=NAMES ', ' [R]=REFRESH ', l_short, ' [E]=EXIT ']
-        keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
+        keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [V]AFLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
                       ' [O]' + sm[1] + ' ', ' [T]CMT ', ' [S]REF ', ' [Z]ZERO ',
                       ' [C]CLR ', ' [P]ADDR ', ' [X]ADV ',
                       ' [N]ANLZ ', ' [G]NAME ', ' [R]RFR ', l_tiny, ' [E]EXIT ']
-        keys_micro = [' U ', ' M ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' X ', ' N ', ' G ', ' R ', ' L ', ' E ']
+        keys_micro = [' U ', ' M ', ' V ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' X ', ' N ', ' G ', ' R ', ' L ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
         key_col = 2
         for idx, label in enumerate(keys):
             highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and match_filter_re is not None)
-                        or (idx == 5 and sort_mode != 0)
-                        or (idx == 10 and (prefer_hostname or prefer_ip)))
+                        or (idx == 2 and bool(adv_filter))
+                        or (idx == 6 and sort_mode != 0)
+                        or (idx == 11 and (prefer_hostname or prefer_ip)))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)
             key_col += len(label)
 
@@ -7831,6 +8282,8 @@ if __name__=='__main__':
                 cmd = 'GET_NAMES'
             elif k in (ord('m'), ord('M')):
                 cmd = 'MATCH_FILTER'
+            elif k in (ord('v'), ord('V')):
+                cmd = 'ADV_FILTER'
             elif k in (ord('c'), ord('C')):
                 cmd = 'CLEAR'
             elif k in (ord('r'), ord('R')):
@@ -7857,6 +8310,7 @@ if __name__=='__main__':
             active_hosts_list   = shown_hosts
             filter_mode = 0            # active == reference, so no filter is active
             match_filter_re, match_filter_text = None, ''   # already absorbed into the new reference
+            adv_filter.clear()
             screen.clear()
             write_log_info(args.disable_logging, logfile_file_name, '-setref', tz_offset)
             cli_message = 'reference set to the ' + str(len(shown_hosts)) + ' host(s) shown'
@@ -7865,6 +8319,8 @@ if __name__=='__main__':
             original_hosts_list = []
             host_state.clear()
             host_meta.clear()
+            host_csv_ip.clear()
+            adv_filter.clear()
             up_seen.clear()
             down_streak.clear()
             _dns_cache.clear()
@@ -7978,6 +8434,8 @@ if __name__=='__main__':
                 draw_screen()
                 screen.refresh()
                 notice('DISPLAY FILTER: OFF', 2)
+        elif cmd == 'ADV_FILTER':
+            adv_filter_dialog()
         elif cmd == 'ORDER':
             # [O] opens the sort-order picker directly - the curses equivalent
             # of the web gui's <select id="sortSel"> (same pattern as [P] for
@@ -8011,7 +8469,7 @@ if __name__=='__main__':
         elif cmd == 'ADD_FILE':
             value = input_dialog(' ADD HOSTS FROM FILE ', ' Enter path of the host file:')
             if value:
-                new_hosts, err = load_hosts_file(value, prefer_hostname)
+                new_hosts, err = load_hosts_file(value, not (prefer_ip or ip_only_mode))
                 if err:
                     notice(err.upper(), 3)
                 else:
