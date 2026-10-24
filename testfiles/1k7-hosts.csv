@@ -1,0 +1,1754 @@
+Hostname;IP Address;Serial Number;Model;Location;sysLocation;Type;Comment
+20minutes.fr;10.0.0.4;FOC15008LT0;PA-3220;Munich DC;Lobby;Firewall;uplink to ISP
+9front.org;10.0.0.7;FCW1486VQH7;AIR-AP2802I;Graz HQ;Lobby;Access Point;
+a.gtld-servers.net;10.0.0.10;JMX1700LA76;C9300-24T;Prague POP;Rack C11;Switch;
+a.root-servers.net;10.0.0.13;WZP1975R5PM;C9130AXE;Linz POP;Rack C9;Access Point;
+a1-166.akam.net;10.0.0.16;FDO2977AWZG;C9300-24T;Vienna DC2;Cage 3;Switch;
+a11-64.akam.net;10.0.0.19;FDO16773RKV;N9K-C93180YC-FX;Salzburg Office;Rack C5;Switch;
+a12-64.akam.net;10.0.0.22;FOC16613DTC;F5 BIG-IP i5800;Klagenfurt Office;Rack B9;Load Balancer;firmware update pending
+a13-65.akam.net;;FCW1736EHZE;C9200L-24P;Bratislava Office;Lobby;Switch;
+a18-65.akam.net;10.0.0.25;FCW2913B9CE;C9300-24T;Prague POP;Cage 6;Switch;
+a2-64.akam.net;10.0.0.28;WZP17172LX0;C9120AXI-E;Vienna DC1;Floor 7 IDF;Access Point;
+a20-65.akam.net;10.0.0.31;WZP1138QZUB;C9300-48P;Zurich POP;;Switch;
+a22-66.akam.net;10.0.0.34;FDO1236WCH8;AIR-AP2802I;Vienna DC1;Rack C12;Access Point;
+a24-66.akam.net;10.0.0.37;FOC1837RV17;C9300-24T;Vienna DC2;Rack A4;Switch;
+a26-64.akam.net;10.0.0.40;WZP2316H4E5;C9300-24T;Klagenfurt Office;Rack A1;Switch;
+a28-65.akam.net;10.0.0.43;WZP1875AMVS;C9300-48P;Bratislava Office;Lobby;Switch;owner: network team
+a3-67.akam.net;10.0.0.46;JMX1936GEBM;C9500-24Y4C;Frankfurt DC;Cage 2;Switch;
+a5-64.akam.net;10.0.0.49;JMX1548NXEK;C9200L-24P;Zurich POP;;Switch;
+a6-66.akam.net;10.0.0.52;FCW2644C4C9;N9K-C93180YC-FX;Klagenfurt Office;Rack B7;Switch;
+a7-66.akam.net;10.0.0.55;WZP1077196R;UCSC-C220-M5;Graz HQ;Rack B3;Server;owner: network team
+a9-64.akam.net;10.0.0.58;FOC13060V3N;ISR4451-X;Innsbruck Branch;Floor 3 IDF;Router;
+abc.es;10.0.0.61;WZP1862Q9SF;AIR-AP2802I;Linz POP;Cage 4;Access Point;
+abc.net.au;10.0.0.64;FCW1036W16F;UCSC-C220-M5;Vienna DC1;Floor 11 IDF;Server;
+activemq.apache.org;10.0.0.67;FCW2948VPL5;FPR4115;Klagenfurt Office;Cage 1;Firewall;PoE budget at 90%
+adafruit.com;10.0.0.70;FCW2991LLKA;C9200L-24P;;Floor 11 IDF;Switch;
+afdb.org;10.0.0.73;JMX1462PSA2;NetScaler MPX 8200;Vienna DC2;Rack A5;Load Balancer;
+afrinic.net;10.0.0.76;JMX1860MT5C;PA-3220;Bratislava Office;Rack B1;Firewall;
+aftenposten.no;10.0.0.79;WZP16717FZN;AIR-AP2802I;Klagenfurt Office;Rack C5;Access Point;
+aftonbladet.se;10.0.0.82;FDO2437V7QT;C9130AXE;Frankfurt DC;Room 4;Access Point;
+airflow.apache.org;10.0.0.85;FOC1515EJB2;FPR4115;Innsbruck Branch;Rack C9;Firewall;
+akamai.com;10.0.0.88;FOC1729DUJT;C9130AXE;Klagenfurt Office;Rack A11;Access Point;PoE budget at 90%
+al-monitor.com;10.0.0.91;FOC2429GYK7;C9130AXE;Innsbruck Branch;Rack C3;Access Point;
+al.gov;10.0.0.94;FCW1905WQ17;UCSC-C220-M5;Vienna DC1;Cage 8;Server;EoL 2027
+allaboutcircuits.com;10.0.0.97;FOC2252TYRV;C9200L-24P;Graz HQ;Lobby;Switch;firmware update pending
+almasryalyoum.com;10.0.0.100;FCW2512A8WV;C9500-24Y4C;Prague POP;Cage 6;Switch;owner: network team
+alpinelinux.org;10.0.0.103;FCW2533WFJL;PA-3220;Prague POP;Rack C9;Firewall;
+amd.com;10.0.0.106;FCW1598BPEL;FPR4115;Klagenfurt Office;Rack A10;Firewall;replace in Q2
+apec.org;10.0.0.109;WZP156138X6;C9130AXE;Salzburg Office;Rack C5;Access Point;
+api.github.com;10.0.0.112;FDO290883GZ;C9130AXE;Graz HQ;Rack A12;Access Point;
+apnews.com;10.0.0.115;FOC28663NSV;FPR4115;Zurich POP;Floor 4 IDF;Firewall;
+apnic.net;10.0.0.118;WZP1176ZWW2;ProLiant DL380 G10;Zurich POP;Rack C5;Server;
+apple.com;10.0.0.121;JMX10555UWQ;PowerEdge R650;Innsbruck Branch;Rack C1;Server;
+ar.gov;10.0.0.124;JMX2271H678;ProLiant DL380 G10;Salzburg Office;Room 6;Server;HA pair with standby
+arableague.org;10.0.0.127;FDO2865ZG5W;C9130AXE;Linz POP;Lobby;Access Point;renewed 2025
+archive.org;10.0.0.130;FDO2358QS4B;C9120AXI-E;Innsbruck Branch;Floor 6 IDF;Access Point;
+archlinux.de;10.0.0.133;FOC1899KVRU;UCSC-C220-M5;;Lobby;Server;
+archlinux.org;10.0.0.136;FDO1611JUP0;C9200L-24P;Frankfurt DC;Rack C6;Switch;
+ard.de;10.0.0.139;FOC1174JR4D;C9300-48P;Innsbruck Branch;Room 10;Switch;
+arduino.cc;10.0.0.142;FCW2689P4K4;UCSC-C220-M5;Linz POP;Rack C11;Server;
+argoproj.github.io;10.0.0.145;WZP2659CNSH;C9120AXI-E;Linz POP;Rack B2;Access Point;
+arista.com;10.0.0.148;JMX250753JL;ProLiant DL380 G10;Bratislava Office;Floor 11 IDF;Server;firmware update pending
+asahi.com;10.0.0.151;FCW204072C2;C9130AXE;Bratislava Office;Room 12;Access Point;owner: network team
+asean.org;10.0.0.154;FCW1117KB67;ASR1001-X;Innsbruck Branch;Lobby;Router;
+au.int;10.0.0.157;FDO28587QHG;C8300-1N1S;Graz HQ;Lobby;Router;
+audacityteam.org;10.0.0.160;JMX2313F3ME;AIR-AP2802I;Bratislava Office;Rack C2;Access Point;
+aws.amazon.com;10.0.0.163;FDO2729324P;PowerEdge R650;Vienna DC1;Rack C2;Server;monitoring only
+az.gov;10.0.0.166;FCW1415WGB9;FPR2110;Frankfurt DC;Floor 9 IDF;Firewall;
+azure.microsoft.com;10.0.0.169;FOC1408RSH6;C9120AXI-E;Graz HQ;Floor 12 IDF;Access Point;
+b.gtld-servers.net;10.0.0.172;FOC1091DQRY;AIR-AP2802I;Vienna DC1;Lobby;Access Point;
+b.root-servers.net;10.0.0.175;JMX26454LZR;FPR2110;;Cage 10;Firewall;
+band.com.br;10.0.0.178;JMX14466CW7;C9500-24Y4C;Linz POP;Lobby;Switch;
+bangkokpost.com;10.0.0.181;FOC2474EME8;AIR-AP2802I;Bratislava Office;Rack B6;Access Point;
+bankofengland.co.uk;10.0.0.184;JMX1110GB8A;UCSC-C220-M5;Graz HQ;Rack B1;Server;
+banque-france.fr;10.0.0.187;FOC2254JNWA;C9300-24T;Munich DC;Lobby;Switch;
+banrep.gov.co;10.0.0.190;WZP2310QSA9;N9K-C93180YC-FX;;Room 12;Switch;
+bbc.co.uk;10.0.0.193;FOC2137KMUK;C9120AXI-E;Vienna DC2;Rack A1;Access Point;
+bcra.gob.ar;10.0.0.196;FOC2864GAU9;N9K-C93180YC-FX;Linz POP;Rack C3;Switch;
+beam.apache.org;10.0.0.199;JMX2082FBYS;ProLiant DL380 G10;Bratislava Office;Rack B8;Server;
+berkeley.edu;10.0.0.202;FDO1514WR70;PowerEdge R650;Zurich POP;Rack A6;Server;
+bild.de;10.0.0.205;JMX1457X76U;ProLiant DL380 G10;Frankfurt DC;Cage 11;Server;
+blender.org;10.0.0.208;FCW2988A7CS;N9K-C93180YC-FX;;Room 11;Switch;
+boundaryproject.io;10.0.0.211;JMX23755KWK;C9300-48P;Bratislava Office;;Switch;
+bt.dk;10.0.0.214;WZP1196CPKB;AIR-AP2802I;Salzburg Office;Rack C6;Access Point;
+bugsnag.com;10.0.0.217;FDO1926QC5B;AIR-AP2802I;Innsbruck Branch;Rack A1;Access Point;
+buildkite.com;10.0.0.220;FDO2367ZPKB;UCSC-C220-M5;Innsbruck Branch;Rack B6;Server;
+c.gtld-servers.net;10.0.0.223;FCW1386CFHA;C9300-24T;Salzburg Office;Lobby;Switch;uplink to ISP
+c.root-servers.net;10.0.0.226;FCW1153HVQJ;ASA5516-X;Klagenfurt Office;Rack C7;Firewall;renewed 2025
+caa.co.uk;10.0.0.229;WZP29067ZP3;AIR-AP2802I;Linz POP;Floor 8 IDF;Access Point;
+cache.nixos.org;10.0.0.232;JMX1237PNWQ;C9300-48P;Vienna DC2;Rack C11;Switch;
+cam.ac.uk;10.0.0.235;FDO1036AE1T;AIR-AP2802I;Vienna DC2;Rack B8;Access Point;owner: network team
+cassandra.apache.org;10.0.0.238;JMX24263QHX;C9300-24T;Innsbruck Branch;Floor 9 IDF;Switch;
+cctv.com;10.0.0.241;WZP2660WVN1;C9300-48P;Linz POP;;Switch;uplink to ISP
+cdn.openbsd.org;10.0.0.244;WZP14429A46;C8300-1N1S;Klagenfurt Office;Room 5;Router;
+centralbank.ie;10.0.0.247;JMX1091R2QX;AIR-AP2802I;Klagenfurt Office;Cage 12;Access Point;owner: network team
+cern.ch;10.0.0.250;WZP1764MG0R;C9500-24Y4C;Linz POP;Floor 11 IDF;Switch;
+cfengine.com;10.0.0.253;WZP1220EVVR;C9500-24Y4C;Frankfurt DC;Rack B7;Switch;firmware update pending
+channelnewsasia.com;10.0.1.0;WZP1062A2Y6;C9300-24T;Graz HQ;Lobby;Switch;
+chef.io;10.0.1.3;FCW2872P3ZJ;AIR-AP2802I;Prague POP;Lobby;Access Point;
+chinadaily.com.cn;10.0.1.6;WZP25908EZB;C9300-24T;Zurich POP;;Switch;
+circleci.com;10.0.1.9;WZP2120BXJA;UCSC-C220-M5;Klagenfurt Office;Rack B7;Server;
+circuitpython.org;10.0.1.12;FDO19938QNB;FPR4115;Salzburg Office;Room 5;Firewall;
+cisco.com;10.0.1.15;FCW14309L4Z;ISR4451-X;Graz HQ;Lobby;Router;
+citytv.com.co;10.0.1.18;FOC2032MGFS;ISR4451-X;Innsbruck Branch;Lobby;Router;
+clarin.com;10.0.1.21;FCW1433N6T7;FPR4115;Bratislava Office;;Firewall;
+clickhouse.com;10.0.1.24;FCW24892BEZ;;Vienna DC2;Lobby;Switch;uplink to ISP
+cloud.google.com;10.0.1.27;FCW1936WLKG;AIR-AP2802I;Innsbruck Branch;Room 7;Access Point;
+cloudflare.com;10.0.1.30;JMX10366LWF;F5 BIG-IP i5800;Graz HQ;Rack A12;Load Balancer;
+cmu.edu;10.0.1.33;FOC2340R81H;C9500-24Y4C;Vienna DC1;Room 7;Switch;
+cnes.fr;10.0.1.36;FCW27343K41;;Vienna DC1;Room 1;Firewall;
+cnn.com;10.0.1.39;FCW1806QCC8;ASA5516-X;Frankfurt DC;Floor 7 IDF;Firewall;
+co.gov;10.0.1.42;FOC2793E4WQ;UCSC-C220-M5;Salzburg Office;Room 12;Server;
+cockroachlabs.com;10.0.1.45;FDO2917XCHD;C9300-24T;Bratislava Office;Lobby;Switch;
+codeload.github.com;10.0.1.48;JMX1329X366;AIR-AP2802I;Vienna DC2;Rack C10;Access Point;
+coe.int;10.0.1.51;FOC1903CQ96;F5 BIG-IP i5800;Salzburg Office;Rack A7;Load Balancer;
+consul.io;10.0.1.54;JMX20340FKQ;C9300-48P;;Floor 7 IDF;Switch;
+couchdb.apache.org;10.0.1.57;FCW2148A4JC;;Linz POP;Floor 1 IDF;Access Point;
+crates.io;10.0.1.60;JMX29718LGB;FPR4115;Zurich POP;Rack C3;Firewall;
+ct.gov;10.0.1.63;JMX2632C95L;N9K-C93180YC-FX;Innsbruck Branch;Floor 1 IDF;Switch;
+d.gtld-servers.net;10.0.1.66;FDO22921F9Y;ASR1001-X;Vienna DC1;;Router;
+d.root-servers.net;10.0.1.69;JMX1799DNGJ;C9300-24T;Frankfurt DC;Cage 11;Switch;
+dagster.io;10.0.1.72;FCW1727E1AZ;C9130AXE;Innsbruck Branch;Room 5;Access Point;owner: network team
+databricks.com;10.0.1.75;FOC2652AHLW;C9300-24T;Bratislava Office;Rack A2;Switch;HA pair with standby
+datadoghq.com;10.0.1.78;FCW2101S5GP;AIR-AP2802I;Zurich POP;Floor 2 IDF;Access Point;
+dawn.com;10.0.1.81;FDO2840WWYX;F5 BIG-IP i5800;Zurich POP;Rack A3;Load Balancer;
+dbtlabs.com;10.0.1.84;FOC24338VVR;ASR1001-X;Bratislava Office;Cage 11;Router;
+deb.debian.org;10.0.1.87;FCW17519CVV;C9500-24Y4C;Salzburg Office;Rack B1;Switch;
+debian.org;10.0.1.90;FDO2409DR3L;FPR4115;Salzburg Office;Rack B11;Firewall;
+deepmind.com;10.0.1.93;WZP1532HZF1;C9500-24Y4C;Bratislava Office;Rack C7;Switch;
+digitalocean.com;10.0.1.96;FDO22074G4F;PowerEdge R650;Munich DC;Floor 5 IDF;Server;
+distrowatch.com;10.0.1.99;JMX2850JJDD;C9200L-24P;Vienna DC1;Rack A7;Switch;
+dl-cdn.alpinelinux.org;10.0.1.102;FCW2364X1JZ;ProLiant DL380 G10;Zurich POP;Cage 5;Server;
+dn.se;10.0.1.105;WZP29209BHJ;PowerEdge R650;Vienna DC2;Rack B8;Server;
+dnb.nl;10.0.1.108;FCW26217GBB;ASA5516-X;Vienna DC1;Rack C8;Firewall;
+dns.adguard.com;10.0.1.111;FDO2572N22K;C9120AXI-E;Linz POP;Rack B9;Access Point;
+dns.cleanbrowsing.org;10.0.1.114;FDO2308X9KX;C9300-48P;Graz HQ;Lobby;Switch;
+dns.google;10.0.1.117;WZP1541KRQP;UCSC-C220-M5;Zurich POP;Rack B5;Server;
+dns.opendns.com;10.0.1.120;WZP1669VKEH;C9500-24Y4C;Linz POP;Lobby;Switch;
+dns.quad9.net;10.0.1.123;FCW1163N9V8;C9120AXI-E;Vienna DC2;Lobby;Access Point;
+dns1.p03.nsone.net;10.0.1.126;FOC19433QAU;ProLiant DL380 G10;Frankfurt DC;Floor 6 IDF;Server;
+dns2.cloudflare.com;10.0.1.129;FDO18902Y4C;UCSC-C220-M5;Innsbruck Branch;Cage 8;Server;monitoring only
+dns2.p03.nsone.net;10.0.1.132;FCW1377D6G9;C9200L-24P;Vienna DC1;Lobby;Switch;
+dns3.p03.nsone.net;10.0.1.135;WZP230537KB;PowerEdge R650;Zurich POP;Room 6;Server;
+dns4.p03.nsone.net;10.0.1.138;WZP1502JQH4;AIR-AP2802I;Klagenfurt Office;Rack C12;Access Point;
+domoticz.com;10.0.1.141;FOC178602QE;C9500-24Y4C;Linz POP;Room 7;Switch;
+download.docker.com;10.0.1.144;FCW1771TJYK;C9300-48P;Vienna DC2;Rack B2;Switch;
+download.fedoraproject.org;10.0.1.147;JMX2906KQGV;C9300-24T;Linz POP;Cage 8;Switch;
+download.opensuse.org;10.0.1.150;FCW12576VRF;N9K-C93180YC-FX;Munich DC;Rack C4;Switch;
+downloads.raspberrypi.org;10.0.1.153;FDO18383PVN;ASA5516-X;Zurich POP;Floor 3 IDF;Firewall;
+dr.dk;10.0.1.156;FDO28238R9V;UCSC-C220-M5;Munich DC;Rack C1;Server;
+dragonflybsd.org;10.0.1.159;FDO2612EL2J;FPR4115;Vienna DC1;Rack C7;Firewall;
+drone.io;10.0.1.162;FOC2694QN9T;NetScaler MPX 8200;Bratislava Office;Rack B9;Load Balancer;
+druid.apache.org;10.0.1.165;WZP2807WBRN;C8300-1N1S;Zurich POP;Room 2;Router;
+e.gtld-servers.net;10.0.1.168;WZP1455BL7R;UCSC-C220-M5;Salzburg Office;Rack A8;Server;
+e.root-servers.net;10.0.1.171;JMX1751B6DC;ProLiant DL380 G10;Innsbruck Branch;Rack B5;Server;
+ebrd.com;10.0.1.174;FDO2983TFMZ;C9300-48P;Salzburg Office;Lobby;Switch;
+echa.europa.eu;10.0.1.177;WZP24435BNM;C9500-24Y4C;Innsbruck Branch;Cage 3;Switch;
+efta.int;10.0.1.180;FOC279404Z7;C9200L-24P;Salzburg Office;Rack C7;Switch;
+egyptindependent.com;10.0.1.183;FDO2613VY7F;PA-3220;Prague POP;Cage 10;Firewall;
+eib.org;10.0.1.186;FOC2071PGFN;ASR1001-X;Klagenfurt Office;Room 12;Router;
+elastic.co;10.0.1.189;WZP13643GA5;PA-3220;Graz HQ;Rack C11;Firewall;
+elcomercio.pe;10.0.1.192;FDO14342S1Z;C9200L-24P;;Cage 11;Switch;
+elespectador.com;10.0.1.195;WZP1923HY96;NetScaler MPX 8200;Linz POP;Rack B2;Load Balancer;replace in Q2
+elmundo.es;10.0.1.198;JMX1263G60N;C9300-48P;Innsbruck Branch;Rack B8;Switch;
+elpais.com;10.0.1.201;FOC13946X85;C9300-48P;Munich DC;Rack A5;Switch;
+eltiempo.com;10.0.1.204;FOC2565L33D;FPR4115;Innsbruck Branch;Cage 2;Firewall;
+eluniversal.com.mx;10.0.1.207;FCW2847HL82;ASR1001-X;Zurich POP;;Router;temporary installation
+embl.org;10.0.1.210;FCW1339YW9G;ProLiant DL380 G10;Prague POP;Room 7;Server;
+emby.media;10.0.1.213;FOC243958S3;N9K-C93180YC-FX;Vienna DC1;Cage 11;Switch;
+envoyproxy.io;10.0.1.216;FDO2744QPZT;C9500-24Y4C;Prague POP;Rack C12;Switch;
+epfl.ch;10.0.1.219;FCW1578SRYE;AIR-AP2802I;Vienna DC1;Rack B3;Access Point;monitoring only
+esphome.io;10.0.1.222;FDO1316PA0L;UCSC-C220-M5;Munich DC;Rack B9;Server;
+espressif.com;10.0.1.225;WZP10685UJP;C8300-1N1S;Munich DC;;Router;
+esrf.fr;10.0.1.228;FOC1671ZRDP;C9130AXE;Graz HQ;Floor 11 IDF;Access Point;
+estadao.com.br;10.0.1.231;WZP2576007H;ISR4331;Vienna DC2;Room 2;Router;
+etcd.io;10.0.1.234;WZP278272MP;ISR4331;Graz HQ;Rack A5;Router;
+ethz.ch;10.0.1.237;FCW25934WL0;C9200L-24P;Bratislava Office;Floor 12 IDF;Switch;
+eurocontrol.int;10.0.1.240;JMX1487QBTZ;PA-3220;;Cage 9;Firewall;
+europe1.fr;10.0.1.243;FOC1160215B;AIR-AP2802I;Graz HQ;Rack A7;Access Point;uplink to ISP
+expresso.pt;10.0.1.246;JMX20318XR5;PowerEdge R650;Salzburg Office;Cage 7;Server;
+f.gtld-servers.net;10.0.1.249;FDO1211H9PG;C9200L-24P;Bratislava Office;Rack C11;Switch;
+f.root-servers.net;10.0.1.252;WZP1207PFWH;C9300-48P;Munich DC;Floor 3 IDF;Switch;under maintenance
+fao.org;10.0.1.255;JMX1106TVND;C9300-48P;Linz POP;Rack B12;Switch;
+fastly.com;10.0.2.2;FCW1993307R;N9K-C93180YC-FX;Frankfurt DC;Floor 10 IDF;Switch;
+faz.net;10.0.2.5;FOC22065WPY;C9300-24T;Zurich POP;Lobby;Switch;
+federalreserve.gov;10.0.2.8;FCW2802WPEW;FPR4115;Graz HQ;Cage 12;Firewall;uplink to ISP
+ffmpeg.org;10.0.2.11;FDO1961FYH0;PowerEdge R650;Salzburg Office;Rack A6;Server;
+files.pythonhosted.org;10.0.2.14;WZP1230ZZDV;N9K-C93180YC-FX;Prague POP;Cage 12;Switch;
+fivetran.com;10.0.2.17;FOC2748V5UV;PA-3220;Linz POP;Rack A3;Firewall;
+fl.gov;10.0.2.20;JMX2638C46G;PowerEdge R650;Salzburg Office;Rack A8;Server;
+flink.apache.org;10.0.2.23;FCW254899ZY;PowerEdge R650;Zurich POP;;Server;
+focus.de;10.0.2.26;JMX1252528S;UCSC-C220-M5;Innsbruck Branch;Rack C5;Server;
+folha.uol.com.br;10.0.2.29;WZP1474YXP8;C9200L-24P;Vienna DC2;Floor 12 IDF;Switch;
+formlabs.com;10.0.2.32;FDO1516RWSN;ISR4331;;Room 8;Router;
+fortinet.com;10.0.2.35;FDO2790P7XE;FPR2110;Frankfurt DC;Room 5;Firewall;uplink to ISP
+foxnews.com;10.0.2.38;FDO2516RQWP;C9300-48P;Linz POP;Rack A5;Switch;
+france24.com;10.0.2.41;FOC2311WXB5;NetScaler MPX 8200;Vienna DC2;Room 10;Load Balancer;
+franceinfo.fr;10.0.2.44;WZP2515HAWG;ProLiant DL380 G10;Klagenfurt Office;Rack B3;Server;
+freebsd.org;10.0.2.47;FDO1029ZCVY;C9300-24T;Munich DC;Floor 2 IDF;Switch;
+freecadweb.org;10.0.2.50;FOC2633V1K0;F5 BIG-IP i5800;Linz POP;Floor 3 IDF;Load Balancer;HA pair with standby
+freshmeat.net;10.0.2.53;FOC2413AWSF;C9300-48P;Innsbruck Branch;Room 3;Switch;
+ftp.debian.org;10.0.2.56;FOC257861KF;C9200L-24P;Graz HQ;Rack B1;Switch;
+ftp.freebsd.org;10.0.2.59;WZP1488Q11R;C9200L-24P;Bratislava Office;Lobby;Switch;
+ftp.gnu.org;10.0.2.62;FDO1850KM7X;PowerEdge R650;Bratislava Office;Rack B10;Server;
+ftp.netbsd.org;10.0.2.65;FCW20152BFQ;ProLiant DL380 G10;;Rack C10;Server;monitoring only
+ftp.openbsd.org;10.0.2.68;WZP10047WN1;C9300-48P;Prague POP;Rack C1;Switch;
+g.gtld-servers.net;10.0.2.71;JMX22607MX9;C9500-24Y4C;Zurich POP;Room 10;Switch;
+g20.org;10.0.2.74;FOC2313GWET;ProLiant DL380 G10;Salzburg Office;Lobby;Server;
+ga.gov;10.0.2.77;FCW1337EETX;C9120AXI-E;Innsbruck Branch;Cage 12;Access Point;renewed 2025
+gazeta.ru;10.0.2.80;WZP22987XTX;FPR2110;Prague POP;Rack B3;Firewall;
+gazzetta.it;10.0.2.83;FDO2434Y55G;N9K-C93180YC-FX;Innsbruck Branch;Lobby;Switch;under maintenance
+gcr.io;10.0.2.86;WZP2426G7P9;ISR4451-X;Prague POP;Room 9;Router;uplink to ISP
+gentoo.org;10.0.2.89;FCW2446LP52;C9120AXI-E;Zurich POP;Floor 4 IDF;Access Point;
+ghcr.io;10.0.2.92;WZP15642FUK;ISR4331;Salzburg Office;Rack B8;Router;
+gimp.org;10.0.2.95;JMX2853T5GT;ProLiant DL380 G10;Prague POP;Lobby;Server;
+gist.github.com;10.0.2.98;FOC18134TYA;F5 BIG-IP i5800;Salzburg Office;Rack B9;Load Balancer;firmware update pending
+gitlab.com;10.0.2.101;FCW154191G8;C9300-48P;Prague POP;Rack C11;Switch;spare PSU missing
+globaltimes.cn;10.0.2.104;WZP1907X0RX;PA-3220;Innsbruck Branch;Rack A9;Firewall;
+gnu.org;10.0.2.107;WZP140899WR;PA-3220;Vienna DC2;Rack C12;Firewall;
+gocd.org;10.0.2.110;FOC1533K6BR;PowerEdge R650;Zurich POP;Rack B5;Server;
+google.com;10.0.2.113;FCW1878SVN2;FPR4115;Bratislava Office;Rack B7;Firewall;
+gov.uk;10.0.2.116;WZP1814YGPN;FPR2110;Zurich POP;Rack B10;Firewall;
+grabcad.com;10.0.2.119;JMX14612WD2;UCSC-C220-M5;;Floor 5 IDF;Server;
+grafana.com;10.0.2.122;WZP1582GH49;C9120AXI-E;Munich DC;Room 2;Access Point;EoL 2027
+graz.at;10.0.2.125;WZP1242RB3R;PowerEdge R650;Vienna DC2;Lobby;Server;monitoring only
+guix.gnu.org;10.0.2.128;FDO10100WR9;F5 BIG-IP i5800;Vienna DC1;Rack A10;Load Balancer;
+h.gtld-servers.net;10.0.2.131;FDO26722K5E;PA-3220;Vienna DC1;Floor 12 IDF;Firewall;
+h.root-servers.net;10.0.2.134;JMX1061CY47;AIR-AP2802I;Klagenfurt Office;Floor 11 IDF;Access Point;
+haaretz.com;10.0.2.137;FDO14389K6D;C9300-48P;Innsbruck Branch;Cage 5;Switch;
+hackaday.com;10.0.2.140;FOC25796DM6;UCSC-C220-M5;Bratislava Office;Lobby;Server;PoE budget at 90%
+hadoop.apache.org;10.0.2.143;FDO2638672A;C9200L-24P;Frankfurt DC;Cage 1;Switch;
+handbrake.fr;10.0.2.146;JMX1821RP7R;C9130AXE;Graz HQ;Lobby;Access Point;
+handelsblatt.com;10.0.2.149;FOC2601V27B;PowerEdge R650;Innsbruck Branch;Floor 3 IDF;Server;
+harvard.edu;10.0.2.152;FDO2570ZXKU;AIR-AP2802I;Innsbruck Branch;Rack A1;Access Point;firmware update pending
+hbase.apache.org;10.0.2.155;FDO1090ZBED;C9200L-24P;;Room 1;Switch;monitoring only
+hetzner.com;10.0.2.158;WZP2950L2NJ;C9120AXI-E;Klagenfurt Office;Rack C7;Access Point;
+hi.gov;10.0.2.161;FDO1501PEL5;N9K-C93180YC-FX;Klagenfurt Office;Lobby;Switch;
+hindustantimes.com;10.0.2.164;JMX1578M91C;C9300-48P;Graz HQ;Rack C11;Switch;
+hive.apache.org;10.0.2.167;JMX2323U9BQ;C9300-24T;Graz HQ;Room 6;Switch;
+homeassistant.io;10.0.2.170;FDO1509K941;AIR-AP2802I;Salzburg Office;Room 7;Access Point;
+host-5-44-240-1.static.ip.net;10.0.2.173;FDO2195A3EC;AIR-AP2802I;Vienna DC2;Cage 10;Access Point;
+host-5-44-240-10.static.ip.net;10.0.2.176;JMX1670LLR3;C9120AXI-E;Linz POP;Cage 10;Access Point;monitoring only
+host-5-44-240-11.static.ip.net;10.0.2.179;FDO2545XDG0;N9K-C93180YC-FX;Munich DC;Floor 12 IDF;Switch;renewed 2025
+host-5-44-240-12.static.ip.net;10.0.2.182;FCW1406427G;ProLiant DL380 G10;Frankfurt DC;Rack A4;Server;
+host-5-44-240-13.static.ip.net;10.0.2.185;JMX1191S3VQ;ASA5516-X;;Rack B7;Firewall;
+host-5-44-240-14.static.ip.net;10.0.2.188;JMX163750WV;FPR4115;Prague POP;Rack A3;Firewall;
+host-5-44-240-15.static.ip.net;10.0.2.191;FDO2181DTFF;C8300-1N1S;Prague POP;Room 5;Router;
+host-5-44-240-16.static.ip.net;10.0.2.194;FOC1319790G;PowerEdge R650;Munich DC;Rack B6;Server;
+host-5-44-240-17.static.ip.net;10.0.2.197;WZP2907L7B1;C9500-24Y4C;Linz POP;Rack A3;Switch;
+host-5-44-240-18.static.ip.net;10.0.2.200;FDO1545BLQH;UCSC-C220-M5;Munich DC;Cage 5;Server;
+host-5-44-240-19.static.ip.net;10.0.2.203;FOC21200VN8;ProLiant DL380 G10;Klagenfurt Office;Rack A11;Server;
+host-5-44-240-2.static.ip.net;10.0.2.206;FOC2636ELUJ;C9300-48P;Salzburg Office;Rack C6;Switch;
+host-5-44-240-20.static.ip.net;10.0.2.209;WZP13824ACC;F5 BIG-IP i5800;Klagenfurt Office;Rack C6;Load Balancer;
+host-5-44-240-21.static.ip.net;10.0.2.212;WZP1929TXWZ;C9130AXE;Salzburg Office;Cage 11;Access Point;
+host-5-44-240-22.static.ip.net;10.0.2.215;WZP1515PA6U;C9130AXE;Bratislava Office;Room 12;Access Point;
+host-5-44-240-23.static.ip.net;10.0.2.218;JMX13714CS0;C8300-1N1S;Zurich POP;Rack B4;Router;PoE budget at 90%
+host-5-44-240-24.static.ip.net;10.0.2.221;FOC1424WW5E;ASA5516-X;Klagenfurt Office;Room 10;Firewall;
+host-5-44-240-25.static.ip.net;10.0.2.224;FOC2634TN9F;;Munich DC;Room 5;Access Point;
+host-5-44-240-3.static.ip.net;10.0.2.227;FCW1521KDYH;ISR4451-X;Prague POP;Lobby;Router;
+host-5-44-240-4.static.ip.net;10.0.2.230;FDO2685RSFN;C9300-48P;Vienna DC2;Floor 5 IDF;Switch;replace in Q2
+host-5-44-240-5.static.ip.net;10.0.2.233;FDO1066Y8KH;PowerEdge R650;Vienna DC2;Rack C6;Server;renewed 2025
+host-5-44-240-6.static.ip.net;10.0.2.236;FDO14541QGF;C9500-24Y4C;Vienna DC2;Room 5;Switch;
+host-5-44-240-7.static.ip.net;10.0.2.239;FDO2769NDWF;C9300-48P;Vienna DC1;Lobby;Switch;
+host-5-44-240-8.static.ip.net;10.0.2.242;FCW1912BEUT;C9200L-24P;Graz HQ;Rack C3;Switch;
+host-5-44-240-9.static.ip.net;10.0.2.245;FOC1824UH7R;ProLiant DL380 G10;Prague POP;Rack B6;Server;
+host-5-44-241-1.static.ip.net;10.0.2.248;FOC23589F0M;NetScaler MPX 8200;Bratislava Office;Rack C4;Load Balancer;
+host-5-44-241-10.static.ip.net;10.0.2.251;WZP2145GVCW;N9K-C93180YC-FX;Innsbruck Branch;Rack B6;Switch;PoE budget at 90%
+host-5-44-241-2.static.ip.net;10.0.2.254;FDO2224D3VF;C9120AXI-E;Graz HQ;Rack A2;Access Point;spare PSU missing
+host-5-44-241-3.static.ip.net;10.0.3.1;FCW17024BBR;C9120AXI-E;Prague POP;Room 5;Access Point;renewed 2025
+host-5-44-241-4.static.ip.net;10.0.3.4;FOC2477PD4N;F5 BIG-IP i5800;Munich DC;Rack B3;Load Balancer;
+host-5-44-241-5.static.ip.net;10.0.3.7;WZP1726V9P7;C9120AXI-E;Zurich POP;Rack B7;Access Point;
+host-5-44-241-6.static.ip.net;10.0.3.10;FDO1504AYJ1;C9300-24T;Zurich POP;Lobby;Switch;
+host-5-44-241-7.static.ip.net;10.0.3.13;FCW298848UF;FPR2110;Innsbruck Branch;Room 6;Firewall;
+host-5-44-241-8.static.ip.net;10.0.3.16;WZP14889NZQ;N9K-C93180YC-FX;Bratislava Office;Rack A8;Switch;
+host-5-44-241-9.static.ip.net;10.0.3.19;FDO1877XSG0;C8300-1N1S;Frankfurt DC;;Router;temporary installation
+house.gov;10.0.3.22;FCW1111JD31;ISR4331;Vienna DC1;Rack A8;Router;
+hs.fi;10.0.3.25;WZP242095XM;ASR1001-X;Bratislava Office;Rack C10;Router;
+hub.docker.com;10.0.3.28;FOC145795A3;PowerEdge R650;Salzburg Office;Room 10;Server;
+i.gtld-servers.net;10.0.3.31;FOC1959UDTT;F5 BIG-IP i5800;Salzburg Office;Cage 3;Load Balancer;
+i.root-servers.net;10.0.3.34;JMX1114ZJPR;UCSC-C220-M5;Salzburg Office;Rack A4;Server;
+iadb.org;10.0.3.37;JMX16204H4N;N9K-C93180YC-FX;;Floor 4 IDF;Switch;replace in Q2
+iaea.org;10.0.3.40;WZP1558QG5C;PowerEdge R650;Zurich POP;Rack C8;Server;owner: network team
+iata.org;10.0.3.43;FOC14899ZXB;C9300-24T;Innsbruck Branch;Rack C2;Switch;
+ibm.com;10.0.3.46;JMX1458VKXA;C9300-48P;Linz POP;Cage 6;Switch;
+icc-cpi.int;10.0.3.49;WZP170486PK;C9130AXE;Innsbruck Branch;Rack A7;Access Point;
+icj-cij.org;10.0.3.52;FOC1728LLUW;C9500-24Y4C;Vienna DC2;Floor 2 IDF;Switch;
+iea.org;10.0.3.55;WZP16991AMX;C9300-24T;;Room 4;Switch;
+ietf.org;10.0.3.58;FDO2015V4PT;C9500-24Y4C;Frankfurt DC;Lobby;Switch;
+ill.eu;10.0.3.61;FOC2949PB8G;C9130AXE;Vienna DC1;Room 4;Access Point;
+illumos.org;10.0.3.64;FDO2990GY5E;C9300-48P;Graz HQ;Rack A1;Switch;
+ilo.org;10.0.3.67;JMX1918MD6A;C9130AXE;Vienna DC1;Floor 1 IDF;Access Point;
+imap.gmail.com;10.0.3.70;FDO2905R41L;N9K-C93180YC-FX;Vienna DC1;Rack A10;Switch;
+imf.org;10.0.3.73;FOC2862L86J;PA-3220;Graz HQ;Cage 7;Firewall;
+in.gov;10.0.3.76;FDO2442UZ70;ProLiant DL380 G10;Zurich POP;Lobby;Server;
+influxdata.com;10.0.3.79;FDO1480T2RT;F5 BIG-IP i5800;Vienna DC1;Rack C7;Load Balancer;
+infobae.com;10.0.3.82;FCW1502SATU;C9300-48P;Vienna DC2;Rack C9;Switch;replace in Q2
+inquirer.net;10.0.3.85;JMX2916BTQN;UCSC-C220-M5;Munich DC;Floor 8 IDF;Server;
+instructables.com;10.0.3.88;FCW2848XQVS;N9K-C93180YC-FX;Prague POP;Rack C9;Switch;
+interfax.ru;10.0.3.91;FDO1709S467;;Frankfurt DC;Lobby;Firewall;
+interpol.int;10.0.3.94;FDO1368ZZ5P;C9200L-24P;Vienna DC1;Floor 8 IDF;Switch;
+irena.org;10.0.3.97;FOC1328TF7X;ISR4451-X;Zurich POP;Rack B3;Router;
+istio.io;10.0.3.100;FOC1081J0TY;C9200L-24P;Salzburg Office;Floor 7 IDF;Switch;
+itv.com;10.0.3.103;WZP249077GQ;AIR-AP2802I;Klagenfurt Office;Rack C9;Access Point;
+j.gtld-servers.net;10.0.3.106;FOC2717EPFY;AIR-AP2802I;Salzburg Office;Rack B8;Access Point;
+j.root-servers.net;10.0.3.109;FOC2639BVSS;C9300-24T;Munich DC;Cage 3;Switch;
+jaegertracing.io;10.0.3.112;FCW1001PSCW;FPR4115;Vienna DC1;Rack A12;Firewall;
+japantoday.com;10.0.3.115;FDO1858P03H;PowerEdge R650;Frankfurt DC;Lobby;Server;
+jellyfin.org;10.0.3.118;WZP2361QTRV;C9300-48P;Munich DC;Rack A12;Switch;
+jenkins.io;10.0.3.121;WZP1739K5KK;C9200L-24P;Linz POP;Room 9;Switch;
+jn.pt;10.0.3.124;FOC1393TPT6;ASR1001-X;Klagenfurt Office;Room 6;Router;
+jpost.com;10.0.3.127;FDO2196C32S;C9120AXI-E;Klagenfurt Office;Rack C11;Access Point;
+k.gtld-servers.net;10.0.3.130;WZP2171P8S5;ASR1001-X;Salzburg Office;Cage 1;Router;owner: network team
+k.root-servers.net;10.0.3.133;FDO10333L9K;N9K-C93180YC-FX;Salzburg Office;Rack C1;Switch;owner: network team
+kafka.apache.org;10.0.3.136;FDO1139296V;C9300-24T;Innsbruck Branch;Floor 10 IDF;Switch;
+kernel.org;10.0.3.139;FCW1535GKH6;C9120AXI-E;Graz HQ;Rack A5;Access Point;
+knative.dev;10.0.3.142;FDO29047GJ4;C9300-24T;Vienna DC2;Lobby;Switch;
+kodi.tv;10.0.3.145;JMX12309L87;ISR4451-X;Vienna DC2;Lobby;Router;
+kommersant.ru;10.0.3.148;FCW17006VWB;C9300-48P;Klagenfurt Office;Floor 11 IDF;Switch;
+koreaherald.com;10.0.3.151;JMX1311J504;PowerEdge R650;Innsbruck Branch;Rack B6;Server;
+krita.org;10.0.3.154;WZP17289XSJ;C9300-48P;Bratislava Office;Rack B7;Switch;
+kyivpost.com;10.0.3.157;WZP1623TWGT;N9K-C93180YC-FX;Prague POP;;Switch;
+l.gtld-servers.net;10.0.3.160;JMX2710141D;UCSC-C220-M5;Prague POP;Rack A9;Server;
+l.root-servers.net;10.0.3.163;FOC1261HYM4;ProLiant DL380 G10;Prague POP;Rack C9;Server;
+la.gov;10.0.3.166;FOC1330J21K;PowerEdge R650;Bratislava Office;Room 10;Server;
+la7.it;10.0.3.169;FDO2211HL29;N9K-C93180YC-FX;Salzburg Office;Rack C11;Switch;
+lacnic.net;10.0.3.172;FDO1672L4J8;PowerEdge R650;;Room 1;Server;
+lanacion.com.ar;10.0.3.175;JMX149620P3;UCSC-C220-M5;Klagenfurt Office;Rack C12;Server;
+launchpad.net;10.0.3.178;FDO1210VM82;PowerEdge R650;Klagenfurt Office;Rack A4;Server;
+leaseweb.com;10.0.3.181;FCW28764QTR;C9120AXI-E;Bratislava Office;Floor 4 IDF;Access Point;
+lefigaro.fr;10.0.3.184;FCW1703FX25;F5 BIG-IP i5800;Frankfurt DC;Room 3;Load Balancer;
+lemonde.fr;10.0.3.187;FDO1439PS14;C9500-24Y4C;Frankfurt DC;Rack B2;Switch;
+lenta.ru;10.0.3.190;FCW2294P6G2;C9120AXI-E;Frankfurt DC;Rack C1;Access Point;
+leparisien.fr;10.0.3.193;FOC2330NE4J;;Klagenfurt Office;Rack B8;Router;
+lesoir.be;10.0.3.196;FDO1460N4FL;C9300-24T;Vienna DC1;Floor 9 IDF;Switch;
+liberation.fr;10.0.3.199;JMX19840JJ2;C9130AXE;Klagenfurt Office;Room 9;Access Point;under maintenance
+linkerd.io;10.0.3.202;JMX14131SJQ;C9200L-24P;Bratislava Office;Floor 2 IDF;Switch;
+linode.com;10.0.3.205;FDO1150LH30;N9K-C93180YC-FX;Salzburg Office;Rack C9;Switch;
+looker.com;10.0.3.208;FOC1454ADGW;C9300-48P;Vienna DC2;Rack C12;Switch;
+luigi.readthedocs.io;10.0.3.211;WZP1456HGEG;FPR4115;Klagenfurt Office;Room 4;Firewall;
+m.gtld-servers.net;10.0.3.214;FOC1749BPER;C9300-24T;;Room 12;Switch;
+m.root-servers.net;10.0.3.217;WZP18000WRT;F5 BIG-IP i5800;Frankfurt DC;Cage 8;Load Balancer;
+ma.gov;10.0.3.220;FCW2722GRQ6;F5 BIG-IP i5800;Vienna DC2;Cage 1;Load Balancer;
+mail.gmx.com;10.0.3.223;FCW2815GHZZ;PowerEdge R650;;Floor 8 IDF;Server;
+mail.google.com;10.0.3.226;WZP1714S4TL;C9300-48P;Graz HQ;Cage 4;Switch;
+mail.protonmail.com;10.0.3.229;FCW2944YTLA;NetScaler MPX 8200;Vienna DC2;Cage 5;Load Balancer;
+mainichi.jp;10.0.3.232;FDO2707S1LW;PA-3220;Graz HQ;Rack A10;Firewall;
+marca.com;10.0.3.235;WZP22448MXG;ProLiant DL380 G10;Linz POP;Rack C5;Server;
+md.gov;10.0.3.238;FDO11320VB7;N9K-C93180YC-FX;Innsbruck Branch;Lobby;Switch;
+mediaset.it;10.0.3.241;FOC2288VYLQ;ProLiant DL380 G10;Prague POP;Floor 4 IDF;Server;
+memcached.org;10.0.3.244;JMX1323FH13;UCSC-C220-M5;Salzburg Office;Rack A12;Server;
+mercosur.int;10.0.3.247;FOC2003CUAW;C9500-24Y4C;Zurich POP;Rack A9;Switch;
+meta.com;10.0.3.250;FDO2510F09U;C9300-48P;Innsbruck Branch;Room 1;Switch;
+metabase.com;10.0.3.253;FOC1710Q0XC;C9500-24Y4C;Linz POP;Room 4;Switch;
+mg.co.za;10.0.4.0;FDO10107BGT;PowerEdge R650;;Lobby;Server;
+mi.gov;10.0.4.3;FCW1344P3Q4;UCSC-C220-M5;Bratislava Office;Rack A12;Server;
+micropython.org;10.0.4.6;WZP2369FXV2;FPR2110;Salzburg Office;Rack A10;Firewall;
+milenio.com;10.0.4.9;FDO1847WSDC;NetScaler MPX 8200;Prague POP;Cage 12;Load Balancer;
+minix3.org;10.0.4.12;JMX20053C3V;NetScaler MPX 8200;Vienna DC1;Room 3;Load Balancer;
+mirror.centos.org;10.0.4.15;FCW1829GRVA;C9130AXE;Prague POP;Rack B8;Access Point;
+mirrors.fedoraproject.org;10.0.4.18;WZP1386V1X4;C9130AXE;;Lobby;Access Point;
+mirrors.kernel.org;10.0.4.21;WZP1004RDFA;C9130AXE;Graz HQ;Lobby;Access Point;
+mit.edu;10.0.4.24;FCW2918MTJB;C9130AXE;Salzburg Office;Rack C7;Access Point;
+mmegi.bw;10.0.4.27;FCW1673BW37;C9130AXE;Graz HQ;;Access Point;temporary installation
+mn.gov;10.0.4.30;FOC2917GP41;ISR4331;Frankfurt DC;Rack B2;Router;
+mo.gov;10.0.4.33;FDO22998VFT;C9300-24T;Klagenfurt Office;Lobby;Switch;
+mosquitto.org;10.0.4.36;FDO20809X5Q;N9K-C93180YC-FX;Klagenfurt Office;Room 7;Switch;temporary installation
+mozilla.org;10.0.4.39;FOC1779YA51;C9300-24T;Zurich POP;Cage 4;Switch;
+mpv.io;10.0.4.42;FOC2545CTW0;ASA5516-X;;Cage 11;Firewall;
+ms.gov;10.0.4.45;FOC18550CH5;C9120AXI-E;Klagenfurt Office;Rack B8;Access Point;
+n-tv.de;;WZP2629CCPL;C9300-48P;Prague POP;Lobby;Switch;
+n24.de;10.0.4.48;FCW2160NLD6;PowerEdge R650;Munich DC;Rack A1;Server;
+nationalbanken.dk;10.0.4.51;FCW2085922D;UCSC-C220-M5;Frankfurt DC;Rack A11;Server;
+nato.int;10.0.4.54;FCW14690SVT;C9300-24T;Frankfurt DC;Rack B7;Switch;
+nats.io;10.0.4.57;JMX248254QS;UCSC-C220-M5;Vienna DC2;Lobby;Server;
+navidrome.org;10.0.4.60;FOC2409VPT9;C9200L-24P;Vienna DC2;Lobby;Switch;
+ndtv.com;10.0.4.63;FDO2971UCLC;UCSC-C220-M5;Frankfurt DC;Room 11;Server;
+ne.gov;10.0.4.66;FOC2269G882;C9130AXE;Frankfurt DC;Room 8;Access Point;
+netbsd.org;10.0.4.69;WZP2841A0T2;ProLiant DL380 G10;Salzburg Office;Lobby;Server;
+newrelic.com;10.0.4.72;FDO16362XWQ;C9130AXE;Vienna DC1;;Access Point;
+news24.com;10.0.4.75;FOC2052Y817;ProLiant DL380 G10;Innsbruck Branch;Rack B6;Server;owner: network team
+nh.gov;10.0.4.78;WZP29523A8S;C9120AXI-E;Bratislava Office;Rack B3;Access Point;
+nib.int;10.0.4.81;FCW15959M3A;C9500-24Y4C;Zurich POP;Rack B2;Switch;
+nic.at;10.0.4.84;FDO2344AJX0;ProLiant DL380 G10;Bratislava Office;Lobby;Server;
+nic.au;10.0.4.87;JMX2046VDG0;AIR-AP2802I;Bratislava Office;Floor 1 IDF;Access Point;
+nic.br;10.0.4.90;WZP1613QLND;C9200L-24P;Vienna DC2;Room 5;Switch;
+nic.ch;10.0.4.93;JMX2446FVMQ;AIR-AP2802I;Vienna DC1;Rack A4;Access Point;
+nic.de;10.0.4.96;FOC1020W5T9;C9120AXI-E;Zurich POP;Lobby;Access Point;
+nic.edu;10.0.4.99;JMX1476CYH5;PowerEdge R650;Linz POP;Lobby;Server;
+nic.es;10.0.4.102;FCW1086MNXX;PowerEdge R650;Graz HQ;Rack C1;Server;
+nic.fr;10.0.4.105;FDO1075035A;C9200L-24P;Zurich POP;Rack C11;Switch;
+nic.info;10.0.4.108;FOC2085BCTJ;C9300-24T;Innsbruck Branch;Cage 1;Switch;
+nic.io;10.0.4.111;FDO2112RE85;C9500-24Y4C;Linz POP;Rack B12;Switch;
+nic.it;10.0.4.114;FDO20215R23;C9200L-24P;Bratislava Office;Rack A4;Switch;
+nic.mobi;10.0.4.117;FOC29425TAJ;AIR-AP2802I;Bratislava Office;Rack A9;Access Point;
+nine.com.au;10.0.4.120;WZP230212Y5;NetScaler MPX 8200;Frankfurt DC;Room 11;Load Balancer;
+nixos.org;10.0.4.123;JMX23842JR0;AIR-AP2802I;Innsbruck Branch;Rack A9;Access Point;owner: network team
+nj.gov;10.0.4.126;WZP1937YC7C;C9120AXI-E;Linz POP;Rack A1;Access Point;
+nm.gov;10.0.4.129;WZP1443J8BQ;PA-3220;Innsbruck Branch;;Firewall;uplink to ISP
+node-red.org;10.0.4.132;WZP17135HHH;C9300-48P;Bratislava Office;Rack A7;Switch;under maintenance
+nomad.io;10.0.4.135;FCW2214UERX;;Vienna DC2;Lobby;Access Point;
+norges-bank.no;10.0.4.138;FOC1774NA9W;PA-3220;Klagenfurt Office;Rack A3;Firewall;
+nrc.nl;10.0.4.141;FCW1572VBU8;ProLiant DL380 G10;Bratislava Office;Rack B3;Server;
+nrk.no;10.0.4.144;FOC2009YPA2;UCSC-C220-M5;Graz HQ;Rack B4;Server;
+ns1.alidns.com;10.0.4.147;WZP1765RNJ1;C9300-24T;Munich DC;Lobby;Switch;
+ns1.beeline.ru;10.0.4.150;FCW20759N09;FPR4115;Frankfurt DC;Rack C8;Firewall;
+ns1.digitalocean.com;10.0.4.153;FOC171231UP;C9300-48P;Frankfurt DC;Rack A12;Switch;HA pair with standby
+ns1.dnsmadeeasy.com;10.0.4.156;JMX1218XE7S;C9300-48P;Bratislava Office;Floor 7 IDF;Switch;
+ns1.dnspod.net;10.0.4.159;WZP2345RQLB;ISR4451-X;Munich DC;Cage 7;Router;
+ns1.easydns.com;10.0.4.162;FDO1521U5TF;PowerEdge R650;Prague POP;Cage 6;Server;
+ns1.fastly.net;10.0.4.165;FCW1690FVFG;C8300-1N1S;Innsbruck Branch;Rack B11;Router;
+ns1.gandi.net;10.0.4.168;FDO16470DFU;ProLiant DL380 G10;Bratislava Office;Cage 2;Server;
+ns1.google.com;10.0.4.171;FCW2966UE8C;C9500-24Y4C;Prague POP;Lobby;Switch;
+ns1.he.net;10.0.4.174;FCW1465QF9R;C9200L-24P;Munich DC;Rack B7;Switch;
+ns1.isc.org;10.0.4.177;FDO1507NRBT;C9300-24T;Innsbruck Branch;Rack A10;Switch;
+ns1.jio.com;10.0.4.180;FCW186892KV;F5 BIG-IP i5800;Prague POP;Lobby;Load Balancer;
+ns1.kpn.net;10.0.4.183;FOC2575XGZB;AIR-AP2802I;Frankfurt DC;Rack B5;Access Point;
+ns1.level3.net;10.0.4.186;JMX202350C5;ISR4331;Linz POP;Lobby;Router;
+ns1.linode.com;10.0.4.189;WZP102433WZ;C9500-24Y4C;Innsbruck Branch;Floor 4 IDF;Switch;
+ns1.mts.ru;10.0.4.192;FOC1481GYVL;AIR-AP2802I;Zurich POP;Room 8;Access Point;
+ns1.name.com;10.0.4.195;FDO2611EMLC;C8300-1N1S;Innsbruck Branch;Cage 3;Router;
+ns1.namecheaphosting.com;10.0.4.198;WZP25588AMP;NetScaler MPX 8200;Salzburg Office;Rack B4;Load Balancer;firmware update pending
+ns1.online.net;10.0.4.201;FDO2737TRNZ;ISR4331;Bratislava Office;Room 11;Router;
+ns1.optus.net.au;10.0.4.204;FDO2943CTQ8;C9130AXE;Vienna DC1;Rack A5;Access Point;
+ns1.orange.be;10.0.4.207;FDO27776PMJ;ISR4451-X;Graz HQ;Rack B9;Router;
+ns1.orange.es;10.0.4.210;JMX24859HSM;PowerEdge R650;Zurich POP;Floor 5 IDF;Server;HA pair with standby
+ns1.rackspace.com;10.0.4.213;JMX2122SZX0;AIR-AP2802I;Vienna DC1;Cage 8;Access Point;
+ns1.softlayer.com;10.0.4.216;FCW1011KTYT;C8300-1N1S;Prague POP;Floor 1 IDF;Router;
+ns1.sunrise.ch;10.0.4.219;FDO1073LLSZ;ASA5516-X;;Floor 10 IDF;Firewall;
+ns1.tele2.net;10.0.4.222;FOC26879K5E;C9130AXE;Vienna DC1;Cage 5;Access Point;
+ns1.tpg.com.au;10.0.4.225;FOC2789BL6K;C9120AXI-E;Vienna DC1;Rack A3;Access Point;
+ns1.verizon.net;10.0.4.228;FOC1116J87Z;FPR4115;Munich DC;Floor 2 IDF;Firewall;
+ns1.virginmedia.net;10.0.4.231;FDO1125U25Q;AIR-AP2802I;Zurich POP;Rack A6;Access Point;
+ns1.vodafone.es;10.0.4.234;FOC112280GA;C9300-24T;Vienna DC1;Cage 1;Switch;
+ns1.yahoo.com;10.0.4.237;FDO11588SUH;UCSC-C220-M5;Zurich POP;Rack B10;Server;
+ns1.zain.com;10.0.4.240;FDO1530X21D;C9500-24Y4C;Salzburg Office;Rack B2;Switch;
+ns2.alidns.com;10.0.4.243;FCW15662V3H;C9300-24T;Vienna DC1;Rack C12;Switch;
+ns2.beeline.ru;10.0.4.246;FCW210076CQ;C9130AXE;Munich DC;Rack B10;Access Point;
+ns2.digitalocean.com;10.0.4.249;FCW1599KR5Y;C9300-24T;Klagenfurt Office;Room 7;Switch;
+ns2.dnsmadeeasy.com;10.0.4.252;WZP116839AS;AIR-AP2802I;;Rack C2;Access Point;
+ns2.easydns.com;10.0.4.255;JMX2084QZ2N;F5 BIG-IP i5800;Vienna DC1;Cage 4;Load Balancer;
+ns2.fastly.net;10.0.5.2;JMX2983TJX4;AIR-AP2802I;Vienna DC2;Lobby;Access Point;
+ns2.gandi.net;10.0.5.5;FCW12009MN7;F5 BIG-IP i5800;Vienna DC1;Floor 1 IDF;Load Balancer;
+ns2.google.com;10.0.5.8;JMX1936G9XF;AIR-AP2802I;Vienna DC2;Room 8;Access Point;
+ns2.he.net;10.0.5.11;WZP12090WK7;C9120AXI-E;Linz POP;Cage 4;Access Point;
+ns2.isc.org;10.0.5.14;FCW1814K8YG;FPR2110;Graz HQ;Rack B2;Firewall;
+ns2.jio.com;10.0.5.17;FOC113089YA;F5 BIG-IP i5800;Frankfurt DC;Lobby;Load Balancer;renewed 2025
+ns2.kpn.net;10.0.5.20;JMX1329SYZ1;UCSC-C220-M5;Prague POP;Room 1;Server;
+ns2.level3.net;10.0.5.23;WZP1162NWXW;N9K-C93180YC-FX;Klagenfurt Office;Cage 12;Switch;temporary installation
+ns2.linode.com;10.0.5.26;FCW2971YR58;C9300-24T;Munich DC;Lobby;Switch;
+ns2.mts.ru;10.0.5.29;FCW27531L02;ProLiant DL380 G10;Vienna DC1;Rack A8;Server;
+ns2.name.com;10.0.5.32;FCW1999HQP8;AIR-AP2802I;Zurich POP;Room 12;Access Point;
+ns2.namecheaphosting.com;10.0.5.35;FDO1429AY9F;ASR1001-X;Linz POP;Rack A2;Router;
+ns2.online.net;10.0.5.38;JMX24049AK7;C9200L-24P;Vienna DC1;Rack C10;Switch;
+ns2.orange.be;10.0.5.41;WZP2071L0P8;C9500-24Y4C;Frankfurt DC;Rack C2;Switch;
+ns2.orange.es;10.0.5.44;FCW1424AAFR;C9200L-24P;Prague POP;Room 9;Switch;
+ns2.rackspace.com;10.0.5.47;JMX2187NQWN;F5 BIG-IP i5800;Zurich POP;Rack A7;Load Balancer;
+ns2.softlayer.com;10.0.5.50;WZP1173XP1A;C9300-48P;Frankfurt DC;Floor 1 IDF;Switch;
+ns2.sunrise.ch;10.0.5.53;FCW22813MB2;C9130AXE;Vienna DC1;Cage 9;Access Point;
+ns2.tele2.net;10.0.5.56;FDO14499HE3;C9200L-24P;Klagenfurt Office;Floor 12 IDF;Switch;
+ns2.tpg.com.au;10.0.5.59;FCW1282MM3K;F5 BIG-IP i5800;Munich DC;Cage 11;Load Balancer;PoE budget at 90%
+ns2.verizon.net;10.0.5.62;JMX1698K9BM;N9K-C93180YC-FX;Frankfurt DC;Rack A9;Switch;
+ns2.virginmedia.net;10.0.5.65;FDO1252C66Y;N9K-C93180YC-FX;Prague POP;Rack B12;Switch;
+ns2.vodafone.es;10.0.5.68;FCW2205B9SP;C9200L-24P;Bratislava Office;Floor 7 IDF;Switch;
+ns2.yahoo.com;10.0.5.71;JMX1980PEPZ;C9300-48P;Zurich POP;Lobby;Switch;owner: network team
+ns2.zain.com;10.0.5.74;FCW1971X4C0;UCSC-C220-M5;Prague POP;Rack C8;Server;
+ns3.cloudflare.com;10.0.5.77;FOC1971B9RX;C9500-24Y4C;Klagenfurt Office;Room 6;Switch;
+ns3.digitalocean.com;10.0.5.80;JMX20516R79;C9500-24Y4C;Vienna DC1;Rack A3;Switch;
+ns3.dnsmadeeasy.com;10.0.5.83;FCW1600G0WS;C9300-24T;Bratislava Office;Rack B5;Switch;
+ns3.gandi.net;10.0.5.86;FCW1994SHJM;C9500-24Y4C;Linz POP;Lobby;Switch;
+ns3.google.com;10.0.5.89;WZP1469NT55;N9K-C93180YC-FX;Frankfurt DC;Rack B4;Switch;
+ns3.he.net;10.0.5.92;FOC1163JWJL;PowerEdge R650;Prague POP;;Server;
+ns3.linode.com;10.0.5.95;FCW2639RVLH;PowerEdge R650;Prague POP;Room 11;Server;
+ns3.yahoo.com;10.0.5.98;FCW13969LXK;C8300-1N1S;Vienna DC2;Room 8;Router;
+ns4.cloudflare.com;10.0.5.101;FOC1600MKTP;PowerEdge R650;Vienna DC2;Lobby;Server;
+ns4.google.com;10.0.5.104;FDO1522VWJM;C9130AXE;Graz HQ;Cage 2;Access Point;
+ns4.he.net;10.0.5.107;WZP19288QKQ;N9K-C93180YC-FX;Graz HQ;Rack C3;Switch;
+ns4.linode.com;10.0.5.110;FDO2112VE3L;C9120AXI-E;Frankfurt DC;Floor 2 IDF;Access Point;
+ns5.cloudflare.com;10.0.5.113;FCW24664LFU;AIR-AP2802I;Graz HQ;Rack C11;Access Point;
+ns5.he.net;10.0.5.116;JMX1173GVDK;C9130AXE;Vienna DC2;Lobby;Access Point;
+ns5.linode.com;10.0.5.119;FCW1041PDCC;PowerEdge R650;Bratislava Office;Rack B6;Server;
+ns6.cloudflare.com;10.0.5.122;FOC2225HXPT;C9130AXE;Bratislava Office;Room 1;Access Point;
+ntdtv.com;10.0.5.125;FOC1366RBTK;C9130AXE;Frankfurt DC;Cage 10;Access Point;
+ntp.org;10.0.5.128;JMX1487PZTG;ISR4451-X;Vienna DC2;Rack A1;Router;
+nu.nl;10.0.5.131;FOC293969HK;FPR4115;Frankfurt DC;Lobby;Firewall;owner: network team
+nv.gov;10.0.5.134;JMX2297J8AF;C9130AXE;Frankfurt DC;Cage 1;Access Point;
+ny.gov;10.0.5.137;FCW1510R93D;NetScaler MPX 8200;Zurich POP;Rack A7;Load Balancer;
+objects.githubusercontent.com;10.0.5.140;FDO13997UHA;F5 BIG-IP i5800;Bratislava Office;Rack A8;Load Balancer;
+observador.pt;10.0.5.143;WZP10166M7P;C9130AXE;Klagenfurt Office;Cage 8;Access Point;
+obsproject.com;10.0.5.146;JMX2556BTK2;C9300-24T;Frankfurt DC;Lobby;Switch;
+octopart.com;10.0.5.149;FCW20881FXQ;ISR4451-X;Munich DC;Rack B6;Router;
+oecd.org;10.0.5.152;FCW10657F0D;N9K-C93180YC-FX;Graz HQ;Floor 5 IDF;Switch;
+one.one.one.one;10.0.5.155;FCW2077R297;FPR4115;Prague POP;Rack C7;Firewall;
+onshape.com;10.0.5.158;FCW1485425S;C9130AXE;Salzburg Office;Cage 5;Access Point;
+opcw.org;10.0.5.161;WZP2632U5NU;ISR4331;Innsbruck Branch;Rack A2;Router;
+opec.org;10.0.5.164;FCW1870EQXD;ISR4331;Salzburg Office;Cage 1;Router;
+openai.com;10.0.5.167;JMX1416DSD5;C9120AXI-E;Vienna DC1;Room 3;Access Point;
+openbsd.org;10.0.5.170;FCW2377K2YS;C8300-1N1S;Innsbruck Branch;Rack A1;Router;
+openstreetmap.org;10.0.5.173;FOC2936ZZR6;ASR1001-X;Bratislava Office;Lobby;Router;
+opensuse.org;10.0.5.176;FCW1160Y6JY;ASR1001-X;Klagenfurt Office;Room 8;Router;
+orf.at;10.0.5.179;WZP1706HFXD;UCSC-C220-M5;Munich DC;Rack A9;Server;
+osmfoundation.org;10.0.5.182;FDO1163XEZ0;C9120AXI-E;Zurich POP;Rack A10;Access Point;
+outlook.live.com;10.0.5.185;WZP20780A3K;PowerEdge R650;Vienna DC2;Lobby;Server;
+outlook.office365.com;10.0.5.188;FCW1037E9KR;ISR4331;Zurich POP;Cage 4;Router;
+ovh.com;10.0.5.191;FOC1750JQPL;ASA5516-X;Frankfurt DC;Rack A2;Firewall;
+packagist.org;10.0.5.194;JMX2795N7DB;ISR4331;Linz POP;Rack A7;Router;
+packer.io;10.0.5.197;FDO2311JES9;C9300-48P;Vienna DC1;Lobby;Switch;
+paloaltonetworks.com;10.0.5.200;JMX2248W4YE;N9K-C93180YC-FX;Linz POP;Rack A4;Switch;PoE budget at 90%
+philstar.com;10.0.5.203;FCW18894EPH;FPR4115;Salzburg Office;Floor 3 IDF;Firewall;under maintenance
+pinot.apache.org;10.0.5.206;WZP2232JPJ2;C9200L-24P;Prague POP;Room 3;Switch;under maintenance
+pkg.freebsd.org;10.0.5.209;FDO147114NA;AIR-AP2802I;Klagenfurt Office;Cage 10;Access Point;
+plan9.io;10.0.5.212;JMX2486FJX1;C9200L-24P;Frankfurt DC;Cage 2;Switch;
+politiken.dk;10.0.5.215;FDO1483VUHZ;FPR4115;Innsbruck Branch;Floor 5 IDF;Firewall;under maintenance
+pool.ntp.org;10.0.5.218;WZP1006Y0UV;ASA5516-X;Innsbruck Branch;Floor 2 IDF;Firewall;
+powerbi.microsoft.com;10.0.5.221;FOC1195YR91;C9300-48P;Prague POP;Cage 2;Switch;spare PSU missing
+pravda.com.ua;10.0.5.224;FCW1536XJXD;C9200L-24P;Klagenfurt Office;Lobby;Switch;
+prefect.io;10.0.5.227;FDO1891QU47;UCSC-C220-M5;Graz HQ;Floor 2 IDF;Server;
+premiumtimesng.com;10.0.5.230;FOC187476T9;FPR4115;Bratislava Office;Rack A12;Firewall;
+prometheus.io;10.0.5.233;WZP2882ZH12;UCSC-C220-M5;Munich DC;Floor 5 IDF;Server;
+prusa3d.com;10.0.5.236;FOC1206JWD1;ISR4451-X;Vienna DC1;Lobby;Router;
+publico.pt;10.0.5.239;JMX10955D79;C9120AXI-E;Klagenfurt Office;Rack C4;Access Point;HA pair with standby
+pulsar.apache.org;10.0.5.242;FOC2387W4AR;C9300-24T;Linz POP;Cage 1;Switch;
+punchng.com;10.0.5.245;JMX2177HCX0;C9300-24T;Vienna DC1;Room 4;Switch;
+puppet.com;10.0.5.248;JMX27146VZZ;ASA5516-X;Prague POP;;Firewall;
+pypi.org;10.0.5.251;JMX2645YT0T;C9300-48P;Vienna DC1;Floor 5 IDF;Switch;
+qlik.com;10.0.5.254;WZP2239R3J5;C9200L-24P;Prague POP;Room 8;Switch;
+questdb.io;10.0.6.1;FCW1216ZABS;UCSC-C220-M5;Klagenfurt Office;Rack B9;Server;
+r7.com;10.0.6.4;FCW1187XURJ;N9K-C93180YC-FX;Klagenfurt Office;Cage 9;Switch;temporary installation
+rabbitmq.com;10.0.6.7;FDO2540VYXZ;ASA5516-X;Bratislava Office;Lobby;Firewall;
+raspberrypi.org;10.0.6.10;JMX18840UBQ;C9130AXE;Munich DC;Cage 11;Access Point;
+raw.githubusercontent.com;10.0.6.13;WZP2519S1WU;C9120AXI-E;Frankfurt DC;Lobby;Access Point;
+rcnradio.com;10.0.6.16;WZP2079FA9P;C9300-48P;Vienna DC1;Cage 12;Switch;
+reactos.org;10.0.6.19;FOC2986NA9Z;NetScaler MPX 8200;Prague POP;Room 2;Load Balancer;
+redash.io;10.0.6.22;WZP17190SQL;PowerEdge R650;Innsbruck Branch;Rack A2;Server;
+redis.io;10.0.6.25;FOC2690DFLW;C9200L-24P;Frankfurt DC;Rack C2;Switch;
+registry.npmjs.org;10.0.6.28;FDO16152E3C;NetScaler MPX 8200;Vienna DC1;Rack B6;Load Balancer;
+repo.maven.apache.org;10.0.6.31;WZP21220C7S;C9120AXI-E;Munich DC;;Access Point;
+repubblica.it;10.0.6.34;WZP2249ZHDE;C9120AXI-E;Zurich POP;Lobby;Access Point;
+resolver1.opendns.com;10.0.6.37;FCW2109JNXH;AIR-AP2802I;Linz POP;Lobby;Access Point;
+resolver2.opendns.com;10.0.6.40;WZP1212DJZ6;AIR-AP2802I;Salzburg Office;Rack B2;Access Point;
+resolver3.opendns.com;10.0.6.43;WZP14435FTT;C9300-48P;;Rack C2;Switch;
+resolver4.opendns.com;10.0.6.46;FDO2150LSMU;ISR4331;Innsbruck Branch;Rack B1;Router;HA pair with standby
+reuters.com;10.0.6.49;WZP11295N2Z;C9300-48P;Bratislava Office;Rack A10;Switch;
+ri.gov;10.0.6.52;FCW2439U9YQ;FPR2110;Prague POP;Cage 6;Firewall;replace in Q2
+riksbank.se;10.0.6.55;WZP1442PFCQ;ISR4331;Frankfurt DC;Room 11;Router;uplink to ISP
+rmc.fr;10.0.6.58;FOC1494JZY4;NetScaler MPX 8200;Linz POP;Lobby;Load Balancer;
+rollbar.com;10.0.6.61;FCW2214SDYS;C9300-24T;Bratislava Office;Room 11;Switch;
+roscosmos.ru;10.0.6.64;WZP1657JLLV;C9300-48P;Vienna DC1;Lobby;Switch;
+rte.ie;10.0.6.67;FCW2425YT94;ASR1001-X;Frankfurt DC;Room 6;Router;
+rtl.fr;10.0.6.70;FDO23355GEU;UCSC-C220-M5;Klagenfurt Office;Rack A1;Server;uplink to ISP
+rtve.es;10.0.6.73;FOC23423QYE;FPR2110;Graz HQ;Cage 2;Firewall;renewed 2025
+rubygems.org;10.0.6.76;FDO1118NV1R;N9K-C93180YC-FX;Frankfurt DC;Rack B2;Switch;
+rundeck.com;10.0.6.79;JMX2788GT7V;C9300-24T;Linz POP;Rack B5;Switch;
+saltproject.io;10.0.6.82;FOC2556FU4Y;ProLiant DL380 G10;Graz HQ;Lobby;Server;
+savannah.gnu.org;10.0.6.85;FDO1670XRJQ;C9120AXI-E;Vienna DC2;Floor 10 IDF;Access Point;
+sbs.com.au;10.0.6.88;FDO2752Z41N;C8300-1N1S;Frankfurt DC;Floor 3 IDF;Router;
+sbt.com.br;10.0.6.91;FDO2855DSJA;PowerEdge R650;Vienna DC2;Lobby;Server;
+sc.gov;10.0.6.94;FDO1896Z3L0;C9300-24T;Munich DC;Rack C9;Switch;
+scmp.com;10.0.6.97;FOC2539HAME;N9K-C93180YC-FX;Prague POP;Lobby;Switch;
+scmpost.com;10.0.6.100;FCW1143ECW2;ASA5516-X;Vienna DC1;Room 12;Firewall;spare PSU missing
+scylladb.com;10.0.6.103;WZP16156U2H;ASA5516-X;Innsbruck Branch;Cage 11;Firewall;
+security.debian.org;10.0.6.106;FDO1205B40U;N9K-C93180YC-FX;;Lobby;Switch;
+security.ubuntu.com;10.0.6.109;WZP2353U1CH;ASA5516-X;Graz HQ;Rack B10;Firewall;
+senate.gov;10.0.6.112;FOC14964VAM;C9130AXE;Munich DC;Rack A9;Access Point;
+sentry.io;10.0.6.115;FOC16660T7E;N9K-C93180YC-FX;Bratislava Office;Rack A7;Switch;
+sisense.com;10.0.6.118;FCW26030RTA;C9130AXE;Prague POP;Lobby;Access Point;
+sky.de;10.0.6.121;FCW2562KKQX;ISR4451-X;Klagenfurt Office;Rack C10;Router;
+slackware.com;10.0.6.124;FDO2272HKPD;PA-3220;Frankfurt DC;Lobby;Firewall;
+smtp.gmail.com;10.0.6.127;FDO1517URNJ;C9200L-24P;Salzburg Office;Floor 11 IDF;Switch;
+snowflake.com;10.0.6.130;JMX2022U602;PowerEdge R650;Graz HQ;Room 2;Server;
+solaris.com;10.0.6.133;FOC1865HJ26;ProLiant DL380 G10;Bratislava Office;Floor 8 IDF;Server;
+sourceforge.net;10.0.6.136;WZP25793XM0;ISR4451-X;Klagenfurt Office;Room 8;Router;
+spacex.com;10.0.6.139;JMX1183SDLG;C9120AXI-E;Vienna DC1;Rack B10;Access Point;
+spark.apache.org;10.0.6.142;FOC160526XB;PowerEdge R650;Graz HQ;Rack B8;Server;PoE budget at 90%
+sparkfun.com;10.0.6.145;FCW1079ZXBT;C9300-24T;Bratislava Office;Room 4;Switch;
+spiegel.de;10.0.6.148;FCW26485WMY;C9300-24T;Innsbruck Branch;Lobby;Switch;
+spinnaker.io;10.0.6.151;FDO1369KYQ5;NetScaler MPX 8200;Vienna DC2;Floor 10 IDF;Load Balancer;
+sputniknews.com;10.0.6.154;FCW12091ZQG;N9K-C93180YC-FX;Frankfurt DC;Lobby;Switch;
+standaard.be;10.0.6.157;WZP1174MVN0;C9300-24T;Bratislava Office;Rack A6;Switch;renewed 2025
+standardmedia.co.ke;10.0.6.160;FCW17689ZH7;N9K-C93180YC-FX;Salzburg Office;Rack B11;Switch;
+stanford.edu;10.0.6.163;FOC18137TQB;AIR-AP2802I;Salzburg Office;Rack A2;Access Point;
+straitstimes.com;10.0.6.166;WZP2707JVF7;C9120AXI-E;Frankfurt DC;Room 10;Access Point;
+stuff.co.nz;10.0.6.169;FOC2813F1YZ;C9300-24T;Innsbruck Branch;Room 5;Switch;
+sueddeutsche.de;10.0.6.172;FOC2355N424;C9500-24Y4C;Zurich POP;Cage 7;Switch;
+superset.apache.org;10.0.6.175;FCW25195H3W;C9120AXI-E;Frankfurt DC;Floor 8 IDF;Access Point;
+svt.se;10.0.6.178;FDO1854WKV8;PowerEdge R650;Bratislava Office;Rack A12;Server;
+svtplay.se;10.0.6.181;FOC16162F4V;ASR1001-X;Munich DC;Cage 7;Router;
+tableau.com;10.0.6.184;FDO111057EG;C9300-48P;Prague POP;Floor 12 IDF;Switch;
+tagesschau.de;10.0.6.187;WZP1397Z89U;C9300-48P;Frankfurt DC;Rack C3;Switch;
+tails.net;10.0.6.190;JMX19395N4P;C9200L-24P;Vienna DC2;Floor 12 IDF;Switch;
+tasmota.github.io;10.0.6.193;WZP2499CL0K;PowerEdge R650;Salzburg Office;Rack A11;Server;
+telegraaf.nl;10.0.6.196;JMX1191HC4D;C9130AXE;Innsbruck Branch;Rack A5;Access Point;
+televisa.com;10.0.6.199;JMX1720ZGME;FPR4115;Vienna DC1;Room 10;Firewall;
+terra.com.br;10.0.6.202;FOC2063C496;F5 BIG-IP i5800;Zurich POP;Cage 10;Load Balancer;
+terraform.io;10.0.6.205;FOC2921YBGB;N9K-C93180YC-FX;Linz POP;Lobby;Switch;
+tesla.com;10.0.6.208;FOC1311HPUR;C9500-24Y4C;Prague POP;;Switch;
+tg4.ie;10.0.6.211;JMX2935QYMH;AIR-AP2802I;Linz POP;Rack A8;Access Point;
+theeastafrican.co.ke;10.0.6.214;FCW2796AV5W;PA-3220;Vienna DC2;Rack C1;Firewall;
+thehindu.com;10.0.6.217;FOC1760AYGW;C9120AXI-E;Innsbruck Branch;Floor 11 IDF;Access Point;
+thejakartapost.com;10.0.6.220;WZP2585MBGE;C9500-24Y4C;Graz HQ;Rack C10;Switch;
+thingiverse.com;10.0.6.223;WZP1679Y1VW;UCSC-C220-M5;Vienna DC1;Floor 5 IDF;Server;
+time.apple.com;10.0.6.226;WZP2794KK8U;UCSC-C220-M5;;Lobby;Server;firmware update pending
+time.google.com;10.0.6.229;FOC224898N6;AIR-AP2802I;Klagenfurt Office;Floor 4 IDF;Access Point;
+time.windows.com;10.0.6.232;FCW1884U0Q1;C9120AXI-E;Vienna DC2;Rack B5;Access Point;
+timescale.com;10.0.6.235;JMX2765KC3L;PowerEdge R650;Innsbruck Branch;Lobby;Server;
+timeslive.co.za;10.0.6.238;WZP16881958;UCSC-C220-M5;Linz POP;Lobby;Server;
+timesofindia.indiatimes.com;10.0.6.241;JMX27507LX4;FPR2110;Graz HQ;Cage 3;Firewall;
+timesofisrael.com;10.0.6.244;FDO1846GLVN;UCSC-C220-M5;Graz HQ;Lobby;Server;
+torproject.org;10.0.6.247;FDO1385EPRV;C9500-24Y4C;Innsbruck Branch;Lobby;Switch;
+travis-ci.com;10.0.6.250;FDO2302YUE0;UCSC-C220-M5;;;Server;
+tribune.com.pk;10.0.6.253;FCW157932B6;C9120AXI-E;Salzburg Office;Rack B12;Access Point;
+trino.io;10.0.7.0;FOC1356LYJA;FPR4115;Innsbruck Branch;Rack A1;Firewall;PoE budget at 90%
+tuoitre.vn;10.0.7.3;JMX2732DQMJ;C9300-48P;Frankfurt DC;Rack C1;Switch;under maintenance
+tv2.no;10.0.7.6;WZP2553FKHD;C9300-24T;Munich DC;Rack C3;Switch;
+tvazteca.com;10.0.7.9;FCW21051F4D;C9500-24Y4C;Frankfurt DC;Rack A7;Switch;
+tve.es;10.0.7.12;FCW1057S7WL;ProLiant DL380 G10;Graz HQ;Lobby;Server;
+tvnz.co.nz;10.0.7.15;FOC1208A3TX;C9130AXE;Salzburg Office;Room 11;Access Point;
+ubuntu.com;10.0.7.18;FCW1896XAU0;UCSC-C220-M5;Bratislava Office;Floor 8 IDF;Server;
+ukrinform.net;10.0.7.21;JMX2171EYD5;;Bratislava Office;Cage 7;Access Point;
+ultimaker.com;10.0.7.24;WZP20659LT5;AIR-AP2802I;Klagenfurt Office;Rack B7;Access Point;
+unesco.org;10.0.7.27;FDO1607XT6F;;Prague POP;Lobby;Load Balancer;
+unhcr.org;10.0.7.30;FOC2800M62G;UCSC-C220-M5;;Cage 9;Server;
+uni-frankfurt.de;10.0.7.33;FCW2644C99B;ProLiant DL380 G10;Vienna DC2;Rack A12;Server;
+uni-hamburg.de;10.0.7.36;WZP1199C6JS;C9130AXE;Vienna DC1;Rack C2;Access Point;
+unian.info;10.0.7.39;JMX183302CY;C9300-48P;Vienna DC1;Rack B1;Switch;
+unicef.org;10.0.7.42;FOC1260C25Y;ASA5516-X;Vienna DC2;;Firewall;
+uol.com.br;10.0.7.45;JMX2555PW5C;F5 BIG-IP i5800;Frankfurt DC;Cage 3;Load Balancer;
+vagrantup.com;10.0.7.48;FCW2692JQJ7;ISR4451-X;Prague POP;Rack B12;Router;
+vg.no;10.0.7.51;FOC1486W0PG;NetScaler MPX 8200;Innsbruck Branch;Rack B3;Load Balancer;
+videolan.org;10.0.7.54;FDO2007HLRH;N9K-C93180YC-FX;Klagenfurt Office;Floor 8 IDF;Switch;
+vlc.org;10.0.7.57;FCW1608V7KZ;C9120AXI-E;Linz POP;Room 5;Access Point;
+voidlinux.org;10.0.7.60;FOC24589QAS;UCSC-C220-M5;Zurich POP;Rack C6;Server;monitoring only
+volkskrant.nl;10.0.7.63;FDO29028SZM;C9300-48P;Zurich POP;Cage 8;Switch;
+vt.gov;10.0.7.66;FCW11267R44;C9300-24T;Munich DC;Rack B10;Switch;
+vultr.com;10.0.7.69;WZP1238BFP2;UCSC-C220-M5;Frankfurt DC;Rack A8;Server;replace in Q2
+w3.org;10.0.7.72;FCW2165P1UV;C9200L-24P;Innsbruck Branch;;Switch;
+wa.gov;10.0.7.75;WZP1488E3SC;FPR2110;Bratislava Office;Rack C2;Firewall;
+waypointproject.io;10.0.7.78;WZP2005A52M;C9200L-24P;Graz HQ;Rack A6;Switch;
+webmail.strato.de;10.0.7.81;FCW1278QZ8X;PA-3220;Vienna DC1;Cage 4;Firewall;
+welt.de;10.0.7.84;FDO1993WJM4;N9K-C93180YC-FX;Munich DC;Floor 11 IDF;Switch;
+whitehouse.gov;10.0.7.87;FOC2713MLV3;ISR4451-X;Munich DC;Rack A12;Router;
+who.int;10.0.7.90;FCW2589D8G8;NetScaler MPX 8200;Bratislava Office;Cage 12;Load Balancer;EoL 2027
+whois.iana.org;10.0.7.93;JMX15338U74;C9120AXI-E;Munich DC;Floor 12 IDF;Access Point;temporary installation
+wien.gv.at;10.0.7.96;FCW23082KZU;ProLiant DL380 G10;Innsbruck Branch;Rack B8;Server;
+wikidata.org;10.0.7.99;JMX190257Y7;C9200L-24P;Bratislava Office;Room 9;Switch;
+wikimedia.org;10.0.7.102;FOC2627K8MQ;PowerEdge R650;Linz POP;Rack A7;Server;
+wikipedia.org;10.0.7.105;WZP201047XT;C9300-24T;Klagenfurt Office;Rack C12;Switch;
+wiktionary.org;10.0.7.108;FCW2916E7RK;PowerEdge R650;Salzburg Office;Lobby;Server;under maintenance
+worldbank.org;10.0.7.111;JMX1515B2ZK;ProLiant DL380 G10;Linz POP;Rack A8;Server;
+wto.org;10.0.7.114;FOC16667R7W;ASR1001-X;Bratislava Office;Room 1;Router;
+wv.gov;10.0.7.117;FDO1795BQCB;UCSC-C220-M5;Frankfurt DC;Rack C1;Server;renewed 2025
+www.1und1.de;10.0.7.120;FCW1598M4DQ;ISR4451-X;Linz POP;Rack B9;Router;
+www.2degrees.nz;10.0.7.123;JMX1835RCGL;C9120AXI-E;Vienna DC1;Rack A9;Access Point;
+www.aalto.fi;10.0.7.126;FDO2625PYG8;NetScaler MPX 8200;Bratislava Office;Room 7;Load Balancer;
+www.aber.ac.uk;10.0.7.129;FDO1424Z0DK;F5 BIG-IP i5800;Graz HQ;Room 4;Load Balancer;
+www.acm.org;10.0.7.132;FOC1377UR27;C9500-24Y4C;Salzburg Office;Rack A7;Switch;
+www.adelaide.edu.au;10.0.7.135;FOC15852F4E;PowerEdge R650;Innsbruck Branch;Floor 9 IDF;Server;
+www.admin.ch;10.0.7.138;WZP2889CTY1;ProLiant DL380 G10;Zurich POP;Rack C1;Server;
+www.adobe.com;10.0.7.141;WZP2516Y32R;FPR2110;Klagenfurt Office;;Firewall;
+www.aer.at;10.0.7.144;WZP1611PT1R;C9500-24Y4C;Klagenfurt Office;Floor 6 IDF;Switch;
+www.affinity.com;10.0.7.147;FDO2108GSP3;PowerEdge R650;Zurich POP;Lobby;Server;
+www.afrinic.net;10.0.7.150;FOC1896TA9N;PowerEdge R650;Vienna DC2;Rack C6;Server;
+www.agh.edu.pl;10.0.7.153;FCW1252B6LP;C9500-24Y4C;Bratislava Office;Floor 11 IDF;Switch;
+www.airbnb.com;10.0.7.156;WZP24259W7B;C9300-24T;Innsbruck Branch;Room 8;Switch;
+www.airbus.com;10.0.7.159;WZP142288JG;PA-3220;Linz POP;Floor 10 IDF;Firewall;
+www.airfrance.com;10.0.7.162;FDO1090K7HP;ProLiant DL380 G10;Frankfurt DC;Rack C7;Server;
+www.airtel.in;10.0.7.165;FDO1976KXJJ;C9300-24T;Prague POP;Floor 10 IDF;Switch;HA pair with standby
+www.akamai.com;10.0.7.168;WZP1898FWV4;N9K-C93180YC-FX;Prague POP;Room 11;Switch;
+www.aljazeera.com;10.0.7.171;FCW21927M15;C9500-24Y4C;Frankfurt DC;Rack B5;Switch;
+www.allianz.com;10.0.7.174;FCW2165EJ2C;NetScaler MPX 8200;Vienna DC2;Rack C3;Load Balancer;owner: network team
+www.alphabet.com;10.0.7.177;FCW2609TDEB;FPR2110;Vienna DC1;Floor 5 IDF;Firewall;
+www.amazon.co.uk;10.0.7.180;FOC2990YXC0;ProLiant DL380 G10;Klagenfurt Office;Rack B6;Server;
+www.amazon.com;10.0.7.183;WZP2907S3BS;AIR-AP2802I;Innsbruck Branch;Rack C11;Access Point;
+www.amazon.de;10.0.7.186;WZP1164S9WA;FPR4115;Munich DC;Rack A10;Firewall;renewed 2025
+www.amd.com;10.0.7.189;FOC2545QPJ3;C9300-24T;Innsbruck Branch;Rack B1;Switch;
+www.americanexpress.com;10.0.7.192;WZP1822LM4F;FPR4115;Graz HQ;Rack C7;Firewall;
+www.ansi.org;10.0.7.195;FCW1450SJ1M;C9200L-24P;Zurich POP;Cage 9;Switch;
+www.ansible.com;10.0.7.198;FDO2765VXAK;C9500-24Y4C;Innsbruck Branch;Rack A12;Switch;
+www.anthropic.com;10.0.7.201;WZP1523500U;ISR4451-X;Graz HQ;Lobby;Router;
+www.anu.edu.au;10.0.7.204;FDO2316C6HZ;FPR2110;Linz POP;Cage 5;Firewall;
+www.aon.com;10.0.7.207;FCW1451QY4X;;Zurich POP;Floor 2 IDF;Server;
+www.apache.org;10.0.7.210;FOC1939X2BX;N9K-C93180YC-FX;Salzburg Office;Room 3;Switch;under maintenance
+www.apnews.com;10.0.7.213;FDO2967HV5C;F5 BIG-IP i5800;Munich DC;Floor 10 IDF;Load Balancer;
+www.apnic.net;10.0.7.216;FDO218351ZG;FPR4115;Klagenfurt Office;Rack A6;Firewall;
+www.apollo.io;10.0.7.219;FOC1562TUNY;ISR4451-X;Vienna DC1;Rack A7;Router;
+www.appdynamics.com;10.0.7.222;FCW2415P49F;C8300-1N1S;Vienna DC2;Rack C4;Router;
+www.apple.com;10.0.7.225;FCW2533CNFU;PowerEdge R650;Frankfurt DC;Lobby;Server;under maintenance
+www.archive.org;10.0.7.228;FOC1628SVHK;F5 BIG-IP i5800;Innsbruck Branch;Rack A11;Load Balancer;monitoring only
+www.archlinux.org;10.0.7.231;FDO1939L0WG;ISR4451-X;Innsbruck Branch;Rack C12;Router;
+www.ard.de;10.0.7.234;JMX2478JKB2;AIR-AP2802I;Zurich POP;Floor 11 IDF;Access Point;
+www.argentina.gob.ar;10.0.7.237;FOC28210A65;C9200L-24P;Bratislava Office;Rack C8;Switch;
+www.arista.com;10.0.7.240;FDO2990T9DF;UCSC-C220-M5;Prague POP;Room 3;Server;monitoring only
+www.arizona.gov;10.0.7.243;FOC1192GY03;C9300-48P;;Rack A10;Switch;
+www.arkansas.gov;10.0.7.246;FOC2687DAKS;C9500-24Y4C;Munich DC;Room 1;Switch;
+www.arp.tn;10.0.7.249;FDO1830KHZL;C9300-24T;Linz POP;Rack C2;Switch;
+www.arxiv.org;10.0.7.252;FCW1524BK1D;C9300-48P;Munich DC;Rack C10;Switch;
+www.asda.com;10.0.7.255;JMX2433L196;ISR4451-X;Salzburg Office;Lobby;Router;
+www.asean.org;10.0.8.2;FOC27428CU0;PA-3220;Zurich POP;Rack B4;Firewall;
+www.asml.com;10.0.8.5;WZP2725Q0C3;ISR4451-X;Munich DC;Rack C8;Router;renewed 2025
+www.assemblee-nationale.fr;10.0.8.8;FDO2794MW4D;C9120AXI-E;Innsbruck Branch;Rack C6;Access Point;
+www.asus.com;10.0.8.11;JMX2399QJLX;ProLiant DL380 G10;Prague POP;Rack C8;Server;
+www.ateneo.edu;10.0.8.14;JMX2441J757;AIR-AP2802I;Frankfurt DC;Lobby;Access Point;
+www.atlassian.com;10.0.8.17;FCW2853C994;NetScaler MPX 8200;Salzburg Office;Room 8;Load Balancer;uplink to ISP
+www.att.com;10.0.8.20;FDO2072WCL4;C9130AXE;Vienna DC2;Floor 8 IDF;Access Point;
+www.att.net;10.0.8.23;FDO1654UMCM;C9300-48P;Graz HQ;Rack B3;Switch;
+www.auckland.ac.nz;10.0.8.26;WZP28721BGJ;NetScaler MPX 8200;Prague POP;Floor 4 IDF;Load Balancer;
+www.aueb.gr;10.0.8.29;FDO1644CQJ9;C9300-48P;Frankfurt DC;Room 4;Switch;
+www.austrade.gov.au;10.0.8.32;FDO2757HJ7V;C9500-24Y4C;Innsbruck Branch;Lobby;Switch;
+www.australia.gov.au;10.0.8.35;FOC2465P0X7;ISR4451-X;Vienna DC2;Lobby;Router;
+www.austria.info;10.0.8.38;FDO1033UYNZ;C9130AXE;Innsbruck Branch;Rack A12;Access Point;
+www.aut.ac.nz;10.0.8.41;FDO1399W90M;ASA5516-X;Vienna DC2;Floor 2 IDF;Firewall;
+www.auth.gr;10.0.8.44;JMX2655K9M0;ISR4331;Klagenfurt Office;Room 8;Router;HA pair with standby
+www.autodesk.com;10.0.8.47;WZP10200HNW;C9130AXE;Munich DC;Cage 9;Access Point;
+www.avast.com;10.0.8.50;FCW1108BHDC;;Vienna DC2;Floor 5 IDF;Server;
+www.aws.amazon.com;10.0.8.53;JMX2703B3VV;F5 BIG-IP i5800;Vienna DC1;Lobby;Load Balancer;
+www.azerbaijan.az;10.0.8.56;WZP2945Q82E;ASA5516-X;Vienna DC1;Room 7;Firewall;
+www.azure.microsoft.com;10.0.8.59;FCW2854PRFH;NetScaler MPX 8200;Vienna DC2;Rack B10;Load Balancer;
+www.baidu.com;10.0.8.62;FCW1393FWLV;N9K-C93180YC-FX;Salzburg Office;Rack A8;Switch;
+www.bain.com;10.0.8.65;WZP2647TYNT;C9500-24Y4C;Linz POP;Rack B12;Switch;
+www.bandcamp.com;10.0.8.68;JMX2156WAKN;C9300-48P;Klagenfurt Office;Room 7;Switch;
+www.bangladesh.gov.bd;;FOC2873NRUK;FPR4115;Munich DC;Floor 8 IDF;Firewall;
+www.bangor.ac.uk;10.0.8.71;FOC2285U26W;C9200L-24P;Linz POP;Floor 3 IDF;Switch;firmware update pending
+www.bankofamerica.com;10.0.8.74;JMX12993TSR;C9200L-24P;Zurich POP;Room 4;Switch;
+www.barclays.co.uk;10.0.8.77;FCW1123D2Y7;C9300-48P;Salzburg Office;Rack A7;Switch;
+www.basf.com;10.0.8.80;FDO2856X8K4;ASR1001-X;Salzburg Office;Floor 10 IDF;Router;
+www.bath.ac.uk;10.0.8.83;FOC14525Y0Z;C9120AXI-E;;Rack C8;Access Point;
+www.bayer.com;10.0.8.86;JMX1721BDK2;ISR4331;Frankfurt DC;Rack B9;Router;
+www.bbb.org;10.0.8.89;FDO13026FGW;AIR-AP2802I;Vienna DC2;Room 7;Access Point;
+www.bbc.co.uk;10.0.8.92;WZP2641MJ6U;C9120AXI-E;Vienna DC1;Cage 4;Access Point;
+www.bbc.com;10.0.8.95;JMX15095NY0;ProLiant DL380 G10;Linz POP;Rack B6;Server;
+www.beeline.ru;10.0.8.98;FDO2452AJ4P;C9130AXE;Salzburg Office;Rack B11;Access Point;
+www.belarus.by;10.0.8.101;FCW2520Z8PU;F5 BIG-IP i5800;Vienna DC1;Lobby;Load Balancer;
+www.bell.ca;10.0.8.104;WZP1201AAJT;ISR4451-X;Innsbruck Branch;Lobby;Router;uplink to ISP
+www.berkeley.edu;10.0.8.107;FCW1168B27S;C9300-48P;Zurich POP;Rack A8;Switch;
+www.berkshirehathaway.com;10.0.8.110;FOC286196PB;PowerEdge R650;Zurich POP;Cage 7;Server;
+www.bestbuy.com;10.0.8.113;WZP2926L6RK;C9500-24Y4C;Graz HQ;Room 4;Switch;
+www.bhp.com;10.0.8.116;FCW2404PY3F;NetScaler MPX 8200;Vienna DC1;Lobby;Load Balancer;
+www.bing.com;10.0.8.119;FDO28434B8P;AIR-AP2802I;Innsbruck Branch;Rack B1;Access Point;
+www.bitdefender.com;10.0.8.122;FCW2299RBMF;PowerEdge R650;;Rack B5;Server;firmware update pending
+www.bits-pilani.ac.in;10.0.8.125;FCW235754HH;AIR-AP2802I;Frankfurt DC;Rack C7;Access Point;
+www.blackberry.com;10.0.8.128;JMX1424WPD9;F5 BIG-IP i5800;Vienna DC2;Rack C2;Load Balancer;
+www.blackrock.com;10.0.8.131;FOC18294FVM;;Salzburg Office;Lobby;Server;spare PSU missing
+www.blockchain.com;10.0.8.134;FOC2481AMRF;C9130AXE;Bratislava Office;Room 9;Access Point;
+www.bloomberg.com;10.0.8.137;WZP1825VFG3;AIR-AP2802I;Vienna DC1;Floor 2 IDF;Access Point;
+www.blueorigin.com;10.0.8.140;JMX1914Q01K;PowerEdge R650;Salzburg Office;Lobby;Server;
+www.bmas.de;10.0.8.143;JMX2728X6WQ;ISR4331;Klagenfurt Office;Rack C1;Router;
+www.bmbwf.gv.at;10.0.8.146;WZP2507XNF0;C9300-24T;Graz HQ;Room 7;Switch;
+www.bme.hu;10.0.8.149;FDO2878NW6X;C9300-48P;Innsbruck Branch;Rack B6;Switch;
+www.bmf.bund.de;10.0.8.152;WZP225100C6;C9120AXI-E;Vienna DC2;Rack C9;Access Point;
+www.bmf.gv.at;10.0.8.155;JMX2908V7MU;C8300-1N1S;Vienna DC2;Rack A10;Router;
+www.bmuv.de;10.0.8.158;JMX1820C6SM;C9500-24Y4C;Vienna DC2;Lobby;Switch;
+www.bmw.com;10.0.8.161;FDO28933Z53;C9120AXI-E;Frankfurt DC;Rack B7;Access Point;
+www.bnpparibas.com;10.0.8.164;FDO1129APC5;C9500-24Y4C;Munich DC;Floor 8 IDF;Switch;
+www.boeing.com;10.0.8.167;FDO2963TRLN;PowerEdge R650;Bratislava Office;Room 10;Server;
+www.booking.com;10.0.8.170;WZP293633R1;C9300-24T;Graz HQ;Room 11;Switch;
+www.bosnia.ba;10.0.8.173;FOC1692B0JF;PowerEdge R650;Zurich POP;Lobby;Server;renewed 2025
+www.bp.com;10.0.8.176;FOC29121LQ7;C9120AXI-E;Vienna DC2;Rack B3;Access Point;
+www.brazil.gov.br;10.0.8.179;FDO2091C9M7;C9500-24Y4C;Innsbruck Branch;Rack A3;Switch;
+www.bristol.ac.uk;10.0.8.182;FCW1621038X;C9130AXE;Zurich POP;Floor 4 IDF;Access Point;
+www.british-business-bank.co.uk;10.0.8.185;FOC2985Y8DK;C9300-24T;Innsbruck Branch;Lobby;Switch;
+www.britishairways.com;10.0.8.188;FOC1371J6VF;C9300-48P;Linz POP;Floor 7 IDF;Switch;
+www.broadcom.com;10.0.8.191;FDO2350HE05;C8300-1N1S;Innsbruck Branch;Lobby;Router;
+www.brookings.edu;10.0.8.194;FCW1611PA0C;FPR2110;Innsbruck Branch;Rack C9;Firewall;firmware update pending
+www.brown.edu;10.0.8.197;WZP14400D5J;C9500-24Y4C;Frankfurt DC;Rack B9;Switch;renewed 2025
+www.bt.com;10.0.8.200;FDO23817UGX;C9300-24T;Graz HQ;Rack B6;Switch;
+www.bu.edu;10.0.8.203;WZP1090418A;C9120AXI-E;Graz HQ;Floor 6 IDF;Access Point;EoL 2027
+www.buap.mx;10.0.8.206;WZP1133KJ4H;N9K-C93180YC-FX;Linz POP;Lobby;Switch;
+www.bunq.com;10.0.8.209;FDO1599NVUY;C9120AXI-E;Munich DC;Rack C5;Access Point;
+www.burgerking.com;10.0.8.212;FOC2582Y9S7;ASR1001-X;Vienna DC2;Rack C2;Router;
+www.business.gov.au;10.0.8.215;WZP1786NN1Z;ASR1001-X;Vienna DC1;;Router;
+www.buzzfeed.com;10.0.8.218;WZP2785HFEK;ISR4331;Vienna DC1;Floor 6 IDF;Router;
+www.caddyserver.com;10.0.8.221;JMX1601WHJC;UCSC-C220-M5;Innsbruck Branch;Floor 2 IDF;Server;
+www.caltech.edu;10.0.8.224;FDO2053UFQ9;C9120AXI-E;Prague POP;Cage 6;Access Point;
+www.cam.ac.uk;10.0.8.227;JMX18126AJP;C9300-24T;Bratislava Office;Rack B4;Switch;
+www.cambodia.gov.kh;10.0.8.230;JMX25584NAL;PowerEdge R650;Munich DC;Rack C4;Server;
+www.cambridge.org;10.0.8.233;JMX1342SD68;UCSC-C220-M5;Bratislava Office;Rack C9;Server;renewed 2025
+www.canada.ca;10.0.8.236;FCW1337J6SC;FPR4115;Vienna DC2;Cage 8;Firewall;
+www.canon.com;10.0.8.239;FOC18590JWE;;Linz POP;Floor 9 IDF;Access Point;spare PSU missing
+www.canterbury.ac.nz;10.0.8.242;FDO2600KS2X;C9500-24Y4C;Innsbruck Branch;Rack B2;Switch;owner: network team
+www.capgemini.com;10.0.8.245;FCW2391G8VL;ProLiant DL380 G10;Vienna DC1;Rack B12;Server;HA pair with standby
+www.capitalone.com;10.0.8.248;WZP25854XF2;ASR1001-X;Bratislava Office;Lobby;Router;
+www.cardiff.ac.uk;10.0.8.251;FOC1013H7GX;C9200L-24P;Vienna DC1;Rack B9;Switch;temporary installation
+www.cargill.com;10.0.8.254;FCW2587Z2G1;C9130AXE;Graz HQ;Room 2;Access Point;
+www.cars.com;10.0.9.1;JMX1056KVKV;C9300-24T;Vienna DC2;Lobby;Switch;
+www.casio.com;10.0.9.4;FOC1921N1K2;ISR4451-X;Bratislava Office;Room 5;Router;
+www.caterpillar.com;10.0.9.7;FOC1146RPAB;C9500-24Y4C;Klagenfurt Office;Room 5;Switch;
+www.cbc.ca;10.0.9.10;FOC2982V4JZ;C9120AXI-E;Munich DC;Cage 9;Access Point;
+www.cbre.com;10.0.9.13;FOC1504QWMU;C9300-48P;Graz HQ;Rack C11;Switch;
+www.cbs.com;10.0.9.16;FDO19657JRR;C9500-24Y4C;Munich DC;Rack B3;Switch;monitoring only
+www.centos.org;10.0.9.19;WZP1171Z4ER;PowerEdge R650;Klagenfurt Office;Floor 10 IDF;Server;HA pair with standby
+www.centurylink.com;10.0.9.22;WZP1213ASTC;ISR4451-X;Frankfurt DC;Room 2;Router;
+www.cern.ch;10.0.9.25;JMX12853K8G;F5 BIG-IP i5800;Graz HQ;Cage 3;Load Balancer;
+www.cerner.com;10.0.9.28;JMX1629CE5R;NetScaler MPX 8200;Innsbruck Branch;Cage 12;Load Balancer;
+www.cfr.org;10.0.9.31;FDO2700CAMH;PA-3220;Vienna DC2;Room 12;Firewall;
+www.cgi.com;10.0.9.34;FDO11705W55;C9300-24T;Linz POP;Floor 11 IDF;Switch;
+www.chalmers.se;10.0.9.37;WZP2900A19H;NetScaler MPX 8200;Vienna DC2;Room 10;Load Balancer;
+www.channel4.com;10.0.9.40;WZP2545SWAK;ProLiant DL380 G10;Graz HQ;Floor 12 IDF;Server;
+www.charles.cz;10.0.9.43;WZP2905WHAJ;ASA5516-X;Bratislava Office;Floor 8 IDF;Firewall;
+www.chase.com;10.0.9.46;FCW1794XS8Y;ASR1001-X;Graz HQ;Rack C12;Router;
+www.checkmk.com;10.0.9.49;FOC1418W0HF;C8300-1N1S;Linz POP;Cage 2;Router;
+www.checkpoint.com;10.0.9.52;FCW15121CEG;C8300-1N1S;Salzburg Office;Room 7;Router;spare PSU missing
+www.chef.io;10.0.9.55;JMX2368QEU8;NetScaler MPX 8200;Munich DC;Rack A10;Load Balancer;
+www.chicago.gov;10.0.9.58;WZP2411T3UG;PowerEdge R650;Prague POP;Rack A3;Server;
+www.chile.gob.cl;10.0.9.61;FOC2986U6ZK;C9130AXE;Zurich POP;Rack B1;Access Point;
+www.china-embassy.org;10.0.9.64;FDO219658GX;PA-3220;Klagenfurt Office;Cage 3;Firewall;uplink to ISP
+www.china.org.cn;10.0.9.67;FOC1879W3M3;PA-3220;Graz HQ;Rack B1;Firewall;
+www.chinatelecom.com.cn;10.0.9.70;FCW1168T55V;C9120AXI-E;Klagenfurt Office;Cage 2;Access Point;
+www.chinhphu.vn;10.0.9.73;FOC1194D3X5;ASR1001-X;Munich DC;Lobby;Router;
+www.chrysler.com;10.0.9.76;JMX2771MSMK;C9200L-24P;;Rack A5;Switch;
+www.chubb.com;10.0.9.79;FCW2697DGXN;PA-3220;Graz HQ;Rack B9;Firewall;temporary installation
+www.chula.ac.th;10.0.9.82;FDO2147JA3Q;ISR4451-X;Vienna DC1;Rack B5;Router;
+www.cia.gov;10.0.9.85;WZP1612LUW3;UCSC-C220-M5;Graz HQ;Rack A7;Server;
+www.cisco.com;10.0.9.88;FCW1960795T;NetScaler MPX 8200;Zurich POP;Rack A5;Load Balancer;
+www.citibank.com;10.0.9.91;WZP2199HWZ9;AIR-AP2802I;Graz HQ;Room 4;Access Point;
+www.citigroup.com;10.0.9.94;WZP2004ZBAU;N9K-C93180YC-FX;Vienna DC1;Cage 5;Switch;uplink to ISP
+www.citrix.com;10.0.9.97;FDO1129J6W6;C8300-1N1S;Zurich POP;Room 11;Router;
+www.cityu.edu.hk;10.0.9.100;JMX299659Q5;ProLiant DL380 G10;Munich DC;Lobby;Server;
+www.clemson.edu;10.0.9.103;FDO11750N9J;N9K-C93180YC-FX;Linz POP;Rack A1;Switch;
+www.cloud.google.com;10.0.9.106;FOC1980MWMP;ASR1001-X;Prague POP;Lobby;Router;
+www.cloudera.com;10.0.9.109;JMX1371JKZK;C9120AXI-E;Vienna DC1;Cage 10;Access Point;PoE budget at 90%
+www.cloudflare.com;10.0.9.112;FOC1392EYU6;ProLiant DL380 G10;Salzburg Office;Lobby;Server;
+www.cloudflarestatus.com;10.0.9.115;FCW25727LDY;C9300-48P;Bratislava Office;Rack A7;Switch;
+www.cmu.edu;10.0.9.118;JMX2187M3MR;C9300-48P;Klagenfurt Office;Lobby;Switch;
+www.cnbc.com;10.0.9.121;WZP13215L38;UCSC-C220-M5;;Rack A4;Server;
+www.cnet.com;10.0.9.124;FDO1068JMT4;C9300-24T;Zurich POP;Room 1;Switch;
+www.cnn.com;10.0.9.127;FCW2766MS04;AIR-AP2802I;Salzburg Office;Lobby;Access Point;uplink to ISP
+www.coca-cola.com;10.0.9.130;FCW1980EKB1;PowerEdge R650;Salzburg Office;Room 1;Server;
+www.colgate.com;10.0.9.133;FDO2495UJTX;C9300-24T;Klagenfurt Office;Rack A7;Switch;
+www.colorado.gov;10.0.9.136;JMX1832R57N;UCSC-C220-M5;Graz HQ;Floor 1 IDF;Server;
+www.columbia.edu;10.0.9.139;FOC2067Y0ES;AIR-AP2802I;Zurich POP;Room 7;Access Point;
+www.comcast.com;10.0.9.142;FCW2523MDW1;C9300-24T;Klagenfurt Office;Room 2;Switch;
+www.comodo.com;10.0.9.145;WZP2493L2UU;PowerEdge R650;Prague POP;Room 11;Server;
+www.conagra.com;10.0.9.148;JMX13555WRJ;PowerEdge R650;Prague POP;Lobby;Server;
+www.concordia.ca;10.0.9.151;FOC2228Y7WU;PA-3220;Munich DC;Rack C4;Firewall;
+www.congreso.es;10.0.9.154;WZP2980AQW2;C9300-48P;Klagenfurt Office;Floor 8 IDF;Switch;
+www.congress.gov;10.0.9.157;JMX14824LLK;ISR4451-X;Zurich POP;Cage 11;Router;
+www.conservative.com;10.0.9.160;FOC2690VPMX;C9200L-24P;Klagenfurt Office;Floor 9 IDF;Switch;monitoring only
+www.consilium.europa.eu;10.0.9.163;WZP12612QTP;ISR4331;Munich DC;Rack B12;Router;
+www.constantcontact.com;10.0.9.166;FCW1722T7QS;ProLiant DL380 G10;Prague POP;Rack A8;Server;
+www.consumerreports.org;10.0.9.169;FDO1613VFUP;C9500-24Y4C;Innsbruck Branch;Rack B4;Switch;
+www.containerd.io;10.0.9.172;FOC1596YHAQ;PowerEdge R650;Bratislava Office;Lobby;Server;
+www.corel.com;10.0.9.175;FDO1304KJM1;C9200L-24P;Salzburg Office;Rack A9;Switch;
+www.costco.com;10.0.9.178;FDO1363XRV0;ASR1001-X;Graz HQ;Lobby;Router;
+www.coursera.org;10.0.9.181;WZP26800ZM3;F5 BIG-IP i5800;;Rack C9;Load Balancer;
+www.cpanel.net;10.0.9.184;FDO2924EF6K;C9130AXE;Innsbruck Branch;Room 7;Access Point;
+www.craigslist.org;10.0.9.187;FCW1753EE7M;N9K-C93180YC-FX;Graz HQ;Lobby;Switch;
+www.credit-suisse.com;10.0.9.190;FCW2892AYKG;AIR-AP2802I;Innsbruck Branch;Rack A3;Access Point;
+www.cri-o.io;10.0.9.193;FDO1894Z9KV;C9130AXE;Zurich POP;Rack B8;Access Point;
+www.crowdstrike.com;10.0.9.196;JMX2909X041;UCSC-C220-M5;Vienna DC1;;Server;owner: network team
+www.cuhk.edu.hk;10.0.9.199;FOC17940R77;C9130AXE;Munich DC;Floor 6 IDF;Access Point;
+www.curtin.edu.au;10.0.9.202;JMX1497L98L;ISR4331;Linz POP;Rack C8;Router;
+www.cvs.com;10.0.9.205;FDO2490EJUC;C9120AXI-E;Innsbruck Branch;Lobby;Access Point;
+www.cvut.cz;10.0.9.208;WZP1831BFMU;NetScaler MPX 8200;Frankfurt DC;Rack B9;Load Balancer;
+www.dailymail.co.uk;10.0.9.211;FDO1238FRA7;F5 BIG-IP i5800;Zurich POP;Rack A2;Load Balancer;
+www.dailymotion.com;10.0.9.214;FOC1248CX13;AIR-AP2802I;Innsbruck Branch;Floor 5 IDF;Access Point;
+www.dal.ca;10.0.9.217;FOC2267V4KA;PowerEdge R650;Vienna DC1;Lobby;Server;
+www.dartmouth.edu;10.0.9.220;FCW1518BMP3;ASR1001-X;Vienna DC1;Rack C2;Router;
+www.databricks.com;10.0.9.223;FOC2923H3H6;PowerEdge R650;Salzburg Office;Room 5;Server;
+www.datadoghq.com;10.0.9.226;FOC24607295;ASR1001-X;Vienna DC2;Floor 3 IDF;Router;
+www.dauphine.psl.eu;10.0.9.229;FOC290159ZX;C9500-24Y4C;Klagenfurt Office;Rack B1;Switch;temporary installation
+www.davita.com;10.0.9.232;FCW1019GKEK;C9200L-24P;;Lobby;Switch;
+www.dbs.com.sg;10.0.9.235;FCW2210LGX6;C9200L-24P;Frankfurt DC;Rack C6;Switch;
+www.dcu.ie;10.0.9.238;FCW133140U3;PowerEdge R650;Vienna DC2;Rack B8;Server;
+www.ddg.gg;10.0.9.241;JMX11414ASP;ASR1001-X;Klagenfurt Office;Rack C8;Router;
+www.deakin.edu.au;10.0.9.244;WZP1823ZN4Y;UCSC-C220-M5;Frankfurt DC;Room 11;Server;
+www.debian.org;10.0.9.247;FDO1752UYB8;C9130AXE;Frankfurt DC;Rack B5;Access Point;temporary installation
+www.deepmind.com;10.0.9.250;WZP2713R6D9;N9K-C93180YC-FX;;;Switch;
+www.deere.com;10.0.9.253;FOC23072DUE;C9300-24T;Klagenfurt Office;Floor 4 IDF;Switch;
+www.defense.gov;10.0.10.0;FDO2401FZLE;C9500-24Y4C;Innsbruck Branch;Floor 12 IDF;Switch;
+www.dell.com;10.0.10.3;FOC125060PB;C9130AXE;Bratislava Office;Rack B10;Access Point;
+www.delta.com;10.0.10.6;FOC1056M8P2;N9K-C93180YC-FX;Graz HQ;Rack B11;Switch;under maintenance
+www.denmark.dk;10.0.10.9;FDO1494FCAZ;AIR-AP2802I;Vienna DC2;Room 12;Access Point;
+www.deviantart.com;10.0.10.12;WZP199708JM;C9200L-24P;Graz HQ;Room 4;Switch;
+www.dhl.com;10.0.10.15;JMX266181M9;C9300-24T;Salzburg Office;Cage 7;Switch;spare PSU missing
+www.dhs.gov;10.0.10.18;FDO1061UXYX;N9K-C93180YC-FX;Vienna DC2;Rack C12;Switch;
+www.digicert.com;10.0.10.21;FOC1093FWQH;C9200L-24P;Vienna DC1;Cage 4;Switch;
+www.digitalocean.com;10.0.10.24;FCW2938UB18;ProLiant DL380 G10;Prague POP;Cage 4;Server;
+www.disney.com;10.0.10.27;FOC1581X6N8;FPR2110;Vienna DC1;Room 8;Firewall;
+www.disneyplus.com;10.0.10.30;WZP1008VATQ;AIR-AP2802I;Salzburg Office;Cage 1;Access Point;
+www.dlsu.edu.ph;10.0.10.33;WZP1496PE07;C9120AXI-E;;Rack C11;Access Point;
+www.dna.fi;10.0.10.36;JMX16470QDE;PowerEdge R650;Zurich POP;Room 2;Server;
+www.dnb.com;10.0.10.39;FDO1459BQWK;C9300-48P;Innsbruck Branch;Lobby;Switch;
+www.docker.com;10.0.10.42;FCW2388PP2Q;C9500-24Y4C;Munich DC;Rack A2;Switch;
+www.docusign.com;10.0.10.45;FOC2992D2ZB;C9500-24Y4C;Zurich POP;Lobby;Switch;
+www.dominos.com;10.0.10.48;FOC2106RURU;C9300-24T;Frankfurt DC;Floor 6 IDF;Switch;
+www.doordash.com;10.0.10.51;FCW20678XBD;PA-3220;Munich DC;Lobby;Firewall;renewed 2025
+www.dot.gov;10.0.10.54;FCW25375Y5P;C9120AXI-E;Innsbruck Branch;Room 2;Access Point;
+www.dow.com;10.0.10.57;FDO225634C3;PowerEdge R650;;Rack C8;Server;
+www.dowjones.com;10.0.10.60;WZP1533HQ4R;C9500-24Y4C;Frankfurt DC;Lobby;Switch;
+www.dropbox.com;10.0.10.63;WZP2142C3ZW;C9300-24T;Munich DC;Rack A1;Switch;
+www.dslreports.com;10.0.10.66;FDO185544EE;FPR4115;Prague POP;Rack A3;Firewall;
+www.dstv.com;10.0.10.69;WZP2640S8VX;UCSC-C220-M5;Vienna DC2;;Server;spare PSU missing
+www.dtu.dk;10.0.10.72;FDO1109BJ4L;C9200L-24P;Vienna DC2;Room 1;Switch;
+www.du.ac.in;10.0.10.75;FCW1520VN6V;F5 BIG-IP i5800;Zurich POP;Room 1;Load Balancer;
+www.dubai.ae;10.0.10.78;FCW18578BEE;ISR4451-X;Bratislava Office;Rack B2;Router;EoL 2027
+www.duckduckgo.com;10.0.10.81;FDO2025J9VP;C9130AXE;Bratislava Office;Floor 8 IDF;Access Point;
+www.duke.edu;10.0.10.84;FOC17642TGS;PowerEdge R650;Frankfurt DC;Rack B11;Server;
+www.dundee.ac.uk;10.0.10.87;FOC2052LY6U;ProLiant DL380 G10;Salzburg Office;Lobby;Server;
+www.dunelm.com;10.0.10.90;JMX1919DVWQ;C9300-48P;Vienna DC2;Rack A8;Switch;owner: network team
+www.durham.ac.uk;10.0.10.93;FCW2958W1P5;C9500-24Y4C;Prague POP;Rack C5;Switch;
+www.dw.com;10.0.10.96;FDO2535L3UR;PowerEdge R650;Bratislava Office;Cage 3;Server;
+www.dynatrace.com;10.0.10.99;FOC25026UF0;AIR-AP2802I;Munich DC;Lobby;Access Point;
+www.e.gov.kw;10.0.10.102;JMX20077TAH;ProLiant DL380 G10;Prague POP;Rack B8;Server;
+www.eafit.edu.co;10.0.10.105;FDO1770Y5Q5;ProLiant DL380 G10;Klagenfurt Office;Rack A9;Server;
+www.easyjet.com;10.0.10.108;FCW1723EE2R;N9K-C93180YC-FX;Graz HQ;Floor 10 IDF;Switch;
+www.ebay.com;10.0.10.111;FOC2720D6CN;C9300-48P;Frankfurt DC;Rack C1;Switch;
+www.economist.com;10.0.10.114;FOC152318LY;N9K-C93180YC-FX;Prague POP;Rack B3;Switch;
+www.ed.ac.uk;10.0.10.117;WZP1659T3GW;C9120AXI-E;Salzburg Office;Cage 6;Access Point;
+www.eeas.europa.eu;10.0.10.120;WZP2745EXFN;PowerEdge R650;Zurich POP;Room 11;Server;
+www.eharmony.com;10.0.10.123;FDO1279FKRR;PowerEdge R650;Vienna DC1;Rack A8;Server;
+www.elastic.co;10.0.10.126;FOC1580Q3VT;C9130AXE;Frankfurt DC;Floor 2 IDF;Access Point;
+www.elisa.fi;10.0.10.129;FCW19471S3X;AIR-AP2802I;;Lobby;Access Point;spare PSU missing
+www.elte.hu;10.0.10.132;JMX1712YQQ1;N9K-C93180YC-FX;Graz HQ;Rack C10;Switch;
+www.elysee.fr;10.0.10.135;JMX1841KC11;PA-3220;Linz POP;Cage 5;Firewall;
+www.emerson.com;10.0.10.138;JMX2916KMW1;PA-3220;Zurich POP;Rack A12;Firewall;
+www.emirates.com;10.0.10.141;JMX1272RABB;UCSC-C220-M5;Graz HQ;Cage 11;Server;
+www.energy.gov;10.0.10.144;FDO1444WJFB;C9130AXE;Graz HQ;Room 12;Access Point;
+www.ens.fr;10.0.10.147;FOC123227AS;UCSC-C220-M5;Zurich POP;Lobby;Server;
+www.epa.gov;10.0.10.150;FDO2910B0R4;AIR-AP2802I;Linz POP;Room 8;Access Point;
+www.epfl.ch;10.0.10.153;FCW1032BR1D;FPR4115;Vienna DC1;Room 4;Firewall;
+www.equinix.com;10.0.10.156;FDO2148U6RP;C9200L-24P;Vienna DC1;Floor 9 IDF;Switch;
+www.equinor.com;10.0.10.159;FOC2438CF0L;C9300-48P;Vienna DC2;Cage 5;Switch;
+www.ericsson.com;10.0.10.162;FCW24022D8E;ProLiant DL380 G10;Zurich POP;Cage 7;Server;monitoring only
+www.esa.int;10.0.10.165;WZP2937Z4T6;C9300-48P;Salzburg Office;Rack A6;Switch;
+www.eset.com;10.0.10.168;WZP2449ZJ7J;PowerEdge R650;Vienna DC2;Rack A8;Server;
+www.ethz.ch;10.0.10.171;FDO2182YM9E;UCSC-C220-M5;Vienna DC1;Rack B10;Server;EoL 2027
+www.etsy.com;10.0.10.174;FOC2113TGVV;C9300-24T;Vienna DC2;Cage 2;Switch;
+www.eurocontrol.int;10.0.10.177;FCW1932HYNM;ProLiant DL380 G10;;Room 8;Server;
+www.europarl.europa.eu;10.0.10.180;FOC1423FKYN;;Bratislava Office;Lobby;Switch;
+www.eventbrite.com;10.0.10.183;FOC2539QUM8;C8300-1N1S;Munich DC;Rack C10;Router;
+www.everbridge.com;10.0.10.186;WZP29418MTV;NetScaler MPX 8200;Graz HQ;Rack A4;Load Balancer;
+www.evernote.com;10.0.10.189;FOC2783AH1X;ISR4331;;Floor 11 IDF;Router;
+www.everquote.com;10.0.10.192;FCW2783NF85;C9130AXE;Zurich POP;Rack C9;Access Point;
+www.exeter.ac.uk;10.0.10.195;FDO1233NYF2;C9130AXE;Linz POP;Floor 5 IDF;Access Point;
+www.exxonmobil.com;10.0.10.198;WZP25217DPK;ProLiant DL380 G10;Salzburg Office;Floor 2 IDF;Server;
+www.f-secure.com;10.0.10.201;FDO1155UAMV;ASA5516-X;Vienna DC1;Lobby;Firewall;
+www.facebook.com;10.0.10.204;FDO2321UVAT;C8300-1N1S;Salzburg Office;Room 8;Router;
+www.fanniemae.com;10.0.10.207;FOC1544SNCV;C9500-24Y4C;Prague POP;Lobby;Switch;
+www.fast.com;10.0.10.210;JMX2276RM98;C9130AXE;;Rack C4;Access Point;
+www.fastly.com;10.0.10.213;FDO1918A5XB;C9120AXI-E;Zurich POP;Rack C2;Access Point;
+www.fcc.gov;10.0.10.216;FDO2455YTCA;PowerEdge R650;Klagenfurt Office;Room 5;Server;
+www.fda.gov;10.0.10.219;FOC112080QA;PA-3220;Bratislava Office;Rack B5;Firewall;
+www.fedex.com;10.0.10.222;FCW1660HZEL;UCSC-C220-M5;Prague POP;Floor 9 IDF;Server;
+www.fema.gov;10.0.10.225;WZP2202F4HL;C9130AXE;;Rack B4;Access Point;
+www.ferrari.com;10.0.10.228;FDO1976EUS7;C9300-48P;Vienna DC1;Room 12;Switch;
+www.fiat.com;10.0.10.231;FDO2677SQXD;ProLiant DL380 G10;Linz POP;Rack A7;Server;
+www.fidelity.com;10.0.10.234;FDO10420UYJ;C9300-48P;Vienna DC1;Cage 12;Switch;
+www.fifa.com;10.0.10.237;FOC21569HZX;C9200L-24P;;Room 6;Switch;
+www.finland.fi;10.0.10.240;WZP1375SM8Z;PA-3220;Linz POP;Rack C11;Firewall;
+www.firefox.com;10.0.10.243;JMX2048HNNG;ISR4451-X;Linz POP;Floor 11 IDF;Router;
+www.firstdata.com;10.0.10.246;FCW2483XUV1;PowerEdge R650;Linz POP;Floor 5 IDF;Server;HA pair with standby
+www.fitbit.com;10.0.10.249;FOC209504X8;AIR-AP2802I;Zurich POP;Room 5;Access Point;
+www.flickr.com;10.0.10.252;WZP1061XVEV;FPR2110;;Cage 12;Firewall;
+www.flinders.edu.au;10.0.10.255;FCW1127329U;FPR2110;Klagenfurt Office;Rack C6;Firewall;
+www.fnb.co.za;10.0.11.2;FDO1272CCKF;NetScaler MPX 8200;Linz POP;Floor 6 IDF;Load Balancer;
+www.folketinget.dk;10.0.11.5;FCW10548YK0;C9200L-24P;Klagenfurt Office;Cage 11;Switch;temporary installation
+www.forbes.com;10.0.11.8;JMX218589WM;C9300-24T;Zurich POP;Rack B9;Switch;
+www.ford.com;10.0.11.11;FCW17518NPZ;ProLiant DL380 G10;Bratislava Office;Rack C10;Server;
+www.forrester.com;10.0.11.14;JMX2933SZDB;ISR4331;Munich DC;Rack A3;Router;
+www.fortinet.com;10.0.11.17;JMX178972E1;C9200L-24P;Zurich POP;Rack B3;Switch;
+www.foxnews.com;10.0.11.20;FCW2239K5YM;C9130AXE;Linz POP;Room 12;Access Point;
+www.france.fr;10.0.11.23;FDO1127HKEE;UCSC-C220-M5;Frankfurt DC;Rack A11;Server;temporary installation
+www.france24.com;10.0.11.26;FOC1623Q5FY;PowerEdge R650;Bratislava Office;Floor 3 IDF;Server;
+www.freddiemac.com;10.0.11.29;WZP1288MCCQ;FPR4115;;Rack B7;Firewall;
+www.freebsd.org;10.0.11.32;JMX2458J4H6;NetScaler MPX 8200;Munich DC;Rack B1;Load Balancer;PoE budget at 90%
+www.freenas.org;10.0.11.35;FCW2810PWE5;C9120AXI-E;Munich DC;Rack B6;Access Point;
+www.ft.com;10.0.11.38;FOC1364K76B;C9300-24T;Vienna DC2;Cage 7;Switch;
+www.ftc.gov;10.0.11.41;FOC1971ZWYQ;C9130AXE;Vienna DC1;Rack C6;Access Point;
+www.fu-berlin.de;10.0.11.44;JMX2161EGYE;FPR2110;Innsbruck Branch;Floor 4 IDF;Firewall;
+www.fudan.edu.cn;10.0.11.47;WZP1828RY7G;C9120AXI-E;;Rack A3;Access Point;
+www.fujifilm.com;10.0.11.50;FOC2036SLGY;C9200L-24P;Vienna DC2;;Switch;
+www.fujitsu.com;10.0.11.53;FOC1517PYY8;C9300-24T;Salzburg Office;Room 2;Switch;
+www.gap.com;10.0.11.56;FDO1339NCC6;C9300-24T;Zurich POP;Rack A8;Switch;
+www.garmin.com;10.0.11.59;FOC24454PYE;ProLiant DL380 G10;Klagenfurt Office;Rack C8;Server;
+www.gartner.com;10.0.11.62;WZP1873EVR6;C9130AXE;Salzburg Office;Rack A3;Access Point;
+www.geforce.com;10.0.11.65;FDO2016P37E;NetScaler MPX 8200;Klagenfurt Office;Rack B9;Load Balancer;
+www.general-electric.com;10.0.11.68;FCW1059YBQN;ProLiant DL380 G10;Prague POP;Lobby;Server;
+www.georgetown.edu;10.0.11.71;JMX1163F24A;ProLiant DL380 G10;Innsbruck Branch;Rack B4;Server;
+www.georgia.gov;10.0.11.74;WZP1935ZFFH;UCSC-C220-M5;Prague POP;;Server;
+www.ghana.gov.gh;10.0.11.77;FOC1839VX0Q;C9500-24Y4C;Klagenfurt Office;Rack A5;Switch;
+www.gigabyte.com;10.0.11.80;FOC1618D4RC;AIR-AP2802I;;Cage 1;Access Point;temporary installation
+www.gilead.com;10.0.11.83;JMX1223M6HW;N9K-C93180YC-FX;Klagenfurt Office;Rack C7;Switch;
+www.github.com;10.0.11.86;FDO1133KNEA;N9K-C93180YC-FX;Vienna DC1;Cage 11;Switch;
+www.github.io;10.0.11.89;FOC2526SQZ0;ISR4331;Frankfurt DC;Rack C2;Router;
+www.githubstatus.com;10.0.11.92;FOC1157KFT5;PowerEdge R650;Klagenfurt Office;Floor 8 IDF;Server;
+www.gitlab.com;10.0.11.95;FDO18158M29;UCSC-C220-M5;Innsbruck Branch;Lobby;Server;
+www.glassdoor.com;10.0.11.98;FCW1710JTLZ;;Graz HQ;Rack B3;Switch;
+www.gm.com;10.0.11.101;FDO2568B8NH;PowerEdge R650;Linz POP;Rack A11;Server;HA pair with standby
+www.gmail.com;10.0.11.104;WZP26710DGF;NetScaler MPX 8200;Vienna DC2;Rack A10;Load Balancer;under maintenance
+www.gmx.net;10.0.11.107;FDO109031F5;C9300-24T;Munich DC;Lobby;Switch;
+www.gnu.org;10.0.11.110;WZP13445PV4;FPR2110;Klagenfurt Office;Rack A7;Firewall;
+www.gnutls.org;10.0.11.113;JMX13453TR2;ISR4451-X;Vienna DC2;Rack B9;Router;monitoring only
+www.gob.mx;10.0.11.116;JMX1930R8JW;AIR-AP2802I;Frankfurt DC;Rack A7;Access Point;
+www.gob.pe;10.0.11.119;FDO2520FYJ2;C9300-24T;Vienna DC1;Rack A7;Switch;
+www.godaddy.com;10.0.11.122;JMX21720KY2;NetScaler MPX 8200;;Floor 5 IDF;Load Balancer;
+www.golang.org;10.0.11.125;WZP2963ZQ3T;PA-3220;Vienna DC1;Rack A2;Firewall;under maintenance
+www.goldmansachs.com;10.0.11.128;FDO1262ZEE1;C9300-24T;Salzburg Office;Cage 1;Switch;EoL 2027
+www.goodyear.com;10.0.11.131;FDO2064YRCS;C9130AXE;Vienna DC1;Lobby;Access Point;
+www.google.co.jp;10.0.11.134;FOC2670GEEJ;C9300-24T;Zurich POP;Rack B3;Switch;
+www.google.co.uk;10.0.11.137;FDO1648XWGF;AIR-AP2802I;Klagenfurt Office;Rack B9;Access Point;
+www.google.com;10.0.11.140;FDO2073J420;C9130AXE;Vienna DC2;Room 6;Access Point;
+www.google.de;10.0.11.143;JMX2560VB8A;C9300-24T;Innsbruck Branch;Rack B4;Switch;
+www.google.fr;10.0.11.146;WZP16550W33;ProLiant DL380 G10;Vienna DC1;Rack C2;Server;
+www.googleblog.com;10.0.11.149;FCW2513M9NM;ASR1001-X;Linz POP;Room 11;Router;
+www.gouvernement.fr;10.0.11.152;FDO2816L28F;PA-3220;Linz POP;Rack C10;Firewall;
+www.gov.am;10.0.11.155;FDO12377C96;AIR-AP2802I;Klagenfurt Office;Cage 3;Access Point;
+www.gov.bg;10.0.11.158;JMX15389DP7;ProLiant DL380 G10;Innsbruck Branch;Cage 6;Server;
+www.gov.ch;10.0.11.161;FCW1263T4AR;C9200L-24P;Linz POP;Lobby;Switch;
+www.gov.cl;10.0.11.164;FCW1903HZGB;C9300-48P;Innsbruck Branch;Floor 6 IDF;Switch;
+www.gov.cn;10.0.11.167;WZP15729L9D;ISR4331;Vienna DC2;Rack C4;Router;
+www.gov.co;10.0.11.170;FCW2076KWN2;AIR-AP2802I;Bratislava Office;Rack A1;Access Point;owner: network team
+www.gov.de;10.0.11.173;JMX1697GLGY;C9200L-24P;Klagenfurt Office;Rack A8;Switch;
+www.gov.fm;10.0.11.176;FDO2882P86S;FPR2110;Vienna DC1;Rack B4;Firewall;
+www.gov.gd;10.0.11.179;JMX1652QMSC;ProLiant DL380 G10;Innsbruck Branch;Rack A1;Server;
+www.gov.gr;10.0.11.182;FDO1945X5RX;F5 BIG-IP i5800;Salzburg Office;Floor 8 IDF;Load Balancer;
+www.gov.hk;10.0.11.185;WZP26389WLY;C9300-48P;Munich DC;Floor 6 IDF;Switch;monitoring only
+www.gov.hu;10.0.11.188;WZP2443PG0J;C9200L-24P;;Lobby;Switch;
+www.gov.ie;10.0.11.191;FDO2246LSSP;;Frankfurt DC;Rack A3;Server;
+www.gov.il;10.0.11.194;WZP2002HQHK;C9500-24Y4C;Frankfurt DC;Floor 5 IDF;Switch;
+www.gov.kg;10.0.11.197;JMX2508646U;AIR-AP2802I;Klagenfurt Office;Lobby;Access Point;
+www.gov.kn;10.0.11.200;FOC1516U4VL;C9300-48P;Innsbruck Branch;Room 2;Switch;
+www.gov.mo;10.0.11.203;WZP2284JDRY;;Linz POP;Floor 1 IDF;Server;
+www.gov.mt;10.0.11.206;JMX219234T7;UCSC-C220-M5;Vienna DC2;Rack C3;Server;PoE budget at 90%
+www.gov.ph;10.0.11.209;WZP1170DWNM;UCSC-C220-M5;Bratislava Office;Lobby;Server;
+www.gov.pt;10.0.11.212;FOC1642SRTT;C9120AXI-E;Innsbruck Branch;Rack C11;Access Point;EoL 2027
+www.gov.rs;10.0.11.215;JMX1623R5YP;C9130AXE;Vienna DC1;Rack B12;Access Point;
+www.gov.rw;10.0.11.218;JMX259760DW;NetScaler MPX 8200;Salzburg Office;Cage 9;Load Balancer;
+www.gov.scot;10.0.11.221;FCW2925QXZD;C9500-24Y4C;Klagenfurt Office;Lobby;Switch;
+www.gov.se;10.0.11.224;FDO2716DWSH;FPR4115;Klagenfurt Office;Rack B3;Firewall;
+www.gov.sg;10.0.11.227;WZP2027KKTC;C9500-24Y4C;Salzburg Office;Cage 12;Switch;
+www.gov.tn;10.0.11.230;WZP12834LCU;C9300-24T;Munich DC;Rack A1;Switch;
+www.gov.tw;10.0.11.233;FDO2647GUGH;F5 BIG-IP i5800;Prague POP;Cage 8;Load Balancer;
+www.gov.ua;10.0.11.236;JMX2704FBG2;C9300-24T;Graz HQ;Rack B3;Switch;
+www.gov.uk;10.0.11.239;FOC15911FAU;C9200L-24P;Vienna DC1;Lobby;Switch;
+www.gov.uz;10.0.11.242;FDO1118EQU7;FPR2110;Vienna DC2;Floor 7 IDF;Firewall;uplink to ISP
+www.gov.vn;10.0.11.245;FOC1349SH3V;NetScaler MPX 8200;Vienna DC1;Rack B6;Load Balancer;
+www.gov.wales;10.0.11.248;FDO2887RM6D;C8300-1N1S;Klagenfurt Office;Rack B1;Router;
+www.government.fi;10.0.11.251;JMX2325YLN4;C9500-24Y4C;Bratislava Office;Cage 4;Switch;monitoring only
+www.government.is;10.0.11.254;FOC2192N5HW;F5 BIG-IP i5800;Prague POP;Floor 5 IDF;Load Balancer;
+www.government.nl;10.0.12.1;FCW1550H8J9;ISR4331;Innsbruck Branch;Rack A2;Router;
+www.government.no;10.0.12.4;FDO19031X3P;UCSC-C220-M5;;Rack B2;Server;
+www.governo.it;10.0.12.7;FDO2385RZT9;AIR-AP2802I;Salzburg Office;Lobby;Access Point;
+www.grafana.com;10.0.12.10;FDO2603B4N8;AIR-AP2802I;Vienna DC2;Rack B4;Access Point;PoE budget at 90%
+www.grammarly.com;10.0.12.13;FCW26857LH2;AIR-AP2802I;Vienna DC1;Lobby;Access Point;under maintenance
+www.graz.at;10.0.12.16;FOC1522DYCH;UCSC-C220-M5;Bratislava Office;Lobby;Server;
+www.griffith.edu.au;10.0.12.19;WZP2467A6MQ;FPR2110;Vienna DC1;Rack A12;Firewall;
+www.grubhub.com;10.0.12.22;FOC1413S1EC;N9K-C93180YC-FX;Innsbruck Branch;Floor 7 IDF;Switch;
+www.guardian.co.uk;10.0.12.25;FDO2623Q5SP;NetScaler MPX 8200;Zurich POP;Floor 3 IDF;Load Balancer;
+www.guatemala.gob.gt;10.0.12.28;JMX2618UX6P;C9300-24T;Vienna DC2;Floor 3 IDF;Switch;
+www.hackernews.com;10.0.12.31;FDO2124ATNV;C9300-48P;Innsbruck Branch;Floor 2 IDF;Switch;
+www.hackerone.com;10.0.12.34;FOC1843FDE3;NetScaler MPX 8200;Bratislava Office;Cage 2;Load Balancer;
+www.hallmark.com;10.0.12.37;FOC2161NEW6;FPR2110;Salzburg Office;Rack A11;Firewall;
+www.harvard.edu;10.0.12.40;FCW2632PLAP;C9300-48P;Vienna DC1;Rack A8;Switch;uplink to ISP
+www.hawaii.gov;10.0.12.43;FOC2101CYCE;UCSC-C220-M5;Zurich POP;Rack B10;Server;
+www.hbo.com;10.0.12.46;JMX1216RC37;C9300-48P;Munich DC;Room 9;Switch;renewed 2025
+www.heineken.com;10.0.12.49;FOC1384FW5X;C9300-48P;Graz HQ;Rack B4;Switch;
+www.hellenicparliament.gr;10.0.12.52;FOC10954DYP;ProLiant DL380 G10;Salzburg Office;Rack A10;Server;
+www.hershey.com;10.0.12.55;FCW1114NAVH;C9130AXE;Salzburg Office;Lobby;Access Point;
+www.hertz.com;10.0.12.58;FCW1817175J;C9130AXE;Munich DC;Lobby;Access Point;
+www.hetzner.com;10.0.12.61;FDO2801H8EJ;N9K-C93180YC-FX;Bratislava Office;Cage 1;Switch;renewed 2025
+www.hilton.com;10.0.12.64;FDO1174LFS8;AIR-AP2802I;Munich DC;Rack A4;Access Point;
+www.hiroshima-u.ac.jp;10.0.12.67;FDO164118M0;N9K-C93180YC-FX;Innsbruck Branch;;Switch;
+www.hit.edu.cn;10.0.12.70;JMX1047BAG2;FPR4115;Vienna DC1;Rack A6;Firewall;
+www.hitachi.com;10.0.12.73;FCW1842ZMQY;C9200L-24P;Frankfurt DC;Rack B9;Switch;
+www.hkbu.edu.hk;10.0.12.76;WZP2864FLXE;C9120AXI-E;Frankfurt DC;Lobby;Access Point;
+www.holidayinn.com;10.0.12.79;JMX1482CJEK;PowerEdge R650;Graz HQ;Rack B10;Server;
+www.homedepot.com;10.0.12.82;JMX12457GLH;UCSC-C220-M5;Prague POP;Rack C6;Server;
+www.honda.com;10.0.12.85;FOC2875BJLN;C9300-48P;Graz HQ;Floor 12 IDF;Switch;
+www.honeywell.com;10.0.12.88;FDO1902LVKN;C9300-24T;Vienna DC2;Rack A10;Switch;
+www.hostgator.com;10.0.12.91;FDO1757CQ1X;PowerEdge R650;Graz HQ;Rack C11;Server;
+www.house.gov;;FDO2413JSBC;C9120AXI-E;Innsbruck Branch;Lobby;Access Point;
+www.hp.com;10.0.12.94;JMX2248ZB4B;C9200L-24P;Innsbruck Branch;Floor 7 IDF;Switch;
+www.hsbc.com;10.0.12.97;FDO154508YW;NetScaler MPX 8200;Klagenfurt Office;Floor 11 IDF;Load Balancer;
+www.hu-berlin.de;10.0.12.100;FOC1795MD2Z;FPR4115;Vienna DC1;Rack C11;Firewall;
+www.huawei.com;10.0.12.103;FCW1507WYRV;C8300-1N1S;Zurich POP;;Router;
+www.hulu.com;10.0.12.106;FCW1756TYAN;UCSC-C220-M5;Graz HQ;Rack B9;Server;
+www.hw.ac.uk;10.0.12.109;FOC15515QAL;C9500-24Y4C;Klagenfurt Office;Rack B7;Switch;
+www.hyatt.com;10.0.12.112;FCW1693T1FJ;ProLiant DL380 G10;Prague POP;Floor 4 IDF;Server;owner: network team
+www.hyundai.com;10.0.12.115;JMX1628YLRT;ProLiant DL380 G10;Graz HQ;Rack A10;Server;
+www.iana.org;10.0.12.118;FCW17482NU4;C9120AXI-E;Graz HQ;Room 10;Access Point;under maintenance
+www.ibm.com;10.0.12.121;FCW1264F3JX;N9K-C93180YC-FX;Klagenfurt Office;Rack A6;Switch;
+www.icann.org;10.0.12.124;JMX1893JRKN;PowerEdge R650;Salzburg Office;;Server;
+www.icc-cpi.int;10.0.12.127;WZP1950BU5F;UCSC-C220-M5;Bratislava Office;Lobby;Server;
+www.icloud.com;10.0.12.130;FCW1817KDQD;N9K-C93180YC-FX;Salzburg Office;Rack C3;Switch;
+www.icscards.nl;10.0.12.133;FCW18026C60;C8300-1N1S;Prague POP;Rack B7;Router;
+www.ietf.org;10.0.12.136;FOC13262PAH;ASA5516-X;Bratislava Office;Room 10;Firewall;
+www.ihg.com;10.0.12.139;FOC1271JEWJ;C9200L-24P;Zurich POP;Rack C12;Switch;
+www.iisc.ac.in;10.0.12.142;WZP25179W5N;C9300-24T;Frankfurt DC;Rack B8;Switch;
+www.illinois.gov;10.0.12.145;JMX2659ZXXR;C9300-48P;Prague POP;Rack C11;Switch;
+www.imdb.com;10.0.12.148;JMX20213W1R;C9300-48P;Klagenfurt Office;Rack C6;Switch;
+www.imf.org;10.0.12.151;FDO2158QRMA;N9K-C93180YC-FX;Klagenfurt Office;Rack C1;Switch;replace in Q2
+www.imperial.ac.uk;10.0.12.154;FOC2559RU3Y;C9500-24Y4C;Graz HQ;Cage 6;Switch;
+www.indeed.com;10.0.12.157;WZP2155RCVM;AIR-AP2802I;Bratislava Office;Room 9;Access Point;
+www.india.com;10.0.12.160;FOC1868GT1X;C9130AXE;Bratislava Office;Rack B2;Access Point;
+www.india.gov.in;10.0.12.163;FDO2859WX4L;C9500-24Y4C;Innsbruck Branch;Floor 1 IDF;Switch;temporary installation
+www.indiana.gov;10.0.12.166;WZP26912YZK;C9120AXI-E;Bratislava Office;Rack A4;Access Point;
+www.influxdata.com;10.0.12.169;WZP20497ULD;PowerEdge R650;Zurich POP;Room 5;Server;spare PSU missing
+www.infosys.com;10.0.12.172;WZP16176SPK;C9300-48P;Graz HQ;Room 10;Switch;
+www.ing.com;10.0.12.175;FCW1711HZK7;AIR-AP2802I;;Lobby;Access Point;
+www.instagram.com;10.0.12.178;FDO1596TUFZ;AIR-AP2802I;Linz POP;Rack A11;Access Point;
+www.instituteforgovernment.org.uk;10.0.12.181;FDO24205ADF;C9200L-24P;Salzburg Office;Rack B3;Switch;owner: network team
+www.intel.com;10.0.12.184;FDO1191FLPG;ASA5516-X;Innsbruck Branch;Rack A12;Firewall;
+www.intelius.com;10.0.12.187;WZP18132SWG;C8300-1N1S;Bratislava Office;Room 2;Router;
+www.intercom.com;10.0.12.190;FCW17153TKZ;C9130AXE;Vienna DC1;Floor 11 IDF;Access Point;uplink to ISP
+www.interpol.int;10.0.12.193;FDO1220KYDY;C9500-24Y4C;Frankfurt DC;Room 11;Switch;
+www.intuit.com;10.0.12.196;WZP2641CYR9;C9120AXI-E;Salzburg Office;Rack A1;Access Point;
+www.iowa.gov;10.0.12.199;WZP108278AV;C9200L-24P;Salzburg Office;Rack C11;Switch;
+www.ipfire.org;10.0.12.202;JMX1710BW8L;C9120AXI-E;Zurich POP;Floor 9 IDF;Access Point;
+www.ipn.mx;10.0.12.205;JMX1055SZ92;ProLiant DL380 G10;;Rack A1;Server;
+www.ireland.ie;10.0.12.208;FCW2276ECCH;C9200L-24P;Klagenfurt Office;Floor 9 IDF;Switch;
+www.irs.gov;10.0.12.211;FDO2519KGN5;C9120AXI-E;Klagenfurt Office;Lobby;Access Point;
+www.isro.gov.in;10.0.12.214;WZP2374GX3L;C9120AXI-E;Linz POP;Room 5;Access Point;
+www.italia.it;10.0.12.217;FDO2041BLR1;C9120AXI-E;Zurich POP;Rack B11;Access Point;
+www.itb.ac.id;10.0.12.220;WZP1896V02V;N9K-C93180YC-FX;Vienna DC1;Floor 1 IDF;Switch;
+www.itv.com;10.0.12.223;FDO1085V7R6;ProLiant DL380 G10;Linz POP;Rack B4;Server;
+www.japan.go.jp;10.0.12.226;FOC1775TQWJ;C9200L-24P;Frankfurt DC;Rack A6;Switch;
+www.japantimes.co.jp;10.0.12.229;FDO1224XVQT;PowerEdge R650;Vienna DC1;Rack B12;Server;
+www.jcpenney.com;10.0.12.232;JMX2666JXAU;ProLiant DL380 G10;Vienna DC2;Rack B6;Server;
+www.jcu.edu.au;10.0.12.235;FCW2540VDPA;C9300-24T;Vienna DC1;Lobby;Switch;
+www.jetblue.com;10.0.12.238;FCW1143ZK3S;C9130AXE;Innsbruck Branch;Cage 11;Access Point;firmware update pending
+www.jku.at;10.0.12.241;WZP20334N1K;C8300-1N1S;Vienna DC2;Rack A10;Router;
+www.jnj.com;10.0.12.244;FCW1850HCTC;C9500-24Y4C;Linz POP;Lobby;Switch;
+www.jordan.gov.jo;10.0.12.247;FOC1546ETRW;C9130AXE;Munich DC;Rack B2;Access Point;
+www.jpmorgan.com;10.0.12.250;WZP28297WJK;PowerEdge R650;;Cage 8;Server;
+www.jpmorganchase.com;10.0.12.253;JMX2072DY44;UCSC-C220-M5;Vienna DC1;Rack C9;Server;
+www.juniper.net;10.0.13.0;WZP1233U9FS;N9K-C93180YC-FX;Salzburg Office;Rack A2;Switch;EoL 2027
+www.kansas.gov;10.0.13.3;FDO2838FVFS;UCSC-C220-M5;Munich DC;Rack A11;Server;temporary installation
+www.kayak.com;10.0.13.6;JMX19881KSZ;C9300-24T;Salzburg Office;Rack A4;Switch;
+www.kcl.ac.uk;10.0.13.9;FOC2731MSUC;C9300-24T;Vienna DC1;Floor 1 IDF;Switch;
+www.kddi.com;10.0.13.12;FOC1232UFLL;C9130AXE;Frankfurt DC;Cage 12;Access Point;
+www.keio.ac.jp;10.0.13.15;JMX2869H6UM;C9120AXI-E;Innsbruck Branch;Rack A5;Access Point;
+www.kernel.org;10.0.13.18;JMX1942XQGK;F5 BIG-IP i5800;Zurich POP;Rack A10;Load Balancer;
+www.kfc.com;10.0.13.21;FDO1065GD12;NetScaler MPX 8200;Frankfurt DC;Rack A6;Load Balancer;
+www.kia.com;10.0.13.24;WZP2971GWH0;N9K-C93180YC-FX;Graz HQ;Lobby;Switch;
+www.kickstarter.com;10.0.13.27;FCW1374G2J1;PowerEdge R650;;Rack A4;Server;
+www.kimberly-clark.com;10.0.13.30;JMX23243DPM;AIR-AP2802I;Frankfurt DC;Floor 6 IDF;Access Point;
+www.knesset.gov.il;10.0.13.33;FDO1270W3RP;UCSC-C220-M5;Innsbruck Branch;Rack C3;Server;
+www.knust.edu.gh;10.0.13.36;FCW2667QZMU;ProLiant DL380 G10;Salzburg Office;Rack C2;Server;
+www.kohls.com;10.0.13.39;WZP1741VNWA;FPR2110;Vienna DC1;Rack B6;Firewall;
+www.kpmg.com;10.0.13.42;JMX1950KMNL;C9300-24T;Graz HQ;;Switch;
+www.kpn.com;10.0.13.45;FDO1512R0CS;NetScaler MPX 8200;Linz POP;Cage 11;Load Balancer;
+www.kraft.com;10.0.13.48;JMX1364DN0U;C9130AXE;Linz POP;Rack A6;Access Point;
+www.kroger.com;10.0.13.51;FCW2257QWU7;ISR4331;Klagenfurt Office;Rack A1;Router;
+www.kth.se;10.0.13.54;FDO1206P3MQ;ISR4331;Salzburg Office;Lobby;Router;
+www.ku.dk;10.0.13.57;FDO2032JLCY;C9120AXI-E;Vienna DC2;Cage 3;Access Point;
+www.kubernetes.io;10.0.13.60;FDO2459S19E;AIR-AP2802I;Innsbruck Branch;Room 6;Access Point;
+www.kuleuven.be;10.0.13.63;FCW2529HWZ6;UCSC-C220-M5;Vienna DC2;Rack C6;Server;
+www.kyoto-u.ac.jp;10.0.13.66;JMX2760TF7T;UCSC-C220-M5;Innsbruck Branch;Cage 10;Server;
+www.lacnic.net;10.0.13.69;FCW1178G5Z7;FPR2110;Salzburg Office;Room 12;Firewall;
+www.lastpass.com;10.0.13.72;JMX17330VVA;ProLiant DL380 G10;Graz HQ;Room 3;Server;
+www.leaseweb.com;10.0.13.75;JMX1948P47S;C9300-24T;Linz POP;Cage 9;Switch;
+www.leeds.ac.uk;10.0.13.78;JMX10608EM2;C9130AXE;Graz HQ;Rack B1;Access Point;
+www.lego.com;10.0.13.81;WZP1996KNLU;UCSC-C220-M5;Zurich POP;Cage 12;Server;
+www.lenovo.com;10.0.13.84;FOC1395XBSJ;C9300-48P;Klagenfurt Office;Floor 10 IDF;Switch;monitoring only
+www.lenovo.com.cn;10.0.13.87;WZP25055PY3;ASA5516-X;Salzburg Office;Rack B1;Firewall;
+www.lexisnexis.com;10.0.13.90;FDO1271SZD1;FPR4115;Innsbruck Branch;Rack B12;Firewall;
+www.lg.co.kr;10.0.13.93;JMX27245566;NetScaler MPX 8200;Klagenfurt Office;Cage 8;Load Balancer;
+www.lg.com;10.0.13.96;FCW2859TJVZ;C9130AXE;Vienna DC1;Rack B4;Access Point;
+www.libressl.org;10.0.13.99;FCW1218JJ0X;C9130AXE;Linz POP;Rack C4;Access Point;
+www.lighttpd.net;10.0.13.102;WZP116212TT;C9130AXE;Innsbruck Branch;Cage 10;Access Point;PoE budget at 90%
+www.lincoln.ac.nz;10.0.13.105;FDO1873H859;C9120AXI-E;Klagenfurt Office;Cage 12;Access Point;
+www.linkedin.com;10.0.13.108;JMX2066B038;C9300-24T;Vienna DC2;Rack A5;Switch;
+www.linode.com;10.0.13.111;JMX22503TJW;C9300-24T;Graz HQ;Room 1;Switch;
+www.linuxfoundation.org;10.0.13.114;FOC2042N3CS;C9300-24T;Zurich POP;Rack A4;Switch;
+www.lithuania.lt;10.0.13.117;FCW1811C0QE;PA-3220;Zurich POP;Cage 11;Firewall;spare PSU missing
+www.liu.se;10.0.13.120;FDO1705A4D3;C9130AXE;Graz HQ;Floor 1 IDF;Access Point;
+www.livejournal.com;10.0.13.123;FOC21729HZS;C9130AXE;Munich DC;Rack C8;Access Point;EoL 2027
+www.lloydsbank.com;10.0.13.126;FOC2090U8YS;ProLiant DL380 G10;Frankfurt DC;Cage 5;Server;
+www.lmu.de;10.0.13.129;WZP2124M2TC;C9300-24T;Salzburg Office;Rack A2;Switch;
+www.loc.gov;10.0.13.132;FCW2967PGP1;AIR-AP2802I;Vienna DC2;Rack B4;Access Point;
+www.london.gov.uk;10.0.13.135;FOC2242ZLRU;ASR1001-X;Innsbruck Branch;Lobby;Router;under maintenance
+www.louisiana.gov;10.0.13.138;FOC2477LV21;C9300-48P;Munich DC;Room 12;Switch;
+www.lowes.com;10.0.13.141;WZP17831T48;F5 BIG-IP i5800;Prague POP;Floor 6 IDF;Load Balancer;monitoring only
+www.lse.ac.uk;10.0.13.144;FDO24064ZCN;ASR1001-X;Prague POP;Rack B8;Router;
+www.lu.se;10.0.13.147;JMX1835QQHN;;Frankfurt DC;Room 6;Switch;
+www.lua.org;10.0.13.150;JMX1211X2XM;UCSC-C220-M5;Innsbruck Branch;Room 2;Server;
+www.lyft.com;10.0.13.153;FCW1445JLJR;C9130AXE;Innsbruck Branch;Floor 3 IDF;Access Point;
+www.m1.com.sg;10.0.13.156;FCW2129UZM1;UCSC-C220-M5;Linz POP;Floor 8 IDF;Server;
+www.macys.com;10.0.13.159;FOC236042GU;C9300-48P;Frankfurt DC;Rack B2;Switch;
+www.mahidol.ac.th;10.0.13.162;FDO16106Y8Z;PowerEdge R650;Vienna DC2;Rack C2;Server;
+www.maine.gov;10.0.13.165;FCW1061DVVC;UCSC-C220-M5;Zurich POP;Rack A12;Server;
+www.malawi.gov.mw;10.0.13.168;FDO23555UTW;PowerEdge R650;Frankfurt DC;Room 10;Server;
+www.malaysia.gov.my;10.0.13.171;FOC1138X68Q;C9500-24Y4C;Graz HQ;Cage 8;Switch;
+www.manchester.ac.uk;10.0.13.174;WZP2681JXD4;AIR-AP2802I;Frankfurt DC;;Access Point;
+www.manrs.org;10.0.13.177;JMX186128PS;C9500-24Y4C;Munich DC;Rack A5;Switch;
+www.marriott.com;10.0.13.180;FDO2515R3BP;C9200L-24P;Munich DC;Lobby;Switch;
+www.maryland.gov;10.0.13.183;FOC1057216E;C9130AXE;Graz HQ;Rack A1;Access Point;
+www.mass.gov;10.0.13.186;FCW2092AWD8;C9120AXI-E;Zurich POP;Rack A3;Access Point;
+www.massey.ac.nz;10.0.13.189;FOC2909YEVU;C9300-24T;Vienna DC2;Cage 7;Switch;
+www.massmutual.com;10.0.13.192;WZP2989J7WM;ProLiant DL380 G10;Innsbruck Branch;Rack C8;Server;
+www.mastercard.com;10.0.13.195;JMX2775WKR4;UCSC-C220-M5;Linz POP;Rack B1;Server;monitoring only
+www.max.com;10.0.13.198;FOC2452NRC7;N9K-C93180YC-FX;Vienna DC2;Rack C7;Switch;
+www.mayoclinic.org;10.0.13.201;FDO19982LSK;C9300-24T;Frankfurt DC;Cage 6;Switch;
+www.mcafee.com;10.0.13.204;FOC277688LD;ProLiant DL380 G10;Innsbruck Branch;Room 11;Server;spare PSU missing
+www.mcdonalds.com;10.0.13.207;FDO21083A3J;C9300-48P;Bratislava Office;Rack C11;Switch;owner: network team
+www.mea.gov.in;10.0.13.210;FDO10851P37;ProLiant DL380 G10;;Rack A2;Server;
+www.medium.com;10.0.13.213;FCW16921MCN;C9300-24T;Zurich POP;Cage 11;Switch;
+www.meity.gov.in;10.0.13.216;FOC2416NZ9J;C9300-24T;Bratislava Office;Lobby;Switch;
+www.meo.pt;10.0.13.219;FOC2016XPS3;C9300-48P;Salzburg Office;Rack A11;Switch;HA pair with standby
+www.mercedes-benz.com;10.0.13.222;FOC2443QWY9;UCSC-C220-M5;Graz HQ;Rack B4;Server;
+www.merck.com;10.0.13.225;WZP1167HZBY;ISR4451-X;Innsbruck Branch;Rack A2;Router;
+www.meta.ai;10.0.13.228;FOC21522DCB;PowerEdge R650;Zurich POP;Rack B2;Server;
+www.meta.com;10.0.13.231;FCW2742W3LT;PowerEdge R650;Vienna DC1;Rack B2;Server;replace in Q2
+www.meter.net;10.0.13.234;JMX2930JVS9;PowerEdge R650;Vienna DC1;Rack A2;Server;HA pair with standby
+www.metlife.com;10.0.13.237;FCW1960JRJT;C9200L-24P;Bratislava Office;Floor 8 IDF;Switch;
+www.mha.gov.in;10.0.13.240;FOC1421YRHW;C9300-48P;Vienna DC2;Cage 4;Switch;
+www.miami.gov;10.0.13.243;WZP2971V49V;AIR-AP2802I;Zurich POP;Rack A7;Access Point;
+www.michigan.gov;10.0.13.246;FOC10735UF3;C9500-24Y4C;Bratislava Office;Cage 4;Switch;
+www.microsoft.com;10.0.13.249;FOC1117F1HJ;;Bratislava Office;Room 6;Router;
+www.minfin.ru;10.0.13.252;FDO1007W42J;C9300-24T;Bratislava Office;Lobby;Switch;
+www.minjust.ru;10.0.13.255;FCW2488BLH4;AIR-AP2802I;Zurich POP;Room 10;Access Point;
+www.minnesota.gov;10.0.14.2;FCW2359AP7S;N9K-C93180YC-FX;Graz HQ;Room 1;Switch;
+www.missouri.gov;10.0.14.5;WZP2375A2R5;C9500-24Y4C;Klagenfurt Office;Lobby;Switch;
+www.mit.edu;10.0.14.8;FOC2168TFY7;C9500-24Y4C;Zurich POP;Cage 11;Switch;
+www.mitre.org;10.0.14.11;JMX1931R3M7;C9300-24T;Bratislava Office;Rack B7;Switch;
+www.mixcloud.com;10.0.14.14;FOC12495GJR;PowerEdge R650;Frankfurt DC;Floor 8 IDF;Server;
+www.mldb.org;10.0.14.17;JMX1743JZ0U;ASR1001-X;Klagenfurt Office;Lobby;Router;
+www.mmm.com;10.0.14.20;FCW1096XG3U;C9120AXI-E;Prague POP;Rack C7;Access Point;
+www.mobil.com;10.0.14.23;WZP1001SYCU;F5 BIG-IP i5800;Linz POP;Rack B3;Load Balancer;EoL 2027
+www.mofa.gov.qa;10.0.14.26;FDO2975EA47;C9500-24Y4C;Prague POP;Rack A10;Switch;
+www.mohfw.gov.in;10.0.14.29;FCW2732MY2H;PowerEdge R650;Frankfurt DC;Rack A4;Server;
+www.monash.edu;10.0.14.32;WZP22528HFH;C9500-24Y4C;Bratislava Office;Floor 4 IDF;Switch;
+www.monash.edu.au;10.0.14.35;FCW2989YZXQ;PowerEdge R650;Munich DC;Room 4;Server;firmware update pending
+www.mongodb.com;10.0.14.38;FOC2265RKJ5;C9130AXE;Graz HQ;Cage 5;Access Point;monitoring only
+www.monster.com;10.0.14.41;FCW1984LQTN;NetScaler MPX 8200;Frankfurt DC;Floor 11 IDF;Load Balancer;
+www.morganstanley.com;10.0.14.44;FCW2061M9KF;UCSC-C220-M5;Linz POP;Cage 1;Server;
+www.motorola.com;10.0.14.47;FCW24668MHH;F5 BIG-IP i5800;Zurich POP;Rack B5;Load Balancer;
+www.mozilla.org;10.0.14.50;WZP1434V9Q9;FPR4115;Vienna DC1;Cage 6;Firewall;firmware update pending
+www.mq.edu.au;10.0.14.53;WZP1644JQN7;C9300-48P;Vienna DC2;Floor 11 IDF;Switch;
+www.msi.com;10.0.14.56;FOC2276M5NV;C9120AXI-E;Frankfurt DC;Floor 7 IDF;Access Point;
+www.msn.com;10.0.14.59;JMX10791XVZ;C9300-24T;Vienna DC1;Cage 4;Switch;
+www.msnbc.com;10.0.14.62;FCW1272K6MB;UCSC-C220-M5;Klagenfurt Office;Lobby;Server;
+www.mts.ru;10.0.14.65;FCW2069ZZ7C;C9500-24Y4C;Innsbruck Branch;Room 8;Switch;
+www.mtv.com;10.0.14.68;FOC2163GJCP;C9500-24Y4C;Vienna DC1;Floor 12 IDF;Switch;
+www.myanmar.gov.mm;10.0.14.71;FDO2257VES3;C9300-48P;Zurich POP;Room 9;Switch;
+www.myspace.com;10.0.14.74;JMX25638BD2;C9130AXE;Prague POP;Floor 2 IDF;Access Point;
+www.mysql.com;10.0.14.77;JMX2916MGFL;C9500-24Y4C;Vienna DC2;Rack A3;Switch;
+www.nagios.org;10.0.14.80;FDO1347182H;N9K-C93180YC-FX;Salzburg Office;;Switch;
+www.namecheap.com;10.0.14.83;FDO1699P6EU;C9300-48P;Zurich POP;Rack A5;Switch;firmware update pending
+www.nasa.gov;10.0.14.86;FCW22900SQJ;C9500-24Y4C;Klagenfurt Office;Lobby;Switch;spare PSU missing
+www.nasdaq.com;10.0.14.89;JMX2707F7GQ;PowerEdge R650;Munich DC;Room 6;Server;
+www.nationalgeographic.com;10.0.14.92;JMX2316AT4W;C9300-48P;Bratislava Office;Cage 7;Switch;
+www.nato.int;10.0.14.95;JMX1414VCJ8;C9500-24Y4C;Graz HQ;Room 6;Switch;
+www.nature.com;10.0.14.98;FDO2852T4GQ;UCSC-C220-M5;Frankfurt DC;Floor 7 IDF;Server;
+www.nba.com;10.0.14.101;FOC2949SK22;F5 BIG-IP i5800;Munich DC;Floor 6 IDF;Load Balancer;
+www.nbc.com;10.0.14.104;FOC2403V795;AIR-AP2802I;Prague POP;Rack C4;Access Point;EoL 2027
+www.nbcnews.com;10.0.14.107;FDO1157VSBF;ASA5516-X;Prague POP;;Firewall;replace in Q2
+www.nbcuniversal.com;10.0.14.110;FCW2367S036;ASR1001-X;Salzburg Office;Cage 4;Router;
+www.nebraska.gov;10.0.14.113;FOC1958FY96;N9K-C93180YC-FX;Klagenfurt Office;Lobby;Switch;
+www.nestle.com;10.0.14.116;WZP2576JX28;PowerEdge R650;Vienna DC2;Floor 4 IDF;Server;
+www.netapp.com;10.0.14.119;WZP2395Q7P5;C9120AXI-E;Munich DC;Rack C8;Access Point;
+www.netbsd.org;10.0.14.122;WZP2087KU5F;N9K-C93180YC-FX;Salzburg Office;Room 5;Switch;
+www.netflix.com;10.0.14.125;FDO1001VBZX;C9300-48P;Graz HQ;Lobby;Switch;
+www.netgear.com;10.0.14.128;FDO202476UH;C9300-24T;Vienna DC2;Lobby;Switch;
+www.newcastle.edu.au;10.0.14.131;JMX1995WFA7;C9300-24T;Zurich POP;Room 4;Switch;
+www.newegg.com;10.0.14.134;FCW2278TM0E;ProLiant DL380 G10;Vienna DC1;Floor 4 IDF;Server;
+www.newjersey.gov;10.0.14.137;JMX295026FF;C9300-48P;Vienna DC2;Rack B11;Switch;
+www.newmexico.gov;10.0.14.140;FCW1818YYU1;NetScaler MPX 8200;Vienna DC1;Rack B11;Load Balancer;
+www.newrelic.com;10.0.14.143;WZP15059WUB;C9120AXI-E;Linz POP;Cage 6;Access Point;
+www.newscorp.com;10.0.14.146;JMX16611YG2;N9K-C93180YC-FX;Zurich POP;Rack C8;Switch;
+www.newsweek.com;10.0.14.149;FDO2615LTT5;C8300-1N1S;Prague POP;Rack A4;Router;
+www.nfl.com;10.0.14.152;FDO14186T9F;C9300-24T;Munich DC;Room 7;Switch;
+www.nginx.org;10.0.14.155;FCW1546C1HK;AIR-AP2802I;Munich DC;Rack C12;Access Point;
+www.nhk.or.jp;10.0.14.158;FCW1295GGCE;C8300-1N1S;Linz POP;Rack A8;Router;
+www.nhs.uk;10.0.14.161;JMX195056W5;ISR4331;Prague POP;Cage 10;Router;
+www.nike.com;10.0.14.164;FDO1946AXMH;ProLiant DL380 G10;Vienna DC1;Rack B11;Server;
+www.nintendo.com;10.0.14.167;FOC2324NKNM;NetScaler MPX 8200;;Floor 5 IDF;Load Balancer;
+www.nissan-global.com;10.0.14.170;JMX1262YG0L;C9130AXE;;Cage 1;Access Point;
+www.nist.gov;10.0.14.173;WZP1813MHSJ;AIR-AP2802I;Graz HQ;Room 6;Access Point;
+www.noaa.gov;10.0.14.176;FCW1795X6MN;F5 BIG-IP i5800;Frankfurt DC;Rack A4;Load Balancer;
+www.nodejs.org;10.0.14.179;FCW290032KL;ISR4451-X;Frankfurt DC;Cage 8;Router;PoE budget at 90%
+www.nokia.com;10.0.14.182;FOC27257269;PowerEdge R650;Frankfurt DC;Room 2;Server;
+www.nordea.com;10.0.14.185;WZP2363HTCJ;F5 BIG-IP i5800;Salzburg Office;Rack A10;Load Balancer;uplink to ISP
+www.northropgrumman.com;10.0.14.188;JMX1287UBK2;ProLiant DL380 G10;Munich DC;Lobby;Server;
+www.norway.no;10.0.14.191;JMX1917C8U3;AIR-AP2802I;Innsbruck Branch;Rack B6;Access Point;
+www.norwegian.com;10.0.14.194;JMX15035U16;F5 BIG-IP i5800;Vienna DC2;Cage 8;Load Balancer;
+www.nos.pt;10.0.14.197;FOC2829EJR0;PA-3220;Salzburg Office;Rack C2;Firewall;
+www.nottingham.ac.uk;10.0.14.200;FCW2953H9GG;AIR-AP2802I;Zurich POP;Room 4;Access Point;temporary installation
+www.novartis.com;10.0.14.203;FOC1232AZGJ;AIR-AP2802I;Munich DC;Lobby;Access Point;
+www.npr.org;10.0.14.206;JMX1787KTCM;UCSC-C220-M5;Bratislava Office;Floor 10 IDF;Server;
+www.nsa.gov;10.0.14.209;WZP1962DF6Y;C9200L-24P;Munich DC;Rack A8;Switch;
+www.ntnu.no;10.0.14.212;FCW1724BB5H;C9200L-24P;Munich DC;Lobby;Switch;
+www.ntp.org;10.0.14.215;FOC2504AGZ6;C8300-1N1S;Bratislava Office;Room 6;Router;
+www.ntt.com;10.0.14.218;WZP1593XFPA;ProLiant DL380 G10;Munich DC;Room 10;Server;
+www.ntu.edu.sg;10.0.14.221;FOC19186S64;F5 BIG-IP i5800;Zurich POP;Room 12;Load Balancer;
+www.ntua.gr;10.0.14.224;FDO1656NVG3;PowerEdge R650;;Rack A10;Server;
+www.nubank.com.br;10.0.14.227;FOC1215EAGG;AIR-AP2802I;Munich DC;Rack C12;Access Point;
+www.nuigalway.ie;10.0.14.230;FOC2327BMZB;C9300-48P;;Rack A8;Switch;
+www.nus.edu.sg;10.0.14.233;FCW1693814V;C9130AXE;Frankfurt DC;Room 8;Access Point;
+www.nvidia.co.uk;10.0.14.236;FOC20159Z4M;C9300-48P;Salzburg Office;Floor 10 IDF;Switch;
+www.nvidia.com;10.0.14.239;WZP1382E8PH;C9500-24Y4C;Munich DC;Rack A8;Switch;
+www.nws.noaa.gov;10.0.14.242;FOC12350P66;FPR2110;Prague POP;Rack A8;Firewall;
+www.ny.gov;10.0.14.245;FCW1578YMZ0;F5 BIG-IP i5800;Vienna DC2;Rack A3;Load Balancer;
+www.nyse.com;10.0.14.248;FOC18295891;C9300-24T;Munich DC;Lobby;Switch;
+www.nytimes.com;10.0.14.251;FCW2173B20E;C9300-24T;Graz HQ;Rack A11;Switch;
+www.nyu.edu;10.0.14.254;FCW1292XN0T;ProLiant DL380 G10;Frankfurt DC;;Server;
+www.nzherald.co.nz;10.0.15.1;FOC2039C8S3;C9130AXE;;Rack C12;Access Point;
+www.oauife.edu.ng;10.0.15.4;FDO1053UEFE;C9300-48P;Innsbruck Branch;Lobby;Switch;
+www.oecd-ilibrary.org;10.0.15.7;FDO2337JVHS;F5 BIG-IP i5800;Linz POP;Floor 1 IDF;Load Balancer;
+www.oecd.org;10.0.15.10;FCW1761BMYL;ISR4331;Graz HQ;;Router;
+www.office.com;10.0.15.13;WZP1233JFDQ;NetScaler MPX 8200;Graz HQ;Lobby;Load Balancer;
+www.ohio.gov;10.0.15.16;FCW23133UXT;PA-3220;Prague POP;Floor 9 IDF;Firewall;under maintenance
+www.oklahoma.gov;10.0.15.19;WZP1571ZBNQ;ProLiant DL380 G10;Innsbruck Branch;Rack A10;Server;
+www.olympics.com;10.0.15.22;WZP22822ZK7;C9120AXI-E;Klagenfurt Office;Lobby;Access Point;
+www.ontario.ca;10.0.15.25;FCW2276DVW3;C9120AXI-E;;Rack C3;Access Point;
+www.opel.com;10.0.15.28;WZP2176C9CS;C9130AXE;Prague POP;Floor 12 IDF;Access Point;
+www.openai.com;10.0.15.31;FDO24015HDQ;C9500-24Y4C;Munich DC;Floor 5 IDF;Switch;
+www.openbsd.org;10.0.15.34;FCW1066SQ4H;UCSC-C220-M5;Zurich POP;Room 2;Server;
+www.opendns.com;10.0.15.37;JMX2176WTDV;C9300-24T;Salzburg Office;Rack B5;Switch;
+www.openssl.org;10.0.15.40;FOC25164F75;C9120AXI-E;Zurich POP;Room 8;Access Point;
+www.openstreetmap.org;10.0.15.43;FOC2042SW25;C9300-48P;Vienna DC1;Lobby;Switch;
+www.opensuse.org;10.0.15.46;FDO1229TUNF;F5 BIG-IP i5800;Linz POP;;Load Balancer;
+www.openvpn.net;10.0.15.49;FOC21210XH4;C9300-24T;Salzburg Office;Rack B10;Switch;
+www.openwrt.org;10.0.15.52;WZP1520N7LB;UCSC-C220-M5;Klagenfurt Office;Rack B10;Server;
+www.opnsense.org;10.0.15.55;JMX1095GE1D;C9120AXI-E;Zurich POP;Rack A1;Access Point;
+www.oppo.com;10.0.15.58;FDO1017ESDS;C8300-1N1S;Bratislava Office;Rack C7;Router;under maintenance
+www.optus.com.au;10.0.15.61;FOC1708C3JS;PA-3220;;Rack C3;Firewall;
+www.oracle.com;10.0.15.64;JMX2289S1VD;;Salzburg Office;Cage 6;Access Point;
+www.orange.be;10.0.15.67;JMX15336951;C9300-24T;Munich DC;Room 2;Switch;
+www.orange.com;10.0.15.70;WZP1733C8H8;N9K-C93180YC-FX;Klagenfurt Office;Room 3;Switch;
+www.orange.es;10.0.15.73;JMX283701Z8;C9120AXI-E;Klagenfurt Office;Rack B1;Access Point;
+www.orange.fr;10.0.15.76;JMX2881J2ZX;N9K-C93180YC-FX;Klagenfurt Office;Lobby;Switch;
+www.oregon.gov;10.0.15.79;WZP18788QJ3;C9120AXI-E;;Rack A9;Access Point;
+www.oregonstate.edu;10.0.15.82;WZP17859EQS;F5 BIG-IP i5800;Innsbruck Branch;Room 10;Load Balancer;
+www.orf.at;10.0.15.85;FDO1831E1XJ;C9300-24T;Linz POP;Cage 3;Switch;
+www.osmfoundation.org;10.0.15.88;FOC2419JDT2;AIR-AP2802I;Innsbruck Branch;Rack C8;Access Point;
+www.otago.ac.nz;10.0.15.91;JMX1394W9DG;N9K-C93180YC-FX;Zurich POP;Rack B11;Switch;
+www.otsuka.co.jp;10.0.15.94;WZP29386Y02;UCSC-C220-M5;Vienna DC1;Cage 6;Server;
+www.overstock.com;10.0.15.97;JMX1053N20J;AIR-AP2802I;Zurich POP;Floor 6 IDF;Access Point;
+www.ovh.com;10.0.15.100;WZP1691S6HA;PowerEdge R650;Vienna DC2;Floor 5 IDF;Server;
+www.ox.ac.uk;10.0.15.103;FDO1354509G;C9300-24T;Prague POP;Room 2;Switch;
+www.oxfam.org;10.0.15.106;FOC14063HQS;PowerEdge R650;Bratislava Office;Lobby;Server;
+www.oxford.ac.uk;10.0.15.109;JMX2201T1HZ;C9300-48P;Bratislava Office;Rack A4;Switch;
+www.palantir.com;10.0.15.112;WZP2722NU92;C9300-24T;Zurich POP;;Switch;
+www.paloaltonetworks.com;10.0.15.115;WZP26383T3V;C9200L-24P;Munich DC;Lobby;Switch;
+www.panasonic.com;10.0.15.118;JMX23364AFR;C9300-48P;Bratislava Office;Rack C2;Switch;
+www.pandora.com;10.0.15.121;WZP2502P4E2;C9500-24Y4C;Salzburg Office;Lobby;Switch;
+www.papajohns.com;10.0.15.124;JMX296355QF;C9500-24Y4C;Prague POP;Cage 6;Switch;
+www.paraguay.gov.py;10.0.15.127;FDO2487L4XD;C9120AXI-E;Zurich POP;Rack B1;Access Point;
+www.parl.ca;10.0.15.130;FCW17061W0V;AIR-AP2802I;Bratislava Office;Rack B6;Access Point;
+www.parlament.al;10.0.15.133;WZP1268VMLX;C9200L-24P;Vienna DC1;Rack A11;Switch;spare PSU missing
+www.parlament.ba;10.0.15.136;FOC1610SFRL;AIR-AP2802I;Innsbruck Branch;Room 3;Access Point;
+www.parlament.ch;10.0.15.139;WZP2424LQ47;C9200L-24P;Vienna DC2;Rack B7;Switch;
+www.parlament.rs;10.0.15.142;FCW2012JKQ4;N9K-C93180YC-FX;Bratislava Office;Rack B1;Switch;
+www.parlamento.pt;10.0.15.145;WZP2385V6BW;F5 BIG-IP i5800;Klagenfurt Office;Floor 5 IDF;Load Balancer;
+www.parlement.ma;10.0.15.148;JMX2775TSHV;ISR4331;Prague POP;Cage 9;Router;owner: network team
+www.parliament.gov.za;10.0.15.151;FCW15817G4Y;N9K-C93180YC-FX;Klagenfurt Office;Floor 6 IDF;Switch;temporary installation
+www.parliament.nz;10.0.15.154;FCW2699QXBV;N9K-C93180YC-FX;Vienna DC2;Rack C10;Switch;
+www.parliament.uk;10.0.15.157;FOC21681V9U;NetScaler MPX 8200;Prague POP;Rack C5;Load Balancer;
+www.paypal.com;10.0.15.160;FOC15176C0B;ProLiant DL380 G10;Graz HQ;Rack A6;Server;
+www.pearson.com;10.0.15.163;FOC1332QTRE;C9130AXE;Munich DC;;Access Point;
+www.peeringdb.com;10.0.15.166;JMX1703009P;PA-3220;Innsbruck Branch;Cage 6;Firewall;
+www.pennsylvania.gov;10.0.15.169;FOC2319TQ2Z;ASR1001-X;Vienna DC2;Floor 8 IDF;Router;HA pair with standby
+www.pepsico.com;10.0.15.172;FOC1337HP0R;C9130AXE;Bratislava Office;Rack A4;Access Point;
+www.perl.org;10.0.15.175;JMX1945V7AU;UCSC-C220-M5;Linz POP;Lobby;Server;monitoring only
+www.pfizer.com;10.0.15.178;FOC27085Q13;NetScaler MPX 8200;Prague POP;Rack A5;Load Balancer;
+www.pfsense.org;10.0.15.181;WZP1290FDMD;FPR4115;Vienna DC2;Rack A9;Firewall;
+www.philips.com;10.0.15.184;FOC12293KEU;PowerEdge R650;;Rack B11;Server;
+www.php.net;10.0.15.187;WZP2536M5F8;C9500-24Y4C;Munich DC;Rack B10;Switch;
+www.pinterest.com;10.0.15.190;WZP249572DG;C9120AXI-E;;Rack B11;Access Point;
+www.pizzahut.com;10.0.15.193;FCW2070GD16;PowerEdge R650;Frankfurt DC;Rack B10;Server;
+www.planalto.gov.br;10.0.15.196;FCW2182Z0PA;C9130AXE;Linz POP;Rack C3;Access Point;
+www.playstation.com;10.0.15.199;FDO1484NTX4;C9300-24T;Vienna DC2;Rack A9;Switch;
+www.pm.gov.au;10.0.15.202;WZP2592F3XM;AIR-AP2802I;Zurich POP;Rack C5;Access Point;
+www.pmindia.gov.in;10.0.15.205;WZP1541VYAR;C9200L-24P;Vienna DC2;Room 8;Switch;
+www.pnc.com;10.0.15.208;FOC1019BM0G;NetScaler MPX 8200;Munich DC;Floor 6 IDF;Load Balancer;
+www.pokemon.com;10.0.15.211;JMX2837MMVH;C9200L-24P;Frankfurt DC;Lobby;Switch;
+www.poland.pl;10.0.15.214;JMX2213GB9E;C9120AXI-E;Frankfurt DC;Lobby;Access Point;
+www.polymtl.ca;10.0.15.217;WZP12045CX2;C9200L-24P;Vienna DC2;Cage 1;Switch;
+www.pool.ntp.org;10.0.15.220;FOC16330WAW;NetScaler MPX 8200;Innsbruck Branch;Room 3;Load Balancer;
+www.porsche.com;10.0.15.223;JMX2645U8B3;FPR4115;Graz HQ;Lobby;Firewall;
+www.portaldogoverno.gov.mz;10.0.15.226;WZP2458ZXQ1;ASA5516-X;Bratislava Office;Rack C5;Firewall;
+www.portugal.gov.pt;10.0.15.229;JMX2221FTSM;C9120AXI-E;Vienna DC2;Lobby;Access Point;
+www.postech.ac.kr;10.0.15.232;WZP1954TR9Z;NetScaler MPX 8200;Munich DC;Rack C2;Load Balancer;
+www.postgresql.org;10.0.15.235;WZP2145MK0M;C9200L-24P;Vienna DC1;Lobby;Switch;
+www.pravda.ru;10.0.15.238;WZP187661PZ;UCSC-C220-M5;Salzburg Office;Rack C1;Server;
+www.premier.be;10.0.15.241;WZP1364V52G;C9200L-24P;Frankfurt DC;Rack B8;Switch;uplink to ISP
+www.president.pl;10.0.15.244;FDO27763J03;C9300-48P;Graz HQ;Rack A9;Switch;
+www.prezi.com;10.0.15.247;FDO2946Q9WC;N9K-C93180YC-FX;Munich DC;Rack A12;Switch;
+www.primevideo.com;10.0.15.250;FCW1622F0DD;C9500-24Y4C;Zurich POP;Cage 2;Switch;
+www.princeton.edu;10.0.15.253;FOC22029ZV6;N9K-C93180YC-FX;Graz HQ;Room 2;Switch;
+www.pro-football-reference.com;10.0.16.0;FCW29603Q9B;F5 BIG-IP i5800;Bratislava Office;Floor 3 IDF;Load Balancer;
+www.procore.com;10.0.16.3;WZP1120NFX2;C9130AXE;Munich DC;Cage 4;Access Point;
+www.procter-gamble.com;10.0.16.6;JMX1257LVVN;F5 BIG-IP i5800;Klagenfurt Office;Rack A6;Load Balancer;
+www.prometheus.io;10.0.16.9;WZP2463D3T9;N9K-C93180YC-FX;Linz POP;Rack A8;Switch;PoE budget at 90%
+www.protonmail.com;10.0.16.12;FOC27898TEW;N9K-C93180YC-FX;Prague POP;Rack C9;Switch;
+www.puppet.com;10.0.16.15;WZP2467SDB8;C8300-1N1S;Frankfurt DC;Room 4;Router;
+www.pwc.com;10.0.16.18;JMX1341L4L7;C9200L-24P;Vienna DC1;Cage 9;Switch;
+www.python.org;10.0.16.21;FCW1437Y24M;UCSC-C220-M5;Zurich POP;Floor 1 IDF;Server;
+www.qantas.com;10.0.16.24;FOC1198FHSX;C9500-24Y4C;Prague POP;Rack C10;Switch;
+www.qmul.ac.uk;10.0.16.27;WZP1364279Y;C9130AXE;Klagenfurt Office;Floor 10 IDF;Access Point;uplink to ISP
+www.qq.com;10.0.16.30;WZP1579L3XM;C9200L-24P;Munich DC;Rack A4;Switch;
+www.qualcomm.com;10.0.16.33;FDO18248FFQ;C9120AXI-E;Zurich POP;Floor 7 IDF;Access Point;
+www.qub.ac.uk;10.0.16.36;FDO29030TAD;ProLiant DL380 G10;Salzburg Office;Rack C10;Server;
+www.quora.com;10.0.16.39;FDO2230AU64;ISR4331;Vienna DC1;Rack C12;Router;
+www.rackspace.com;10.0.16.42;FDO1810Y1T9;N9K-C93180YC-FX;Munich DC;Rack B9;Switch;
+www.rakuten.com;10.0.16.45;FDO2432TFYC;N9K-C93180YC-FX;Innsbruck Branch;Rack C5;Switch;
+www.rbc.com;10.0.16.48;FOC2572KUZ3;ISR4451-X;Klagenfurt Office;Rack A11;Router;
+www.reading.ac.uk;10.0.16.51;JMX2388CWS8;C9300-24T;Klagenfurt Office;Floor 7 IDF;Switch;
+www.realtor.com;10.0.16.54;WZP2411UE3Y;C9500-24Y4C;Zurich POP;Rack A10;Switch;
+www.redbull.com;10.0.16.57;FCW1146CGNL;ProLiant DL380 G10;Salzburg Office;Room 4;Server;
+www.reddit.com;10.0.16.60;FOC1971F0KL;PowerEdge R650;Munich DC;Cage 2;Server;
+www.redhat.com;10.0.16.63;FOC17670RET;F5 BIG-IP i5800;Prague POP;Cage 12;Load Balancer;
+www.redis.io;10.0.16.66;FDO1563G3DP;NetScaler MPX 8200;Munich DC;Rack A9;Load Balancer;
+www.reebok.com;10.0.16.69;FOC22392D2K;C9120AXI-E;;Lobby;Access Point;
+www.regeringen.se;10.0.16.72;FOC1632F3MA;ProLiant DL380 G10;Salzburg Office;;Server;under maintenance
+www.regions.com;10.0.16.75;FOC2894XCU5;ASR1001-X;Klagenfurt Office;Floor 12 IDF;Router;
+www.regjeringen.no;10.0.16.78;JMX25019PAZ;AIR-AP2802I;;;Access Point;
+www.reuters.com;10.0.16.81;JMX1086SZ1F;C9300-24T;Innsbruck Branch;Floor 7 IDF;Switch;
+www.rice.edu;10.0.16.84;WZP1104TK5B;ProLiant DL380 G10;Vienna DC2;Floor 1 IDF;Server;
+www.ricoh.com;10.0.16.87;WZP1913BH30;NetScaler MPX 8200;Klagenfurt Office;Rack B10;Load Balancer;
+www.rijksoverheid.nl;10.0.16.90;FCW1885GXHW;C9200L-24P;Munich DC;Rack B4;Switch;
+www.riksdagen.se;10.0.16.93;FOC2343GW6N;FPR2110;Prague POP;Lobby;Firewall;
+www.ripe.net;10.0.16.96;WZP1512M0GS;AIR-AP2802I;Vienna DC2;Rack C11;Access Point;
+www.robinhood.com;10.0.16.99;FCW19528N31;C9200L-24P;Prague POP;Cage 8;Switch;
+www.rockwellautomation.com;10.0.16.102;WZP1250CVSF;PowerEdge R650;Vienna DC1;Floor 6 IDF;Server;monitoring only
+www.rogers.ca;10.0.16.105;FOC1698M7ED;C9130AXE;Vienna DC2;Rack B5;Access Point;
+www.rogers.com;10.0.16.108;FCW1792BYPR;C9130AXE;Graz HQ;Floor 10 IDF;Access Point;
+www.royalmail.com;10.0.16.111;JMX2582RC0H;ASR1001-X;Bratislava Office;Lobby;Router;
+www.rsi.ch;10.0.16.114;WZP277854GR;C9300-24T;Frankfurt DC;Cage 9;Switch;
+www.rte.ie;;FOC2839B87A;UCSC-C220-M5;Zurich POP;Rack A7;Server;
+www.rts.ch;10.0.16.117;FCW111069PU;PowerEdge R650;Frankfurt DC;;Server;
+www.rtve.es;10.0.16.120;FOC1787HHQ7;C8300-1N1S;Graz HQ;Room 10;Router;
+www.ru.ac.za;10.0.16.123;FDO2047Y0BB;AIR-AP2802I;Salzburg Office;Rack C3;Access Point;
+www.ru.nl;10.0.16.126;FOC12429VGF;F5 BIG-IP i5800;;Room 8;Load Balancer;
+www.ruby-lang.org;10.0.16.129;JMX262298T2;C9120AXI-E;Klagenfurt Office;Rack A2;Access Point;
+www.rust-lang.org;10.0.16.132;WZP2550XWJY;C9500-24Y4C;Munich DC;Lobby;Switch;monitoring only
+www.rwth-aachen.de;10.0.16.135;FOC2583P531;C9300-48P;Linz POP;Room 6;Switch;
+www.ryanair.com;10.0.16.138;FDO242442BU;C9300-24T;Salzburg Office;;Switch;
+www.salesforce.com;10.0.16.141;FDO1573R3N3;C9300-48P;Linz POP;Rack C6;Switch;
+www.salt.ch;10.0.16.144;FDO2411PQSS;C9500-24Y4C;Frankfurt DC;Cage 9;Switch;
+www.saltproject.io;10.0.16.147;WZP1402D452;C9300-48P;Vienna DC1;Floor 3 IDF;Switch;
+www.samsung.com;10.0.16.150;FCW1678Z52U;C9300-24T;Zurich POP;Floor 7 IDF;Switch;
+www.sap.com;10.0.16.153;FOC16193017;UCSC-C220-M5;Munich DC;;Server;
+www.sas.com;10.0.16.156;FDO1149B8CF;ASA5516-X;Frankfurt DC;Rack C3;Firewall;
+www.schneider-electric.com;10.0.16.159;FOC1965503Z;AIR-AP2802I;Bratislava Office;Cage 12;Access Point;PoE budget at 90%
+www.sciencespo.fr;10.0.16.162;FOC2256WJ3Y;ASR1001-X;Linz POP;Rack B3;Router;
+www.scotiabank.com;10.0.16.165;FOC132825WV;UCSC-C220-M5;Innsbruck Branch;Room 10;Server;
+www.seattle.gov;10.0.16.168;FDO1750FB1Y;F5 BIG-IP i5800;Klagenfurt Office;Lobby;Load Balancer;
+www.sec.gov;10.0.16.171;FOC135895NG;C9200L-24P;Klagenfurt Office;Room 12;Switch;
+www.sega.com;10.0.16.174;WZP1524MZJK;F5 BIG-IP i5800;Graz HQ;Lobby;Load Balancer;
+www.sejm.gov.pl;10.0.16.177;FDO1917PB5L;AIR-AP2802I;Klagenfurt Office;Lobby;Access Point;monitoring only
+www.senado.es;10.0.16.180;FDO1107KHZ1;C8300-1N1S;Munich DC;Room 2;Router;
+www.senat.fr;10.0.16.183;FDO10893370;PowerEdge R650;Linz POP;Rack B4;Server;
+www.senat.gov.pl;10.0.16.186;WZP2335ULT8;C9300-48P;;;Switch;
+www.senate.gov;10.0.16.189;FCW231494VQ;C9300-48P;Zurich POP;Floor 8 IDF;Switch;
+www.senato.it;10.0.16.192;WZP25735WUZ;C9200L-24P;Salzburg Office;Room 7;Switch;
+www.serverfault.com;10.0.16.195;FOC1382UM7G;AIR-AP2802I;Bratislava Office;Rack B3;Access Point;
+www.sfgov.org;10.0.16.198;FDO2619DLH8;PowerEdge R650;Innsbruck Branch;Cage 5;Server;
+www.sfr.fr;10.0.16.201;FCW2805RXB2;C9200L-24P;Graz HQ;Rack B5;Switch;
+www.sharp.co.jp;10.0.16.204;WZP1951XG1D;ProLiant DL380 G10;Zurich POP;Lobby;Server;
+www.sheffield.ac.uk;10.0.16.207;FCW2890NW7D;C9200L-24P;Vienna DC1;Floor 10 IDF;Switch;
+www.shell.com;10.0.16.210;WZP1713UCZJ;C9200L-24P;Prague POP;Rack A8;Switch;
+www.shopify.com;10.0.16.213;FDO2920D1GY;FPR4115;Zurich POP;Cage 5;Firewall;
+www.siemens.com;10.0.16.216;FDO2144EWEY;C8300-1N1S;Graz HQ;Rack B12;Router;
+www.singaporeair.com;10.0.16.219;FDO1608ZBZV;C9300-24T;Bratislava Office;Rack C6;Switch;
+www.singtel.com;10.0.16.222;WZP1110VR26;AIR-AP2802I;Munich DC;Floor 6 IDF;Access Point;
+www.sjtu.edu.cn;10.0.16.225;FOC2401JEB3;C9200L-24P;Graz HQ;Lobby;Switch;
+www.sky.com;10.0.16.228;JMX2557DUUN;C9130AXE;Frankfurt DC;Room 11;Access Point;
+www.skype.com;10.0.16.231;FCW201283HE;NetScaler MPX 8200;Vienna DC1;Cage 9;Load Balancer;
+www.skysports.com;10.0.16.234;FOC2809TS6H;UCSC-C220-M5;Bratislava Office;Rack C2;Server;
+www.slovenia.si;10.0.16.237;JMX10514SS8;ISR4451-X;Vienna DC1;Rack C4;Router;
+www.smh.com.au;10.0.16.240;FOC1436P294;C9200L-24P;Frankfurt DC;Rack A8;Switch;
+www.smu.edu.sg;10.0.16.243;WZP2180PXBD;ProLiant DL380 G10;;Rack B12;Server;
+www.snapchat.com;10.0.16.246;FOC28554QZB;PowerEdge R650;Zurich POP;Rack B7;Server;
+www.snu.ac.kr;10.0.16.249;FCW16031CWX;C9130AXE;Innsbruck Branch;Rack C12;Access Point;
+www.sobranie.mk;10.0.16.252;FCW1522XXF4;C9120AXI-E;Graz HQ;Floor 10 IDF;Access Point;
+www.softbank.co.jp;10.0.16.255;FOC1377UX3W;N9K-C93180YC-FX;Prague POP;Rack A10;Switch;
+www.softbank.jp;10.0.17.2;WZP2293SB92;C9200L-24P;Frankfurt DC;Room 7;Switch;
+www.sony.co.jp;10.0.17.5;FOC1534NM0W;C8300-1N1S;Vienna DC1;Rack C12;Router;
+www.sony.com;10.0.17.8;JMX1962MAGY;ASA5516-X;Bratislava Office;Room 11;Firewall;
+www.sophos.com;10.0.17.11;JMX2219CASD;UCSC-C220-M5;Zurich POP;Cage 1;Server;
+www.sorbonne-universite.fr;10.0.17.14;FDO1290QU9C;UCSC-C220-M5;Zurich POP;Floor 9 IDF;Server;
+www.soundcloud.com;10.0.17.17;JMX2302PPEL;C9120AXI-E;Zurich POP;Cage 9;Access Point;
+www.sourceforge.net;10.0.17.20;FDO2664QPLR;PowerEdge R650;Munich DC;Room 1;Server;
+www.southwest.com;10.0.17.23;WZP20100Q8G;AIR-AP2802I;Zurich POP;Lobby;Access Point;
+www.spacex.com;10.0.17.26;FCW28996R6V;NetScaler MPX 8200;Vienna DC1;Rack B7;Load Balancer;
+www.spain.info;10.0.17.29;WZP2393LJYQ;ASR1001-X;Klagenfurt Office;Rack A4;Router;
+www.spark.co.nz;10.0.17.32;FCW2874B9LW;NetScaler MPX 8200;Klagenfurt Office;Rack A11;Load Balancer;
+www.speedtest.net;10.0.17.35;WZP29299EX7;ProLiant DL380 G10;Frankfurt DC;Rack A12;Server;
+www.speedtest.vodafone.de;10.0.17.38;FOC2260LZ6T;ASR1001-X;Salzburg Office;Rack B12;Router;
+www.spglobal.com;10.0.17.41;FOC11557MQH;PA-3220;Vienna DC1;Lobby;Firewall;
+www.spirit.com;10.0.17.44;JMX2986Z77P;ProLiant DL380 G10;Bratislava Office;Rack B11;Server;
+www.splunk.com;10.0.17.47;WZP25140GQQ;C9300-24T;Innsbruck Branch;Rack A12;Switch;
+www.spotify.com;10.0.17.50;JMX1115W32F;F5 BIG-IP i5800;Linz POP;Rack B1;Load Balancer;under maintenance
+www.springer.com;10.0.17.53;FCW1371AAEQ;C9200L-24P;Graz HQ;Rack A12;Switch;
+www.sprint.com;10.0.17.56;FDO2229S2BG;C9300-24T;Graz HQ;Lobby;Switch;
+www.srf.ch;10.0.17.59;JMX1674Z283;PowerEdge R650;Prague POP;Rack C11;Server;
+www.st-andrews.ac.uk;10.0.17.62;JMX22174DVW;AIR-AP2802I;Klagenfurt Office;Rack A8;Access Point;
+www.stackexchange.com;10.0.17.65;FOC1939PW98;C9120AXI-E;Bratislava Office;Floor 11 IDF;Access Point;
+www.stackoverflow.com;10.0.17.68;FOC1428PPJF;C9500-24Y4C;Prague POP;Rack A7;Switch;
+www.stanford.edu;10.0.17.71;WZP1332BSY1;UCSC-C220-M5;Zurich POP;Room 8;Server;
+www.staples.com;10.0.17.74;FOC1944TT0F;ProLiant DL380 G10;Vienna DC2;Floor 10 IDF;Server;
+www.starbucks.com;10.0.17.77;FCW1965MB4A;C9300-48P;Munich DC;Rack C8;Switch;
+www.starhub.com;10.0.17.80;FCW1841MP9V;C9130AXE;Graz HQ;Rack C12;Access Point;
+www.state.gov;10.0.17.83;FDO21310LBU;NetScaler MPX 8200;Klagenfurt Office;Rack C2;Load Balancer;
+www.statefarm.com;10.0.17.86;FCW2839JWP2;F5 BIG-IP i5800;Bratislava Office;Cage 9;Load Balancer;
+www.stc.com.sa;10.0.17.89;FCW2024QXFW;F5 BIG-IP i5800;Klagenfurt Office;Rack C10;Load Balancer;
+www.stortinget.no;10.0.17.92;FDO2539RBMK;C9300-24T;Bratislava Office;Floor 6 IDF;Switch;replace in Q2
+www.stripe.com;10.0.17.95;FOC2672D9VZ;UCSC-C220-M5;;Cage 6;Server;
+www.stuba.sk;10.0.17.98;JMX1246BQ0W;UCSC-C220-M5;Innsbruck Branch;Cage 6;Server;
+www.sun.com;10.0.17.101;JMX28867Y4Z;AIR-AP2802I;Graz HQ;Rack C9;Access Point;
+www.sunlife.com;10.0.17.104;FCW1069JFGB;NetScaler MPX 8200;Munich DC;Lobby;Load Balancer;
+www.suntrust.com;10.0.17.107;FDO28823R5Y;NetScaler MPX 8200;Salzburg Office;Floor 3 IDF;Load Balancer;
+www.supermicro.com;10.0.17.110;JMX2612WQGC;F5 BIG-IP i5800;Vienna DC2;Rack B8;Load Balancer;
+www.superuser.com;10.0.17.113;JMX1612EUPL;N9K-C93180YC-FX;Frankfurt DC;Rack B12;Switch;
+www.surrey.ac.uk;10.0.17.116;FOC216925MT;C9300-48P;Bratislava Office;Cage 1;Switch;
+www.surveymonkey.com;10.0.17.119;JMX2891XK8Z;;;Rack A8;Switch;
+www.suse.com;10.0.17.122;JMX23411Y18;ISR4331;Linz POP;Rack A12;Router;
+www.sutd.edu.sg;10.0.17.125;WZP1766YEJ4;C9500-24Y4C;Frankfurt DC;Rack A10;Switch;
+www.suzuki.co.jp;10.0.17.128;FDO1624BBQE;C9120AXI-E;Vienna DC2;Lobby;Access Point;
+www.swatch.com;10.0.17.131;FDO2127076K;NetScaler MPX 8200;Zurich POP;Cage 1;Load Balancer;
+www.swift.org;10.0.17.134;JMX1400UF9B;ISR4331;Munich DC;Room 2;Router;
+www.sydney.edu.au;10.0.17.137;WZP1090NEH6;C9130AXE;Bratislava Office;Room 3;Access Point;spare PSU missing
+www.symantec.com;10.0.17.140;FCW181485D6;AIR-AP2802I;Salzburg Office;Lobby;Access Point;
+www.sysu.edu.cn;10.0.17.143;FDO2816Z67T;C9120AXI-E;Salzburg Office;Lobby;Access Point;
+www.t-mobile.com;10.0.17.146;FOC2367AXTV;FPR4115;Frankfurt DC;Lobby;Firewall;
+www.t-online.de;10.0.17.149;FOC1078HZ41;C9130AXE;Innsbruck Branch;Rack C7;Access Point;
+www.tails.net;10.0.17.152;JMX2796R9KE;C9130AXE;Zurich POP;Rack B11;Access Point;
+www.taiwan.gov.tw;10.0.17.155;WZP1473TE9W;PowerEdge R650;Salzburg Office;Cage 9;Server;
+www.target.com;10.0.17.158;JMX2197XZ20;FPR2110;Linz POP;Rack B4;Firewall;replace in Q2
+www.tcd.ie;10.0.17.161;JMX10224TLB;AIR-AP2802I;Prague POP;Rack A12;Access Point;
+www.tcpdump.org;10.0.17.164;JMX2786N5XX;C9300-48P;Linz POP;Rack A7;Switch;
+www.tdameritrade.com;10.0.17.167;JMX1293LK9A;C9130AXE;;Rack C6;Access Point;
+www.tele2.net;10.0.17.170;JMX2258LLAH;PA-3220;;Room 10;Firewall;
+www.tele2.se;10.0.17.173;JMX1383DU13;C9500-24Y4C;Vienna DC1;Room 3;Switch;
+www.telecomitalia.it;10.0.17.176;FOC1689A0N8;ASA5516-X;Linz POP;Cage 8;Firewall;
+www.telekom.de;10.0.17.179;FOC164874P2;UCSC-C220-M5;Munich DC;Lobby;Server;
+www.telenet.be;10.0.17.182;FCW2182NC66;C8300-1N1S;Munich DC;Floor 5 IDF;Router;
+www.telkom.co.za;10.0.17.185;FOC21765APK;C9120AXI-E;Zurich POP;Floor 6 IDF;Access Point;
+www.telstra.com.au;10.0.17.188;FOC13110U4Z;C9120AXI-E;Prague POP;Rack A4;Access Point;
+www.telus.com;10.0.17.191;WZP1183RWQN;N9K-C93180YC-FX;Vienna DC1;Floor 10 IDF;Switch;
+www.tencent.com;10.0.17.194;WZP2607GGDJ;C9120AXI-E;Salzburg Office;Room 5;Access Point;
+www.terraform.io;10.0.17.197;JMX2159UK2Q;NetScaler MPX 8200;Munich DC;Floor 5 IDF;Load Balancer;
+www.tesco.com;10.0.17.200;JMX2139Z2ML;F5 BIG-IP i5800;Innsbruck Branch;Room 9;Load Balancer;
+www.tesla.com;10.0.17.203;FDO16520P69;C9300-24T;Innsbruck Branch;Rack B3;Switch;
+www.testmy.net;10.0.17.206;FDO12433YCM;C9130AXE;Munich DC;Floor 6 IDF;Access Point;
+www.texas.gov;10.0.17.209;JMX1801RXUC;PowerEdge R650;Salzburg Office;Lobby;Server;
+www.thaigov.go.th;10.0.17.212;FDO1173L7L0;ISR4451-X;Linz POP;Rack A7;Router;
+www.thailand.go.th;10.0.17.215;FDO1283P16A;ASA5516-X;Salzburg Office;Lobby;Firewall;
+www.theatlantic.com;10.0.17.218;FOC1786PF2Y;UCSC-C220-M5;Graz HQ;Rack B3;Server;
+www.theguardian.com;10.0.17.221;FDO2470HLZR;C9300-24T;Munich DC;Rack B9;Switch;
+www.thehill.com;10.0.17.224;FOC269655TZ;C9500-24Y4C;Salzburg Office;Cage 12;Switch;
+www.thomsonreuters.com;10.0.17.227;WZP17702KR5;;Graz HQ;Rack A9;Switch;
+www.threadless.com;10.0.17.230;JMX1337X5XD;C9130AXE;Munich DC;Rack B4;Access Point;
+www.ti.com;10.0.17.233;JMX1264KY61;N9K-C93180YC-FX;Vienna DC1;Floor 7 IDF;Switch;
+www.tiaa.org;10.0.17.236;FOC2841RXHZ;C9500-24Y4C;Graz HQ;Cage 7;Switch;
+www.tibco.com;10.0.17.239;FCW2070JB3V;PowerEdge R650;Munich DC;Rack B3;Server;uplink to ISP
+www.tigo.com;10.0.17.242;FCW18477XHD;FPR2110;Linz POP;Rack C12;Firewall;
+www.tiktok.com;10.0.17.245;FDO2077YJ41;C9120AXI-E;Frankfurt DC;Rack C3;Access Point;
+www.tim.it;10.0.17.248;WZP1784R4FK;FPR2110;Munich DC;Rack A5;Firewall;renewed 2025
+www.time.com;10.0.17.251;FDO1132ERNE;C9120AXI-E;Vienna DC2;Rack A7;Access Point;
+www.timescale.com;10.0.17.254;FCW17426NTT;AIR-AP2802I;Zurich POP;Rack C3;Access Point;
+www.tinder.com;10.0.18.1;WZP1610J9UB;C9300-48P;Linz POP;Lobby;Switch;
+www.tjmaxx.com;10.0.18.4;FDO29202AK5;ISR4451-X;Linz POP;Floor 7 IDF;Router;
+www.tmz.com;10.0.18.7;FOC154956M0;C9130AXE;Zurich POP;Rack C2;Access Point;
+www.tomtom.com;10.0.18.10;WZP1610TQF5;ISR4331;Vienna DC1;Rack B6;Router;
+www.torproject.org;10.0.18.13;FCW1860L5UR;C9120AXI-E;Bratislava Office;Rack B3;Access Point;
+www.total.com;10.0.18.16;WZP1486EU7W;;Zurich POP;Rack A11;Switch;
+www.toyota.com;10.0.18.19;FDO2784D18N;C9120AXI-E;;Cage 8;Access Point;
+www.tradingview.com;10.0.18.22;FCW1447LKPA;N9K-C93180YC-FX;Klagenfurt Office;Rack B5;Switch;HA pair with standby
+www.trello.com;10.0.18.25;FOC2195VBK7;PowerEdge R650;Salzburg Office;Rack A4;Server;
+www.tripadvisor.com;10.0.18.28;JMX1872A2UG;PowerEdge R650;Vienna DC2;Lobby;Server;PoE budget at 90%
+www.truist.com;10.0.18.31;FDO1071SWQB;N9K-C93180YC-FX;Prague POP;;Switch;firmware update pending
+www.trustpilot.com;10.0.18.34;FOC15604JW4;N9K-C93180YC-FX;Prague POP;Rack C4;Switch;
+www.tsinghua.edu.cn;10.0.18.37;JMX1655LR7S;C9500-24Y4C;Munich DC;Rack C12;Switch;
+www.tsukuba.ac.jp;10.0.18.40;FDO2565H498;UCSC-C220-M5;;Lobby;Server;HA pair with standby
+www.tu-dresden.de;10.0.18.43;WZP1913GMS0;C9300-48P;Salzburg Office;Lobby;Switch;
+www.tudelft.nl;10.0.18.46;FDO1366NFDC;C9500-24Y4C;Munich DC;Rack C5;Switch;
+www.tum.de;10.0.18.49;FDO28058U61;;Munich DC;Rack B2;Router;
+www.tumblr.com;10.0.18.52;FCW1773QTTD;PowerEdge R650;Munich DC;Cage 11;Server;
+www.tunisia.gov.tn;10.0.18.55;WZP1451B3C3;FPR4115;Klagenfurt Office;Cage 1;Firewall;
+www.turkishairlines.com;10.0.18.58;FCW2152JJ4T;C8300-1N1S;Innsbruck Branch;Rack A6;Router;
+www.tuv.com;10.0.18.61;WZP1959NQ3X;C9300-48P;Vienna DC2;Rack B9;Switch;
+www.twilio.com;10.0.18.64;WZP2586H4B5;C9500-24Y4C;Zurich POP;Lobby;Switch;
+www.twitch.tv;10.0.18.67;FDO24180W5U;UCSC-C220-M5;Salzburg Office;Cage 10;Server;uplink to ISP
+www.twitter.com;10.0.18.70;FOC2394ZVP9;AIR-AP2802I;Innsbruck Branch;Rack A1;Access Point;replace in Q2
+www.ualberta.ca;10.0.18.73;FOC2580Y9N6;AIR-AP2802I;Innsbruck Branch;Lobby;Access Point;
+www.uam.es;10.0.18.76;FDO2149TURK;AIR-AP2802I;Graz HQ;Rack C3;Access Point;
+www.ub.edu;10.0.18.79;FCW1887C8FC;UCSC-C220-M5;Munich DC;Cage 8;Server;
+www.ubc.ca;10.0.18.82;FCW1384H634;NetScaler MPX 8200;Klagenfurt Office;Lobby;Load Balancer;monitoring only
+www.uber.com;10.0.18.85;WZP2122TDDV;C9300-24T;Frankfurt DC;Rack A6;Switch;
+www.ubuntu.com;10.0.18.88;FOC2004UP46;FPR4115;Graz HQ;Rack C7;Firewall;
+www.uc.pt;10.0.18.91;FDO2092P2Z1;C9300-48P;Vienna DC2;Floor 7 IDF;Switch;EoL 2027
+www.ucc.ie;10.0.18.94;FCW1279DAXW;C9300-48P;Graz HQ;Rack B4;Switch;
+www.ucd.ie;10.0.18.97;FDO1762QNJJ;C9300-48P;Frankfurt DC;Room 4;Switch;
+www.ucdavis.edu;10.0.18.100;WZP123738L0;C8300-1N1S;Vienna DC2;Cage 6;Router;
+www.ucl.ac.uk;10.0.18.103;FOC2973ZH8D;N9K-C93180YC-FX;Frankfurt DC;Rack C1;Switch;
+www.ucla.edu;10.0.18.106;FDO1996C1GB;C8300-1N1S;Prague POP;Rack A11;Router;
+www.ucsd.edu;10.0.18.109;FOC1532GEZ9;ProLiant DL380 G10;Zurich POP;Floor 3 IDF;Server;
+www.udea.edu.co;10.0.18.112;FDO2385F6MF;C9200L-24P;Vienna DC2;Lobby;Switch;
+www.ufrj.br;10.0.18.115;WZP2166X0T9;F5 BIG-IP i5800;Vienna DC2;Rack B2;Load Balancer;
+www.ug.edu.gh;10.0.18.118;FDO29145F54;C9120AXI-E;Graz HQ;Room 9;Access Point;PoE budget at 90%
+www.ugm.ac.id;10.0.18.121;FDO1233P015;PA-3220;Zurich POP;Rack A8;Firewall;
+www.uibk.ac.at;10.0.18.124;FOC1265YDZA;C9200L-24P;Vienna DC1;Floor 7 IDF;Switch;spare PSU missing
+www.uio.no;10.0.18.127;FCW1165WMA4;NetScaler MPX 8200;Innsbruck Branch;Cage 3;Load Balancer;
+www.uj.ac.za;10.0.18.130;FDO2986H5JD;C9200L-24P;Innsbruck Branch;Rack B10;Switch;monitoring only
+www.ukraine.ua;10.0.18.133;JMX277301TW;C9200L-24P;Prague POP;Rack B10;Switch;
+www.ulaval.ca;10.0.18.136;JMX2200D87P;C9500-24Y4C;Zurich POP;Floor 12 IDF;Switch;
+www.ulg.ac.be;10.0.18.139;WZP1655YDUS;C9300-24T;Vienna DC2;Rack B7;Switch;EoL 2027
+www.ulta.com;10.0.18.142;WZP2313S4DL;N9K-C93180YC-FX;Frankfurt DC;Rack A8;Switch;
+www.umanitoba.ca;10.0.18.145;FOC29428SNG;ProLiant DL380 G10;Innsbruck Branch;Room 3;Server;
+www.umich.edu;10.0.18.148;JMX1602BMH0;AIR-AP2802I;Prague POP;Rack B12;Access Point;
+www.un.org;10.0.18.151;FOC1594TAPW;PowerEdge R650;Munich DC;Floor 1 IDF;Server;
+www.unam.mx;10.0.18.154;WZP1722N076;FPR4115;Graz HQ;Rack B10;Firewall;
+www.unc.edu.ar;10.0.18.157;JMX2687VP4H;C9500-24Y4C;Bratislava Office;Cage 6;Switch;
+www.underarmour.com;10.0.18.160;WZP22479L37;C9500-24Y4C;Prague POP;Rack B3;Switch;
+www.unesco.org;10.0.18.163;FDO2266V681;C9300-48P;;Rack C6;Switch;
+www.unesp.br;10.0.18.166;FOC1881PTBP;C9300-48P;Klagenfurt Office;Lobby;Switch;
+www.uni-frankfurt.de;10.0.18.169;JMX144679SF;NetScaler MPX 8200;Innsbruck Branch;Floor 4 IDF;Load Balancer;
+www.uni-goettingen.de;10.0.18.172;FCW14520284;F5 BIG-IP i5800;Salzburg Office;Rack C5;Load Balancer;
+www.uni-hamburg.de;10.0.18.175;FOC25694Y4Z;C9200L-24P;Innsbruck Branch;Cage 9;Switch;
+www.uni-jena.de;10.0.18.178;WZP2542Q558;C9500-24Y4C;Vienna DC2;Room 9;Switch;
+www.uni-mainz.de;10.0.18.181;FCW23387P6D;UCSC-C220-M5;Innsbruck Branch;Rack B7;Server;
+www.uni-muenchen.de;10.0.18.184;JMX2249JH1S;C9120AXI-E;Graz HQ;Rack C12;Access Point;
+www.uniandes.edu.co;10.0.18.187;FOC1155TCCJ;ASR1001-X;Salzburg Office;Cage 7;Router;
+www.unibas.ch;10.0.18.190;FOC2808UUPX;C9200L-24P;Zurich POP;Rack B1;Switch;
+www.unicamp.br;10.0.18.193;JMX1977SUAD;ProLiant DL380 G10;Vienna DC1;Rack A8;Server;
+www.unicef.org;10.0.18.196;FCW2005S8W9;N9K-C93180YC-FX;Vienna DC2;Floor 9 IDF;Switch;
+www.unifi.it;10.0.18.199;WZP2108TAAN;ProLiant DL380 G10;Innsbruck Branch;Lobby;Server;
+www.unige.ch;10.0.18.202;FCW25737HMG;AIR-AP2802I;Innsbruck Branch;Cage 10;Access Point;
+www.unilever.com;10.0.18.205;FOC2954X1K9;FPR4115;Vienna DC1;Rack A8;Firewall;
+www.unimelb.edu.au;10.0.18.208;FOC2549YPGU;C9120AXI-E;Zurich POP;Rack B2;Access Point;monitoring only
+www.unimi.it;10.0.18.211;FCW1814T6E8;N9K-C93180YC-FX;Klagenfurt Office;Rack C4;Switch;
+www.unipd.it;10.0.18.214;FCW118748BM;C9200L-24P;Graz HQ;Lobby;Switch;renewed 2025
+www.uniqlo.com;10.0.18.217;FCW2296RWYR;C9300-24T;Munich DC;Rack C6;Switch;
+www.uniroma1.it;10.0.18.220;FOC15329DK7;UCSC-C220-M5;Bratislava Office;Cage 9;Server;
+www.unitedhealthgroup.com;10.0.18.223;WZP1127JR3N;ASR1001-X;Graz HQ;Floor 8 IDF;Router;
+www.unito.it;10.0.18.226;FCW2222EYJV;C9120AXI-E;Vienna DC2;Cage 4;Access Point;
+www.unity.com;10.0.18.229;FDO21785CE8;UCSC-C220-M5;Graz HQ;Rack C4;Server;
+www.univ-paris1.fr;10.0.18.232;WZP2792PKNE;ISR4451-X;Bratislava Office;Rack A5;Router;replace in Q2
+www.unrealengine.com;10.0.18.235;FDO2205Z2YS;C9120AXI-E;Vienna DC1;Rack B11;Access Point;
+www.unsw.edu.au;10.0.18.238;FDO1344N8GW;C9120AXI-E;Munich DC;Cage 3;Access Point;
+www.uonbi.ac.ke;10.0.18.241;WZP1205XUKQ;NetScaler MPX 8200;Munich DC;Rack A12;Load Balancer;
+www.uottawa.ca;10.0.18.244;FCW2613NSNK;C9200L-24P;Frankfurt DC;Cage 11;Switch;
+www.up.ac.za;10.0.18.247;FOC2070K6AD;ISR4451-X;Prague POP;Cage 3;Router;
+www.up.edu.ph;10.0.18.250;JMX2585RCV2;FPR4115;Prague POP;Rack A9;Firewall;
+www.up.pt;10.0.18.253;FCW2560W5VQ;FPR2110;Salzburg Office;Lobby;Firewall;
+www.upenn.edu;10.0.19.0;JMX11832D30;N9K-C93180YC-FX;Bratislava Office;Lobby;Switch;
+www.upf.edu;10.0.19.3;FCW1578894J;C9200L-24P;Salzburg Office;Lobby;Switch;
+www.upm.edu.my;10.0.19.6;FCW2789QN3K;C9500-24Y4C;Graz HQ;Lobby;Switch;
+www.upwork.com;10.0.19.9;FCW11335X2L;PowerEdge R650;Frankfurt DC;Rack A5;Server;
+www.uq.edu.au;10.0.19.12;FOC1166RR53;C9130AXE;Frankfurt DC;Floor 2 IDF;Access Point;
+www.uqam.ca;10.0.19.15;JMX21227SRX;C9200L-24P;Bratislava Office;Lobby;Switch;
+www.us.es;10.0.19.18;FOC1840CG59;C9300-48P;Linz POP;Rack B12;Switch;
+www.usa.gov;10.0.19.21;FOC24303X1X;ISR4331;Klagenfurt Office;Floor 6 IDF;Router;
+www.usaa.com;10.0.19.24;FCW11413BVN;ISR4451-X;Graz HQ;Rack A3;Router;
+www.usach.cl;10.0.19.27;FOC2366QJXQ;ProLiant DL380 G10;Vienna DC2;Rack A10;Server;
+www.usask.ca;10.0.19.30;FOC1413N9LM;C9300-48P;Vienna DC2;Room 1;Switch;
+www.uscis.gov;10.0.19.33;FOC2340MEE0;;Graz HQ;Rack A12;Server;
+www.usda.gov;10.0.19.36;FCW2889RN8T;C9500-24Y4C;Graz HQ;Cage 11;Switch;
+www.usgs.gov;10.0.19.39;JMX2828PXNG;ProLiant DL380 G10;Bratislava Office;Rack B11;Server;
+www.usherbrooke.ca;10.0.19.42;JMX1563HLCM;FPR4115;Vienna DC1;Floor 11 IDF;Firewall;
+www.usi.ch;10.0.19.45;FCW2865YBFC;N9K-C93180YC-FX;Prague POP;Rack C10;Switch;
+www.usps.com;10.0.19.48;JMX1997GURJ;NetScaler MPX 8200;Innsbruck Branch;Cage 8;Load Balancer;
+www.ust.hk;10.0.19.51;JMX2894V2VK;C9300-24T;Bratislava Office;Room 9;Switch;EoL 2027
+www.ustc.edu.cn;10.0.19.54;FCW27592QAZ;ProLiant DL380 G10;Linz POP;Rack C8;Server;
+www.utah.gov;10.0.19.57;FOC19238YY4;ASA5516-X;Salzburg Office;Rack B9;Firewall;
+www.utas.edu.au;10.0.19.60;FDO2560XS31;ProLiant DL380 G10;Salzburg Office;Rack C10;Server;
+www.utexas.edu;10.0.19.63;JMX2584ZXYK;AIR-AP2802I;Innsbruck Branch;Cage 3;Access Point;
+www.utoronto.ca;10.0.19.66;FDO1334S1WC;C9500-24Y4C;Zurich POP;Floor 8 IDF;Switch;under maintenance
+www.uts.edu.au;10.0.19.69;FDO1289F60H;C9200L-24P;Klagenfurt Office;Rack B6;Switch;
+www.utu.fi;10.0.19.72;FDO22907K2U;C9200L-24P;Innsbruck Branch;Rack C7;Switch;
+www.uu.dk;10.0.19.75;FDO11529GZE;N9K-C93180YC-FX;Bratislava Office;Lobby;Switch;
+www.uu.nl;10.0.19.78;FCW2156TBLJ;NetScaler MPX 8200;Vienna DC2;Lobby;Load Balancer;
+www.uu.se;10.0.19.81;FCW12507F9X;F5 BIG-IP i5800;;Cage 11;Load Balancer;
+www.uv.es;10.0.19.84;JMX1888HEH3;C9130AXE;Graz HQ;Room 7;Access Point;
+www.uva.nl;10.0.19.87;WZP168667QC;C9200L-24P;Innsbruck Branch;Floor 8 IDF;Switch;
+www.uvic.ca;10.0.19.90;WZP1610A92X;UCSC-C220-M5;Vienna DC2;Cage 5;Server;
+www.uw.edu.pl;10.0.19.93;JMX11329EA3;N9K-C93180YC-FX;Graz HQ;Rack A9;Switch;
+www.uwa.edu.au;10.0.19.96;FCW1988XUSH;C9300-24T;Frankfurt DC;Rack B9;Switch;
+www.uwaterloo.ca;10.0.19.99;JMX2416XET3;C9120AXI-E;Salzburg Office;Room 2;Access Point;
+www.uwc.ac.za;10.0.19.102;FOC1231GNZQ;NetScaler MPX 8200;Prague POP;Lobby;Load Balancer;
+www.uzbekistan.uz;10.0.19.105;FOC185030F6;ISR4451-X;Zurich POP;Cage 5;Router;
+www.valero.com;10.0.19.108;FDO29122DZL;ProLiant DL380 G10;Vienna DC1;Lobby;Server;
+www.vanderbilt.edu;10.0.19.111;FOC27217B7Y;PowerEdge R650;Frankfurt DC;Room 11;Server;
+www.vanguard.com;10.0.19.114;JMX2784SN62;PA-3220;Linz POP;Floor 10 IDF;Firewall;
+www.venmo.com;10.0.19.117;FCW1257MQKY;C9120AXI-E;Prague POP;Room 5;Access Point;
+www.verizon.com;10.0.19.120;JMX1607MA5V;C9300-48P;Munich DC;Lobby;Switch;
+www.vermont.gov;10.0.19.123;WZP22381FWA;C9120AXI-E;Vienna DC2;Rack A10;Access Point;
+www.victoria.ac.nz;10.0.19.126;WZP2568FDJK;C8300-1N1S;Linz POP;Rack A9;Router;
+www.vietnam.gov.vn;10.0.19.129;JMX1221A70U;C9300-48P;Vienna DC1;Rack A9;Switch;
+www.vimeo.com;10.0.19.132;FDO2510KNR7;F5 BIG-IP i5800;Salzburg Office;Room 8;Load Balancer;
+www.virginatlantic.com;10.0.19.135;WZP2046KT4F;PowerEdge R650;Bratislava Office;Lobby;Server;
+www.virginmedia.com;10.0.19.138;FCW1776A2Z1;ProLiant DL380 G10;Vienna DC2;Floor 5 IDF;Server;
+www.virginmedia.ie;10.0.19.141;JMX17710DZG;PowerEdge R650;Salzburg Office;Rack C8;Server;
+www.visa.com;10.0.19.144;JMX226673BA;F5 BIG-IP i5800;Munich DC;Rack B6;Load Balancer;
+www.vivo.com.br;10.0.19.147;JMX2678501H;PowerEdge R650;Munich DC;Rack A1;Server;
+www.vk.com;10.0.19.150;FOC1037XAAY;C8300-1N1S;Frankfurt DC;Room 10;Router;
+www.vmware.com;10.0.19.153;FCW1452D68F;F5 BIG-IP i5800;Klagenfurt Office;Cage 9;Load Balancer;
+www.vodacom.co.za;10.0.19.156;WZP1070VVB2;UCSC-C220-M5;Graz HQ;Lobby;Server;
+www.vodafone.com;10.0.19.159;FCW2587A7Y5;C9300-48P;;Rack A10;Switch;firmware update pending
+www.vodafone.es;10.0.19.162;FOC15386B7C;C9300-48P;Klagenfurt Office;Cage 8;Switch;
+www.vodafone.it;10.0.19.165;FCW26821VL3;C9300-24T;Salzburg Office;Room 9;Switch;
+www.vodafone.pt;10.0.19.168;FOC2336KTYV;FPR4115;Prague POP;Lobby;Firewall;
+www.volkswagen.com;10.0.19.171;JMX2324L0T5;PA-3220;Vienna DC2;Cage 5;Firewall;
+www.volvo.com;10.0.19.174;WZP2717TQ6Q;C9130AXE;Munich DC;Lobby;Access Point;
+www.vu.nl;10.0.19.177;WZP1241PRB6;AIR-AP2802I;Prague POP;Cage 10;Access Point;
+www.vultr.com;10.0.19.180;FOC2661ZRNB;FPR2110;Klagenfurt Office;Rack B5;Firewall;
+www.vut.cz;10.0.19.183;JMX2412SK4Y;FPR2110;Vienna DC2;Rack B8;Firewall;
+www.w3.org;10.0.19.186;FDO1942R2XT;FPR2110;Linz POP;Rack B5;Firewall;
+www.waikato.ac.nz;10.0.19.189;FOC19630CAN;PA-3220;Linz POP;Rack C2;Firewall;
+www.walgreens.com;10.0.19.192;WZP2482CXM3;AIR-AP2802I;Graz HQ;Rack C1;Access Point;
+www.walmart.com;10.0.19.195;FCW2032VAHU;PowerEdge R650;Vienna DC2;Lobby;Server;
+www.warnerbros.com;10.0.19.198;WZP1488EG8S;C9500-24Y4C;Graz HQ;Room 7;Switch;
+www.waseda.jp;10.0.19.201;JMX13386J9T;C9120AXI-E;Bratislava Office;Rack B8;Access Point;
+www.washingtonpost.com;10.0.19.204;WZP25285Z1P;C9500-24Y4C;Prague POP;Floor 12 IDF;Switch;
+www.wayfair.com;10.0.19.207;FOC2243W4E1;PA-3220;Prague POP;Rack C9;Firewall;renewed 2025
+www.webmd.com;10.0.19.210;FCW2863MGX4;ISR4451-X;Bratislava Office;Rack A6;Router;PoE budget at 90%
+www.wellsfargo.com;10.0.19.213;FDO1736LDQV;UCSC-C220-M5;Klagenfurt Office;Room 11;Server;
+www.westernunion.com;10.0.19.216;FOC2777BDS4;C9300-24T;Linz POP;Rack A1;Switch;
+www.westvirginia.gov;10.0.19.219;FOC2603R81B;C9120AXI-E;Salzburg Office;Room 1;Access Point;
+www.weverse.io;10.0.19.222;FOC11097M1Y;C9120AXI-E;Munich DC;Room 5;Access Point;
+www.weworld.com;10.0.19.225;JMX14974NV3;C9300-48P;Klagenfurt Office;Rack B3;Switch;
+www.whatsapp.com;10.0.19.228;JMX2204GMRZ;AIR-AP2802I;Salzburg Office;Rack A10;Access Point;
+www.whitehouse.gov;10.0.19.231;FCW2932WGFW;ASR1001-X;Bratislava Office;Floor 10 IDF;Router;
+www.who.int;10.0.19.234;WZP13792W9T;ISR4451-X;Zurich POP;Rack A3;Router;
+www.wien.gv.at;10.0.19.237;FCW21102QYK;ISR4331;Klagenfurt Office;Floor 7 IDF;Router;
+www.wikidata.org;10.0.19.240;FOC29203E6K;C9500-24Y4C;Bratislava Office;Rack C4;Switch;
+www.wikihow.com;10.0.19.243;FDO1985JHB8;UCSC-C220-M5;Vienna DC1;Cage 8;Server;
+www.wikimedia.org;10.0.19.246;WZP17760FJV;AIR-AP2802I;Klagenfurt Office;;Access Point;
+www.wikipedia.org;10.0.19.249;WZP18976UHZ;N9K-C93180YC-FX;Prague POP;Rack B8;Switch;firmware update pending
+www.wiktionary.org;10.0.19.252;FDO1322P0AL;C9300-24T;Salzburg Office;Lobby;Switch;
+www.windtre.it;10.0.19.255;JMX2563GQ29;C9500-24Y4C;Munich DC;Cage 4;Switch;
+www.wireguard.com;10.0.20.2;FOC21630T7J;AIR-AP2802I;Salzburg Office;Rack B8;Access Point;
+www.wireshark.org;10.0.20.5;JMX13692ST4;C9120AXI-E;Klagenfurt Office;Rack C7;Access Point;replace in Q2
+www.wix.com;10.0.20.8;JMX2726ESVD;UCSC-C220-M5;Vienna DC1;Floor 6 IDF;Server;
+www.wm.com;10.0.20.11;JMX28288DG3;C8300-1N1S;Munich DC;Rack A1;Router;
+www.wordpress.com;10.0.20.14;FOC1134ADZT;C9200L-24P;Vienna DC2;Floor 10 IDF;Switch;
+www.workday.com;10.0.20.17;FOC25158CNU;ASR1001-X;;Cage 8;Router;
+www.worldbank.org;10.0.20.20;WZP2099TRY6;PA-3220;Munich DC;Cage 12;Firewall;
+www.worldpay.com;10.0.20.23;FCW2740D5SE;F5 BIG-IP i5800;Zurich POP;Rack C5;Load Balancer;
+www.wsj.com;10.0.20.26;WZP22278W8L;C9200L-24P;Vienna DC2;Rack C9;Switch;
+www.wur.nl;10.0.20.29;WZP2730CGLW;;Zurich POP;Rack A9;Firewall;
+www.wyoming.gov;10.0.20.32;FDO1971A166;UCSC-C220-M5;Zurich POP;Room 10;Server;
+www.xbox.com;10.0.20.35;FCW2706UPA1;PowerEdge R650;Zurich POP;Rack B4;Server;
+www.xerox.com;10.0.20.38;FDO1677XCV0;FPR2110;Vienna DC1;Rack A7;Firewall;
+www.xiaomi.com;10.0.20.41;JMX1437RLWH;N9K-C93180YC-FX;Innsbruck Branch;Rack B6;Switch;
+www.yahoo.co.jp;10.0.20.44;FOC2453EN5Z;FPR2110;Vienna DC2;Floor 12 IDF;Firewall;
+www.yale.edu;10.0.20.47;FCW16025EX2;PA-3220;Prague POP;Rack C9;Firewall;
+www.yamaha.com;10.0.20.50;FOC1162LLRP;C9300-48P;Graz HQ;Cage 9;Switch;
+www.yandex.com;10.0.20.53;JMX16019BJ0;UCSC-C220-M5;Graz HQ;Floor 1 IDF;Server;
+www.yelp.com;10.0.20.56;WZP12106CV4;N9K-C93180YC-FX;Vienna DC1;Rack B2;Switch;
+www.york.ac.uk;10.0.20.59;WZP2784D504;N9K-C93180YC-FX;Graz HQ;Room 6;Switch;
+www.youtube.com;10.0.20.62;FOC1220R2W1;C9120AXI-E;Vienna DC2;Room 11;Access Point;
+www.zabbix.com;10.0.20.65;WZP2317E100;C9500-24Y4C;Linz POP;Room 11;Switch;
+www.zain.com;10.0.20.68;JMX1197ZW1H;N9K-C93180YC-FX;Linz POP;Cage 11;Switch;
+www.zara.com;10.0.20.71;FCW2382SBGF;C9120AXI-E;Linz POP;Cage 4;Access Point;
+www.zdf.de;10.0.20.74;FOC28129VJ6;C9200L-24P;Bratislava Office;Rack B6;Switch;
+www.zdnet.com;10.0.20.77;FDO19204RMY;UCSC-C220-M5;Graz HQ;Room 9;Server;spare PSU missing
+www.zeit.de;10.0.20.80;FDO13871VQ5;C9300-24T;Munich DC;Floor 6 IDF;Switch;
+www.zendesk.com;10.0.20.83;FDO2077X6PJ;C9200L-24P;Innsbruck Branch;Cage 2;Switch;
+www.zillow.com;10.0.20.86;WZP2091NG1H;N9K-C93180YC-FX;Bratislava Office;Rack C6;Switch;
+www.zimbabwe.gov.zw;10.0.20.89;FOC2168BYS1;PA-3220;Linz POP;Rack A5;Firewall;
+www.zju.edu.cn;10.0.20.92;JMX2969BCJH;C9130AXE;Innsbruck Branch;Cage 4;Access Point;
+www.zoho.com;10.0.20.95;FOC27000RPW;C9130AXE;Zurich POP;Rack A3;Access Point;
+www.zoom.us;10.0.20.98;JMX11581ZRW;C9130AXE;Linz POP;Cage 5;Access Point;spare PSU missing
+www.zte.com.cn;10.0.20.101;FOC15388UXA;;Bratislava Office;Rack C1;Access Point;renewed 2025
+www.zurich.com;10.0.20.104;JMX2117LFRZ;ASA5516-X;Innsbruck Branch;Room 1;Firewall;PoE budget at 90%
+wy.gov;10.0.20.107;FDO1614MQN3;ASR1001-X;Zurich POP;Lobby;Router;
+yle.fi;10.0.20.110;FDO17797KYP;ProLiant DL380 G10;Graz HQ;Rack B12;Server;
+yomiuri.co.jp;10.0.20.113;FDO2552MJXP;PowerEdge R650;Frankfurt DC;Floor 5 IDF;Server;EoL 2027
+zdf.de;10.0.20.116;FDO2487760W;NetScaler MPX 8200;Zurich POP;Room 4;Load Balancer;
+zigbee2mqtt.io;10.0.20.119;FOC2971JKW1;C8300-1N1S;Vienna DC2;Rack B9;Router;EoL 2027
+zipkin.io;10.0.20.122;WZP2009JFPE;PA-3220;Klagenfurt Office;Room 4;Firewall;spare PSU missing
+zookeeper.apache.org;10.0.20.125;FDO12039W0J;F5 BIG-IP i5800;Munich DC;Rack A6;Load Balancer;

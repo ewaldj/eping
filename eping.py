@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.70'
+VERSION = '3.78'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -152,6 +152,8 @@ WEB_MAX_UPLOAD     = 16 * 1024 * 1024   # max size of an uploaded host file
 
 import os
 import re
+import array
+import collections
 import sys
 import html
 import csv
@@ -648,6 +650,8 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
             entry[5] = existing[5]   # changes
             entry[6] = existing[6]   # change_ts
         host_state[new] = entry
+    if old in host_hist:
+        host_hist[new] = host_hist.pop(old)
     if old in up_seen:
         up_seen.discard(old)
         up_seen.add(new)
@@ -1106,23 +1110,39 @@ def match_host(pattern, name, ip=''):
     return bool(meta) and any(v and pattern.search(v) for v in meta)
 
 # ---- ADV FILTER: display-only filter on the inventory fields (see host_meta) ----
-# One exact value per field, fields ANDed, applied on top of the view and the [M] regex.
+# Excel-style: per field a set of values with mode 'in' (show only these) or 'out'
+# (hide these). OR within a field, AND across fields, applied on top of the view and
+# the [M] regex.
 ADV_FIELDS = (('model', 'Model', 2), ('location', 'Location', 3),
               ('sysloc', 'sysLocation', 4), ('type', 'Type', 5), ('comment', 'Comment', 6))
-ADV_NONE   = '\x01none'   # wanted value: hosts without a value in that field
-adv_filter = {}           # field key -> wanted value (or ADV_NONE); empty = filter off
+ADV_NONE   = '\x01none'   # member of a value set: hosts without a value in that field
+# field key -> (mode, frozenset(values)); mode 'in' | 'out'; empty dict = filter off
+adv_filter = {}
 
 def _adv_ok(meta, sel, skip=None):
-    """True if the inventory values 'meta' (or None) fit every wanted field in
-    'sel' (the field 'skip' is not checked)."""
+    """True if the inventory values 'meta' (or None) fit every field selection in
+    'sel' ({key: (mode, values)}); the field 'skip' is not checked."""
     for key, _label, idx in ADV_FIELDS:
         want = sel.get(key)
         if want is None or key == skip:
             continue
+        mode, values = want
         have = meta[idx] if meta else ''
-        if (have != '') if want == ADV_NONE else (have != want):
+        hit = (ADV_NONE if have == '' else have) in values
+        if hit != (mode == 'in'):
             return False
     return True
+
+def _wrap_footer(text, width):
+    """Wrap a key-help line into lines of at most 'width' chars (split at spaces)."""
+    lines, cur = [], ''
+    for w in text.split(' '):
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = (cur + ' ' + w) if cur else w
+    return lines + [cur] if cur else lines
 
 def adv_match(name, ip=''):
     """True if the host passes the ADV FILTER (always True while it is off)."""
@@ -1134,12 +1154,40 @@ def host_visible(pattern, name, ip=''):
     """[M] regex (pattern, may be None) AND ADV FILTER."""
     return (pattern is None or match_host(pattern, name, ip)) and adv_match(name, ip)
 
+def adv_parse(d):
+    """Normalise a selection {field: {"mode": in|out, "values": [..]}} (or the old
+    {field: "value"}) into {key: (mode, frozenset)}; unknown/empty entries are dropped."""
+    known = {k for k, _l, _i in ADV_FIELDS}
+    out = {}
+    if not isinstance(d, dict):
+        return out
+    for k, v in d.items():
+        if k not in known:
+            continue
+        if isinstance(v, str):
+            mode, vals = 'in', [v]
+        elif isinstance(v, dict):
+            mode, vals = v.get('mode', 'in'), v.get('values')
+        else:
+            continue
+        if mode not in ('in', 'out') or not isinstance(vals, list):
+            continue
+        vals = frozenset(x for x in vals if isinstance(x, str) and x != '')
+        if vals:
+            out[k] = (mode, vals)
+    return out
+
+def adv_export(sel=None):
+    """JSON-serialisable form of a selection (default: the active filter)."""
+    sel = adv_filter if sel is None else sel
+    return {k: {'mode': m, 'values': sorted(v)} for k, (m, v) in sel.items()}
+
 def adv_values(hosts, selection=None):
     """Selectable values per ADV FILTER field over the given host entries:
     {key: {'values': [[value, host_count], ...] sorted, 'empty': hosts_without}}.
-    With a selection ({field: wanted}) each field only offers what is still possible
-    given the OTHER fields' selection (its own selection does not narrow its list).
-    Fields without any value in any host are left out."""
+    With a selection ({key: (mode, values)}) each field only offers what is still
+    possible given the OTHER fields' selection (its own selection does not narrow its
+    list). Fields without any value in any host are left out."""
     sel   = selection or {}
     metas = [host_meta.get(h) for h in hosts]
     out = {}
@@ -1161,12 +1209,18 @@ def adv_values(hosts, selection=None):
     return out
 
 def adv_text():
-    """Short description of the active ADV FILTER, e.g. 'Model=C9300, Type=(empty)'."""
-    return ', '.join('%s=%s' % (label, '(empty)' if adv_filter[k] == ADV_NONE else adv_filter[k])
-                     for k, label, _i in ADV_FIELDS if k in adv_filter)
+    """Short description of the active ADV FILTER, e.g. 'Model in (A, B), Type not in (AP)'."""
+    parts = []
+    for k, label, _i in ADV_FIELDS:
+        if k in adv_filter:
+            mode, vals = adv_filter[k]
+            names = sorted(('(empty)' if v == ADV_NONE else v) for v in vals)
+            shown = ', '.join(names[:3]) + (', +%d' % (len(names) - 3) if len(names) > 3 else '')
+            parts.append('%s %s (%s)' % (label, 'in' if mode == 'in' else 'not in', shown))
+    return ', '.join(parts)
 
 def adv_filter_set(text):
-    """Replace the ADV FILTER from a JSON object {field: value} ('{}' = off).
+    """Replace the ADV FILTER from a JSON object ('{}' = off), see adv_parse().
     Returns an error text, or '' on success."""
     try:
         d = json.loads(text) if text.strip() else {}
@@ -1174,8 +1228,7 @@ def adv_filter_set(text):
         return 'invalid filter'
     if not isinstance(d, dict):
         return 'invalid filter'
-    known = {k for k, _l, _i in ADV_FIELDS}
-    new = {k: v for k, v in d.items() if k in known and isinstance(v, str) and v != ''}
+    new = adv_parse(d)
     adv_filter.clear()
     adv_filter.update(new)
     return ''
@@ -1520,6 +1573,53 @@ _CSV_META_COLS = ('hostname', 'serial number', 'model', 'location', 'syslocation
 _EMPTY_META    = ('',) * len(_CSV_META_COLS)
 host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..16)
 host_csv_ip    = {}   # host entry -> its 'IP Address' from the inventory CSV (SAVE HOSTS FILE)
+host_state     = {}   # host entry -> state row (rebound by the main block at startup)
+
+# ---- change history per host (mouse-over popup) ----
+# One uint32 per state change: bits 31..4 seconds since HIST_T0, bits 3..2 old state,
+# bits 1..0 new state (0 UP, 1 DOWN, 2 NO-DNS, 3 other). The array of a host is created
+# on its first change and keeps the last HIST_MAX changes (~4 bytes per change).
+HIST_MAX   = 50
+HIST_T0    = datetime.datetime.now().replace(microsecond=0)
+HIST_NAMES = ('UP', 'DOWN', 'NO-DNS', '?')
+host_hist  = {}        # host entry -> array('I')
+comment_hist = collections.deque(maxlen=HIST_MAX)   # (naive local datetime, text) of the log comments
+
+def comment_add(when, text):
+    """Remember a log comment (COMMENT / [T]) for the history in the host popup."""
+    comment_hist.append((when, str(text)[:256]))
+
+def _state_code(s):
+    s = str(s)
+    return 0 if 'UP' in s else (2 if 'NO-DNS' in s else (1 if 'DOWN' in s else 3))
+
+def hist_add(name, when, old_state, new_state):
+    """Record one state change of host 'name' ('when' = naive local datetime)."""
+    secs = int((when - HIST_T0).total_seconds())
+    if secs < 0:
+        secs = 0
+    a = host_hist.get(name)
+    if a is None:
+        a = host_hist[name] = array.array('I')
+    a.append(((secs & 0xFFFFFFF) << 4) | (_state_code(old_state) << 2) | _state_code(new_state))
+    if len(a) > HIST_MAX:
+        del a[0]
+
+def hist_list(name, tz_offset=0):
+    """History of host 'name', newest first: [[time string, old, new], ...] for state
+    changes and [time string, '#', text] for log comments (the global comments from
+    the first retained change on, all of them if the host never changed)."""
+    ev = []
+    for v in reversed(host_hist.get(name) or ()):
+        ev.append((v >> 4, [HIST_NAMES[(v >> 2) & 3], HIST_NAMES[v & 3]]))
+    first = ev[-1][0] if ev else None               # oldest retained change
+    for when, text in reversed(comment_hist):
+        secs = int((when - HIST_T0).total_seconds())
+        if first is None or secs >= first:
+            ev.append((secs, ['#', text]))
+    ev.sort(key=lambda e: e[0], reverse=True)       # stable: same second keeps change before comment
+    return [[(HIST_T0 + datetime.timedelta(seconds=s, hours=tz_offset)).strftime('%Y-%m-%d %H:%M:%S')] + x
+            for s, x in ev]
 
 def _inventory_header(line):
     """(delimiter, lower-cased column names) if line is an inventory CSV header
@@ -1871,6 +1971,11 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
             if old_state != new_state:
                 changes  += 1
                 change_ts = now_str
+                try:
+                    _when = datetime.datetime.strptime(timestamp, "%d/%m/%Y %H:%M:%S")
+                except (ValueError, TypeError):
+                    _when = datetime.datetime.now()
+                hist_add(hostname, _when, old_state, new_state)
         else:
             old_state = new_state
             changes   = 0
@@ -1908,6 +2013,9 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
                                    or _EMPTY_META))
     if log_fh is not None:
         log_fh.close()
+    if host_hist:                                   # drop the history of deleted hosts
+        for _h in [h for h in host_hist if h not in host_state]:
+            del host_hist[_h]
 
 def neutralize_csv_formula(text):
     """Prefix a leading = + @ (and tab/CR) with a quote so a spreadsheet does not
@@ -1939,6 +2047,7 @@ def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offse
             csv.writer(f).writerow(logdata)
     except OSError:
         return False
+    comment_add(ts - datetime.timedelta(hours=tz_offset or 0), comment_text)
     return True
 
 def write_log_info(logging_enabled, logfile_file_name, info_text, tz_offset=0):
@@ -2368,6 +2477,30 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   /* ---- confirmation modal (RESET LOGGING) ---- */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);
                  display:flex;align-items:center;justify-content:center;z-index:50}
+  #hostTip{position:fixed;z-index:60;display:none;pointer-events:none;max-width:420px;
+    background:var(--panel);border:1px solid var(--ctrl-line);border-radius:5px;padding:7px 10px;
+    box-shadow:0 4px 14px rgba(0,0,0,.55);font-size:12px;line-height:1.45;max-height:calc(100vh - 12px);overflow:auto}
+  #hostTip .h{font-weight:700;font-size:13px;margin-bottom:3px;word-break:break-all}
+  #hostTip table{border-collapse:collapse}
+  #hostTip td{padding:0 0 0 0;vertical-align:top}
+  #hostTip td:first-child{color:var(--dim);padding-right:12px;white-space:nowrap}
+  #hostTip td:last-child{word-break:break-word}
+  #hostTip tr.isep td{border-top:1px solid var(--line);padding-top:3px}
+  #hostTip .up{color:var(--up)} #hostTip .down{color:var(--down)}
+  #hostTip.pin{pointer-events:auto;user-select:text;-webkit-user-select:text;border-color:var(--acc)}
+  #hostTip .hist{margin-top:4px;border-top:1px solid var(--line);padding-top:3px}
+  #hostTip .hist .t{color:var(--dim)}
+  #hostTip.pin .hist .list{max-height:200px;overflow:auto;padding-right:6px}
+  #hostTip .cm{color:var(--acc);word-break:break-word}
+  #hostTip .cm .t{color:var(--dim)}
+  #hostTip .more{color:var(--dim);font-size:11px}
+  #hostTip .top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+  #hostTip .bar{flex:0 0 auto;margin:-2px -4px 0 0;user-select:none;-webkit-user-select:none;white-space:nowrap}
+  #hostTip .bar span{display:inline-block;margin-left:4px;padding:0 6px;border:1px solid var(--ctrl-line);
+    border-radius:3px;color:var(--fg);cursor:pointer;font-size:11px;line-height:16px}
+  #hostTip .bar span:hover{border-color:var(--acc);color:var(--acc)}
+  #hostTip .bar span.dng{color:var(--down);border-color:var(--down)}
+  #hostTip .bar span.dng:hover{background:var(--down);color:var(--bg)}
   .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:5px;
              padding:16px 20px;min-width:280px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,.5)}
   .modal-box h3{margin:0 0 8px;font-size:14px;letter-spacing:.5px;color:var(--fg)}
@@ -2385,9 +2518,19 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box.wide::-webkit-scrollbar-track{background:var(--panel)}
   .modal-box.wide::-webkit-scrollbar-thumb{background:var(--ctrl-line);border-radius:6px}
   .modal-box.xwide{width:900px}
-  .advf-row{display:flex;align-items:center;gap:10px;margin:0 0 10px}
-  .advf-row label{flex:0 0 110px;font-size:12px;color:var(--fg);font-weight:700}
-  .advf-row select{flex:1 1 auto;min-width:0;width:100%}
+  #advFilterRows{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:0 0 14px}
+  .advf-blk{display:flex;flex-direction:column;gap:6px;min-width:0}
+  .advf-head{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;font-weight:700}
+  .advf-cnt{color:var(--dim);font-weight:400;font-size:11px}
+  .advf-q{width:100%;box-sizing:border-box}
+  .advf-bar{display:flex;gap:6px}
+  .advf-bar button{flex:1 1 auto;padding:3px 6px;font-size:11px;white-space:nowrap}
+  .advf-list{height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:3px;padding:3px 0}
+  .advf-item{display:flex;align-items:center;gap:6px;padding:1px 6px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .advf-item:hover{background:var(--line)}
+  .advf-item.zero{color:var(--dim)}
+  .advf-item span{overflow:hidden;text-overflow:ellipsis}
+  .advf-more{padding:3px 6px;font-size:11px;color:var(--dim)}
   .adv-row{display:flex;flex-direction:column;gap:3px;margin:0 0 12px}
   .adv-row label{font-size:11px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
   .adv-row label .adv-desc{color:var(--dim);font-weight:400;letter-spacing:normal}
@@ -2650,10 +2793,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="hostTip"></div>
   <div id="advFilterModal" class="modal-overlay" style="display:none">
-    <div class="modal-box wide">
+    <div class="modal-box wide xwide">
       <h3>ADV FILTER</h3>
-      <p>Display filter on the inventory fields of the hosts .csv. One value per field, fields are combined with AND, and with the view and the display filter. Every host keeps being pinged.</p>
+      <p>Display filter on the inventory fields of the hosts .csv, like the Excel filter: check values per field and choose SHOW ONLY CHECKED or HIDE CHECKED. Values of one field are combined with OR, fields with AND, and with the view and the display filter. Nothing checked = field not filtered. Every host keeps being pinged.</p>
       <div id="advFilterRows"></div>
       <div class="modal-buttons">
         <button id="modalBtnAdvFApply">APPLY</button>
@@ -3617,30 +3761,100 @@ function advOptionsOpen(){ return advOptionsModal.style.display !== 'none'; }
 var advFilterModal = document.getElementById('advFilterModal');
 var lastAdv = {values: {}, filter: {}};     // latest snapshot from the server, see poll()
 var ADV_NONE = '\u0001none';
+var ADV_MAXROWS = 500;                       // rendered rows per list, rest via search
 var ADV_FIELD_UI = [['model', 'Model'], ['location', 'Location'], ['sysloc', 'sysLocation'],
                     ['type', 'Type'], ['comment', 'Comment']];
-// (re)fill one drop-down with the given choices, keeping 'cur' selected - a
-// selection that is no longer possible stays visible with (0)
-function fillAdvSelect(sel, v, cur){
-  var add = function(val, text){
-    var o = document.createElement('option');
-    o.value = val; o.textContent = text; sel.appendChild(o);
-  };
-  sel.innerHTML = '';
-  add('', 'ALL');
-  v.values.forEach(function(x){ add(x[0], x[0] + '  (' + x[1] + ')'); });
-  if(v.empty) add(ADV_NONE, '(empty)  (' + v.empty + ')');
-  if(cur !== undefined && cur !== ''){
-    var known = false;
-    for(var i = 0; i < sel.options.length; i++) if(sel.options[i].value === cur) known = true;
-    if(!known) add(cur, cur + '  (0)');
-    sel.value = cur;
-  }
+var advDraft = {};      // key -> {mode: 'in'|'out', sel: {value: true}}
+var advView  = {};      // key -> {values: [[v, n], ...], empty: n} as currently offered
+var advSearch = {};     // key -> search text
+// Excel-style: per field check values; mode 'in' = show only the checked ones,
+// 'out' = hide the checked ones; OR within a field, AND across fields.
+function advDraftFrom(filter){
+  var d = {};
+  Object.keys(filter || {}).forEach(function(k){
+    var f = filter[k], sel = {};
+    (f.values || []).forEach(function(v){ sel[v] = true; });
+    d[k] = {mode: f.mode === 'out' ? 'out' : 'in', sel: sel};
+  });
+  return d;
 }
-// each drop-down only offers what is still possible with the OTHER drop-downs'
-// choice - asks the server (draft selection, nothing applied yet)
+function advFilterSelection(){
+  var o = {};
+  Object.keys(advDraft).forEach(function(k){
+    var vals = Object.keys(advDraft[k].sel);
+    if(vals.length) o[k] = {mode: advDraft[k].mode, values: vals};
+  });
+  return o;
+}
+function advDraftOf(k){
+  if(!advDraft[k]) advDraft[k] = {mode: 'in', sel: {}};
+  return advDraft[k];
+}
+// one list entry: label, count, key (value or ADV_NONE)
+function advEntries(k){
+  var v = advView[k] || {values: [], empty: 0}, out = [], seen = {};
+  v.values.forEach(function(x){ out.push([x[0], x[0], x[1]]); seen[x[0]] = true; });
+  if(v.empty){ out.push([ADV_NONE, '(empty)', v.empty]); seen[ADV_NONE] = true; }
+  // a checked value that is no longer possible stays visible with (0)
+  Object.keys(advDraftOf(k).sel).forEach(function(x){
+    if(!seen[x]) out.push([x, x === ADV_NONE ? '(empty)' : x, 0]);
+  });
+  return out;
+}
+function advRenderList(k){
+  var box = document.getElementById('advl_' + k);
+  if(!box) return;
+  var dr = advDraftOf(k), q = (advSearch[k] || '').toLowerCase();
+  var ents = advEntries(k).filter(function(e){ return !q || e[1].toLowerCase().indexOf(q) >= 0; });
+  box.innerHTML = '';
+  ents.slice(0, ADV_MAXROWS).forEach(function(e){
+    var lab = document.createElement('label');
+    lab.className = 'advf-item' + (e[2] === 0 ? ' zero' : '');
+    var cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = !!dr.sel[e[0]];
+    cb.onchange = function(){
+      if(cb.checked) dr.sel[e[0]] = true; else delete dr.sel[e[0]];
+      advChanged(k);
+    };
+    var t = document.createElement('span');
+    t.textContent = e[1] + '  (' + e[2] + ')';
+    lab.appendChild(cb); lab.appendChild(t); box.appendChild(lab);
+  });
+  if(ents.length > ADV_MAXROWS){
+    var more = document.createElement('div');
+    more.className = 'advf-more';
+    more.textContent = '+ ' + (ents.length - ADV_MAXROWS) + ' more - use the search';
+    box.appendChild(more);
+  }
+  if(!ents.length){
+    var none = document.createElement('div');
+    none.className = 'advf-more';
+    none.textContent = 'no values';
+    box.appendChild(none);
+  }
+  advRenderHead(k);
+}
+function advRenderHead(k){
+  var dr = advDraftOf(k), n = Object.keys(dr.sel).length;
+  var m = document.getElementById('advm_' + k), c = document.getElementById('advc_' + k);
+  if(m){ m.textContent = dr.mode === 'in' ? 'SHOW ONLY CHECKED' : 'HIDE CHECKED';
+         m.className = dr.mode === 'out' ? 'danger' : ''; }
+  if(c) c.textContent = n ? '(' + n + ' ' + (dr.mode === 'in' ? 'shown' : 'hidden') + ')' : '';
+}
+function advSetVisible(k, on){        // ALL / NONE act on the entries matching the search
+  var dr = advDraftOf(k), q = (advSearch[k] || '').toLowerCase();
+  advEntries(k).forEach(function(e){
+    if(q && e[1].toLowerCase().indexOf(q) < 0) return;
+    if(on) dr.sel[e[0]] = true; else delete dr.sel[e[0]];
+  });
+  advChanged(k);
+}
+// each list only offers what is still possible with the OTHER lists' selection -
+// asks the server (draft selection, nothing applied yet)
 var advReqSeq = 0;
-function advFilterChanged(changedKey){
+function advChanged(changedKey){
+  advRenderList(changedKey);
   var selection = advFilterSelection(), seq = ++advReqSeq;
   fetch('api/advvalues', {method: 'POST', headers: {'Content-Type': 'application/json'},
                           body: JSON.stringify({filter: selection})})
@@ -3648,44 +3862,55 @@ function advFilterChanged(changedKey){
     .then(function(d){
       if(seq !== advReqSeq || !d || !d.values) return;     // a newer change is on its way
       ADV_FIELD_UI.forEach(function(f){
-        var sel = document.getElementById('advf_' + f[0]);
-        if(sel && f[0] !== changedKey && d.values[f[0]]) fillAdvSelect(sel, d.values[f[0]], selection[f[0]]);
+        if(f[0] !== changedKey && d.values[f[0]]){ advView[f[0]] = d.values[f[0]]; advRenderList(f[0]); }
       });
     }).catch(function(){});
 }
 function populateAdvFilter(){
   var c = document.getElementById('advFilterRows');
   c.innerHTML = '';
+  advDraft = advDraftFrom(lastAdv.filter);
+  advView = {}; advSearch = {};
   var any = false;
   ADV_FIELD_UI.forEach(function(f){
-    var v = lastAdv.values[f[0]];
-    if(!v) return;
+    var k = f[0];
+    if(!lastAdv.values[k]) return;
     any = true;
-    var row = document.createElement('div');
-    row.className = 'advf-row';
-    var lab = document.createElement('label');
-    lab.textContent = f[1];
-    lab.htmlFor = 'advf_' + f[0];
-    var sel = document.createElement('select');
-    sel.id = 'advf_' + f[0];
-    sel.setAttribute('data-key', f[0]);
-    fillAdvSelect(sel, v, lastAdv.filter[f[0]]);
-    sel.onchange = function(){ advFilterChanged(f[0]); };
-    row.appendChild(lab); row.appendChild(sel); c.appendChild(row);
+    advView[k] = lastAdv.values[k];
+    var blk = document.createElement('div');
+    blk.className = 'advf-blk';
+    var h = document.createElement('div');
+    h.className = 'advf-head';
+    h.innerHTML = '<b></b><span id="advc_' + k + '" class="advf-cnt"></span>';
+    h.firstChild.textContent = f[1];
+    var q = document.createElement('input');
+    q.type = 'text'; q.placeholder = 'search ...'; q.className = 'advf-q';
+    q.oninput = function(){ advSearch[k] = q.value; advRenderList(k); };
+    var bar = document.createElement('div');
+    bar.className = 'advf-bar';
+    var bAll = document.createElement('button'); bAll.textContent = 'ALL';
+    bAll.title = 'check all listed (respects the search)';
+    bAll.onclick = function(){ advSetVisible(k, true); };
+    var bNone = document.createElement('button'); bNone.textContent = 'NONE';
+    bNone.title = 'uncheck all listed (respects the search)';
+    bNone.onclick = function(){ advSetVisible(k, false); };
+    var bMode = document.createElement('button'); bMode.id = 'advm_' + k;
+    bMode.title = 'toggle: show only the checked values / hide the checked values';
+    bMode.onclick = function(){
+      var dr = advDraftOf(k); dr.mode = dr.mode === 'in' ? 'out' : 'in'; advChanged(k);
+    };
+    bar.appendChild(bAll); bar.appendChild(bNone); bar.appendChild(bMode);
+    var list = document.createElement('div');
+    list.id = 'advl_' + k; list.className = 'advf-list';
+    blk.appendChild(h); blk.appendChild(q); blk.appendChild(bar); blk.appendChild(list);
+    c.appendChild(blk);
+    advRenderList(k);
   });
   if(!any){
     c.innerHTML = '<p>No inventory values loaded - add a hosts .csv file (header with Hostname and IP Address).</p>';
   }
   document.getElementById('modalBtnAdvFApply').disabled = !any;
   document.getElementById('modalBtnAdvFReset').disabled = !any;
-}
-function advFilterSelection(){
-  var o = {};
-  var sels = document.querySelectorAll('#advFilterRows select');
-  for(var i = 0; i < sels.length; i++){
-    if(sels[i].value !== '') o[sels[i].getAttribute('data-key')] = sels[i].value;
-  }
-  return o;
 }
 function openAdvFilter(){ populateAdvFilter(); advFilterModal.style.display = 'flex'; }
 function closeAdvFilter(){ advFilterModal.style.display = 'none'; }
@@ -3697,10 +3922,8 @@ document.getElementById('modalBtnAdvFApply').onclick = function(){
   closeAdvFilter();
 };
 document.getElementById('modalBtnAdvFReset').onclick = function(){
-  var sels = document.querySelectorAll('#advFilterRows select');
-  for(var i = 0; i < sels.length; i++) sels[i].value = '';
-  advFilterChanged('');            // full lists again
   post('adv_filter', '{}');
+  closeAdvFilter();
 };
 
 var stoppedModal        = document.getElementById('stoppedModal');
@@ -4266,7 +4489,7 @@ function headHTML(){
 function rowHTML(o){
   var isUp = o.state.indexOf('UP') !== -1;
   return '<tr class="'+(isUp?'up':'down')+'">'
-    +'<td class="host" title="'+esc(o.host)+'">'+esc(o.host)+'</td>'
+    +'<td class="host">'+esc(o.host)+'</td>'
     +'<td class="state '+(isUp?'up':'down')+'">'+esc(String(o.state).trim())+'</td>'
     +'<td class="rtt">'+esc(o.rtt)+'</td>'
     +'<td class="chts">'+esc(o.chts)+'</td>'
@@ -4352,6 +4575,158 @@ function render(rows){
     fits ? '' : 'SCROLL RIGHT FOR MORE - reduce font size to fit';
   setFoot('');
 }
+
+/* ---------------- host details popup (mouse over a host row) ---------------- */
+/* one small GET api/host?name=... per hovered host (after a short delay), cached until
+   the next host-table version - the polled status payload does not carry these data */
+var tipPinned = false, tipData = null, tipName = '', tipTimer = null, tipCache = {}, tipCacheSeq = -1, tipX = 0, tipY = 0, tipReq = 0;
+function tipBox(){ return document.getElementById('hostTip'); }
+function fmtDur(s){
+  s = Math.floor(s);
+  var d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60), x = s%60;
+  return (d ? d+'d ' : '') + ((d||h) ? h+'h ' : '') + ((d||h||m) ? m+'m ' : '') + x + 's';
+}
+function tipRowsOf(d){
+  var up = d.state.indexOf('UP') !== -1;
+  var r = [];
+  function add(k, v, cls, sep){
+    if(v === '' || v === null || v === undefined) return;
+    r.push({k: k, v: String(v), cls: cls || '', sep: !!sep});
+  }
+  add('state', d.state, up ? 'up' : 'down');
+  if(d.changes > 0) add('previous', d.prev);
+  if(d.ip && d.ip !== d.host) add('address', d.ip);
+  add('rtt (ms)', d.rtt && d.rtt.indexOf('-') !== 0 ? d.rtt : '');
+  add('last check', d.last_check);
+  add('changes', d.changes > 0 ? String(d.changes) : '');
+  add('last change', d.change_ts ? d.change_ts + (d.since_s !== null ? '  (' + fmtDur(d.since_s) + ' ago)' : '') : '');
+  var inv = [['hostname', d.csv_hostname], ['ip (csv)', d.csv_ip], ['serial', d.serial], ['model', d.model],
+             ['location', d.location], ['sysLocation', d.sysloc], ['type', d.type], ['comment', d.comment]];
+  var first = true;
+  for(var i = 0; i < inv.length; i++){
+    if(inv[i][1] !== '' && inv[i][1] !== d.host){ add(inv[i][0], inv[i][1], '', first); first = false; }
+  }
+  return r;
+}
+function tipHistHTML(d, pinned){
+  var h = d.hist || [];
+  if(!h.length) return '';
+  var show = pinned ? h : h.slice(0, 6), s = [];
+  var nch = 0;
+  for(var k = 0; k < h.length; k++) if(h[k][1] !== '#') nch++;
+  for(var i = 0; i < show.length; i++){
+    if(show[i][1] === '#'){
+      s.push('<div class="cm"><span class="t">'+esc(show[i][0])+'</span>  # '+esc(show[i][2])+'</div>');
+    } else {
+      s.push('<div><span class="t">'+esc(show[i][0])+'</span>  '+esc(show[i][1])+' &rarr; <span class="'
+        +(show[i][2].indexOf('UP') !== -1 ? 'up' : 'down')+'">'+esc(show[i][2])+'</span></div>');
+    }
+  }
+  var more = (!pinned && h.length > show.length)
+    ? '<div class="more">... '+(h.length - show.length)+' more - click the host to keep this window</div>' : '';
+  return '<div class="hist"><div class="t">history ('+nch+' changes'+(h.length > nch ? ' and comments' : '')+', newest first)</div><div class="list">'
+    + s.join('') + '</div>' + more + '</div>';
+}
+function tipHTML(d, pinned){
+  var rows = tipRowsOf(d), s = [];
+  for(var i = 0; i < rows.length; i++){
+    var o = rows[i];
+    s.push('<tr'+(o.sep?' class="isep"':'')+'><td>'+esc(o.k)+'</td><td'+(o.cls?' class="'+o.cls+'"':'')+'>'+esc(o.v)+'</td></tr>');
+  }
+  return '<div class="top"><div class="h">'+esc(d.host)+'</div>'
+    + (pinned ? '<div class="bar">'+(isReadOnly ? '' : '<span id="tipDel" class="dng" title="remove this host (no confirmation)">DELETE</span>')+'<span id="tipCopy" title="copy all">COPY</span><span id="tipClose" title="close (ESC)">&times;</span></div>' : '')
+    + '</div><table>'+s.join('')+'</table>' + tipHistHTML(d, pinned);
+}
+function tipText(d){
+  var rows = tipRowsOf(d), s = ['host: ' + d.host];
+  for(var i = 0; i < rows.length; i++) s.push(rows[i].k + ': ' + rows[i].v);
+  var h = d.hist || [];
+  if(h.length){
+    s.push('history (newest first):');
+    for(var j = 0; j < h.length; j++)
+      s.push('  ' + h[j][0] + '  ' + (h[j][1] === '#' ? '# ' + h[j][2] : h[j][1] + ' -> ' + h[j][2]));
+  }
+  return s.join('\n');
+}
+function copyText(txt){
+  function fallback(){
+    var ta = document.createElement('textarea');
+    ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand('copy'); }catch(e){}
+    document.body.removeChild(ta);
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).catch(fallback);
+  } else { fallback(); }
+}
+function tipPlace(){
+  var el = tipBox(), w = el.offsetWidth, h = el.offsetHeight;
+  var x = tipX + 16, y = tipY + 16;
+  if(x + w > window.innerWidth - 4) x = Math.max(4, tipX - w - 12);
+  if(y + h > window.innerHeight - 4) y = Math.max(4, window.innerHeight - h - 4);
+  el.style.left = x + 'px'; el.style.top = y + 'px';
+}
+function tipShow(d, pin){
+  var el = tipBox();
+  if(pin) tipPinned = true;
+  tipData = d;
+  el.className = tipPinned ? 'pin' : '';
+  el.innerHTML = tipHTML(d, tipPinned); el.style.display = 'block'; tipPlace();
+}
+function tipHide(){
+  clearTimeout(tipTimer); tipName = ''; tipReq++; tipPinned = false; tipData = null;
+  var el = tipBox(); el.style.display = 'none'; el.className = '';
+}
+function tipLoad(name, pin){
+  if(tipCacheSeq !== lastRowsSeq){ tipCache = {}; tipCacheSeq = lastRowsSeq; }
+  if(tipCache[name]){ tipShow(tipCache[name], pin); return; }
+  var my = ++tipReq;
+  fetch('api/host?name=' + encodeURIComponent(name))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){
+      if(!d || my !== tipReq || tipName !== name) return;
+      tipCache[name] = d; tipShow(d, pin);
+    })
+    .catch(function(){});
+}
+function tipRowName(e){
+  var tr = e.target && e.target.closest ? e.target.closest('#grid tbody tr') : null;
+  var td = tr ? tr.querySelector('td.host') : null;
+  return td ? td.textContent : '';
+}
+document.addEventListener('mousemove', function(e){
+  tipX = e.clientX; tipY = e.clientY;
+  if(tipPinned) return;                      // a clicked popup stays where it is
+  var name = tipRowName(e);
+  if(!name){ if(tipName) tipHide(); return; }
+  if(name !== tipName){
+    tipHide(); tipName = name;
+    tipTimer = setTimeout(function(){ tipLoad(name, false); }, 350);
+  } else if(tipBox().style.display === 'block'){ tipPlace(); }
+});
+/* click on a host row pins the popup (text selectable, COPY button); click elsewhere or ESC closes it */
+document.addEventListener('mousedown', function(e){
+  if(e.target && e.target.closest && e.target.closest('#hostTip')) return;
+  var name = tipRowName(e);
+  if(name && e.button === 0){
+    clearTimeout(tipTimer); tipPinned = false; tipName = name; tipX = e.clientX; tipY = e.clientY;
+    tipLoad(name, true);
+  } else { tipHide(); }
+});
+document.addEventListener('click', function(e){
+  var c = e.target && e.target.closest ? e.target.closest('#tipCopy, #tipClose, #tipDel') : null;
+  if(!c) return;
+  if(c.id === 'tipClose'){ tipHide(); return; }
+  if(c.id === 'tipDel'){
+    if(tipData && !isReadOnly){ var h = tipData.host; tipCache = {}; tipHide(); post('del', h); }
+    return;
+  }
+  if(tipData){ copyText(tipText(tipData)); c.textContent = 'COPIED'; setTimeout(function(){ if(c) c.textContent = 'COPY'; }, 1200); }
+});
+document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && tipPinned) tipHide(); });
+document.addEventListener('mouseleave', function(){ if(!tipPinned) tipHide(); });
+document.addEventListener('scroll', function(){ if(!tipPinned) tipHide(); }, true);
 
 var rz;
 window.addEventListener('resize', function(){
@@ -4476,6 +4851,7 @@ function poll(){
     if(s.rows !== undefined){      // absent = unchanged since the last render
       render(s.rows);
       lastRowsSeq = s.rows_seq;
+      if(tipName && !tipPinned && tipBox().style.display === 'block') tipLoad(tipName, false);   // keep an open hover popup current
     }
 
     document.body.classList.remove('off');   // reachable again - undo a previous catch()
@@ -4946,6 +5322,17 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if path in ('/', '/index.html'):
             self._respond(200, 'text/html; charset=utf-8', WEB_INDEX_HTML)
+        elif path in ('/api/host', 'api/host'):
+            name = urllib.parse.parse_qs(self.path.partition('?')[2]).get('name', [''])[0][:256]
+            try:
+                _tz = int(web_state.get('options', {}).get('tz_offset', 0) or 0)
+            except (TypeError, ValueError):
+                _tz = 0
+            info = host_details(name, _tz) if name else None
+            if info is None:
+                self._respond(404, 'application/json', '{"error":"unknown host"}')
+            else:
+                self._respond(200, 'application/json', json.dumps(info))
         elif path in ('/api/status', 'api/status'):
             try:
                 client_rows_seq = int(urllib.parse.parse_qs(
@@ -5156,9 +5543,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 sel = json.loads(raw.decode('utf-8') or '{}').get('filter') or {}
             except Exception:
                 sel = {}
-            known = {k for k, _l, _i in ADV_FIELDS}
-            sel = {k: v for k, v in sel.items() if k in known and isinstance(v, str)} \
-                  if isinstance(sel, dict) else {}
+            sel = adv_parse(sel)
             with web_lock:
                 hosts = list(web_state.get('host_list_all') or [])
             self._respond(200, 'application/json; charset=utf-8',
@@ -5385,6 +5770,32 @@ def web_rows(display_list):
     return rows
 
 
+def host_details(name, tz_offset=0):
+    """All known data of one host for the web GUI mouse-over popup (GET /api/host),
+    or None if the host is unknown. Read-only, one host at a time - the polled
+    /api/status payload stays small."""
+    row = host_state.get(name)
+    if row is None:
+        return None
+    ip = row[8] if len(row) > 8 else ''
+    meta = host_meta.get(name) or (host_meta.get(ip) if ip else None) or _EMPTY_META
+    since = None
+    cts = row[6]
+    try:
+        if not isinstance(cts, datetime.datetime):
+            cts = datetime.datetime.strptime(str(cts), "%d/%m/%Y %H:%M:%S")
+        since = max(0, int((now_local(tz_offset) - cts).total_seconds()))
+    except (ValueError, TypeError):
+        pass
+    return {'host': name, 'ip': ip or '', 'state': str(row[1]).strip(),
+            'prev': str(row[4]).strip() if row[4] else '', 'last_check': str(row[2]),
+            'rtt': str(row[3]), 'changes': row[5], 'change_ts': str(row[6] or ''),
+            'since_s': since, 'csv_ip': host_csv_ip.get(name, ''),
+            'csv_hostname': meta[0], 'serial': meta[1], 'model': meta[2],
+            'location': meta[3], 'sysloc': meta[4], 'type': meta[5], 'comment': meta[6],
+            'hist': hist_list(name, tz_offset)}
+
+
 def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
                 filter_mode, learning_phase, learning_run, learning_total,
                 logging_enabled, logfile_file_name, update_available, tz_offset, message='',
@@ -5397,7 +5808,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
         web_state.update({
             'datetime'        : now.strftime("%d/%m/%Y %H:%M:%S"),
             'rows'            : rows,
-            'hosts'           : len(rows),
+            'hosts'           : hosts_up + hosts_down,   # whole view, not just the shown rows
             # DOWNLOAD - SHOWN HOSTS: only what's currently displayed (view, address
             # mode and display filter already applied via display_list/rows above);
             # ALL HOSTS: the full reference list, unfiltered.
@@ -5427,7 +5838,7 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
             'message'         : message,
             'scan_info'       : scan_info,
             'match_filter'    : match_filter,
-            'adv_filter'      : dict(adv_filter),
+            'adv_filter'      : adv_export(),
             'adv_values'      : adv_values(original_hosts_list or [], adv_filter),
             'save_csv'        : hosts_have_inventory(r['host'] for r in rows),
             'options'         : options if options is not None else web_state.get('options', {}),
@@ -6031,6 +6442,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 for _entry in host_state.values():
                     _entry[5] = 0
                     _entry[6] = ''
+                host_hist.clear()
                 message = 'change counters reset'
                 write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
             elif cmd == 'add_comment':
@@ -6186,6 +6598,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 active_hosts_list   = []
                 original_hosts_list[:] = []
                 host_state.clear()
+                host_hist.clear()
                 host_meta.clear()
                 host_csv_ip.clear()
                 adv_filter.clear()
@@ -6246,7 +6659,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # DOWNLOAD - SHOWN/ALL HOSTS, see web_publish()
                 web_state['host_list_shown'] = [r['host'] for r in quick_rows]
                 web_state['host_list_all']   = list(original_hosts_list)
-                web_state['hosts']        = len(quick)
+                web_state['hosts']        = quick_total
                 web_state['hosts_up']     = quick_up
                 web_state['hosts_down']   = quick_total - quick_up
                 web_state['hosts_shown']  = len(quick)
@@ -6255,7 +6668,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['addr_mode'] = addr_mode
                 web_state['sort_mode']    = sort_mode
                 web_state['match_filter'] = match_filter_text
-                web_state['adv_filter']   = dict(adv_filter)
+                web_state['adv_filter']   = adv_export()
                 web_state['adv_values']   = adv_values(original_hosts_list, adv_filter)
                 web_state['save_csv']     = hosts_have_inventory(web_state['host_list_shown'])
                 # logging state can flip live (START LOG) - keep the quick path in sync too
@@ -7076,9 +7489,100 @@ if __name__=='__main__':
             screen.refresh()
         return result
 
+    def adv_multi_dialog(title, entries, mode, checked):
+        """Multi-select list for one ADV FILTER field. entries = [(key, label, count)].
+        [SPACE] check/uncheck, [I] toggle show-only / hide, [A] check all, [N] uncheck
+        all, [ENTER] ok, [ESC] cancel. Returns (mode, set_of_checked_keys) or None.
+        Pinging keeps running in the background."""
+        rows, cols = screen.getmaxyx()
+        dialog_w = min(64, max(34, cols - 4))
+        foot_l   = _wrap_footer('[SPACE]=check [I]=show/hide [A]=all [N]=none [ENTER]=ok [ESC]=cancel',
+                                dialog_w - 4)
+        visible  = max(3, min(len(entries), rows - 7 - len(foot_l)))
+        dialog_h = visible + 5 + len(foot_l)
+        dialog_y = max(0, rows // 2 - dialog_h // 2)
+        dialog_x = max(0, cols // 2 - dialog_w // 2)
+        checked  = set(checked)
+        sel, top = 0, 0
+        n = len(entries)
+        screen.nodelay(False)
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        result = None
+        try:
+            while True:
+                if sel < top:
+                    top = sel
+                elif sel >= top + visible:
+                    top = sel - visible + 1
+                for dy in range(dialog_h):
+                    screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
+                head = ' %s - %s (%d checked) ' % (title, 'SHOW ONLY CHECKED' if mode == 'in'
+                                                   else 'HIDE CHECKED', len(checked))
+                screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
+                screen_output(dialog_y + 1, dialog_x, '│' + head[:dialog_w - 2].center(dialog_w - 2) + '│', 1, 1)
+                screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+                for row in range(visible):
+                    i = top + row
+                    if i < n:
+                        key, label, cnt = entries[i]
+                        line = '%s [%s] %s  (%d)' % ('>' if i == sel else ' ',
+                                                     'x' if key in checked else ' ', label, cnt)
+                    else:
+                        line = ''
+                    screen_output(dialog_y + 3 + row, dialog_x,
+                                  '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│',
+                                  2 if i == sel else 1, 1 if i == sel else 0)
+                screen_output(dialog_y + 3 + visible, dialog_x,
+                              '│' + '─' * (dialog_w - 2) + '│', 1, 0)
+                for fi, fl in enumerate(foot_l):
+                    screen_output(dialog_y + 4 + visible + fi, dialog_x,
+                                  '│' + (' ' + fl)[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+                screen_output(dialog_y + dialog_h - 1, dialog_x,
+                              '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
+                screen.refresh()
+                ch = screen.getch()
+                if ch in (curses.KEY_UP, ord('k')):
+                    sel = max(0, sel - 1)
+                elif ch in (curses.KEY_DOWN, ord('j')):
+                    sel = min(n - 1, sel + 1)
+                elif ch == curses.KEY_PPAGE:
+                    sel = max(0, sel - visible)
+                elif ch == curses.KEY_NPAGE:
+                    sel = min(n - 1, sel + visible)
+                elif ch == curses.KEY_HOME:
+                    sel = 0
+                elif ch == curses.KEY_END:
+                    sel = n - 1
+                elif ch == ord(' ') and n:
+                    checked ^= {entries[sel][0]}
+                elif ch in (ord('i'), ord('I')):
+                    mode = 'out' if mode == 'in' else 'in'
+                elif ch in (ord('a'), ord('A')):
+                    checked = {e[0] for e in entries}
+                elif ch in (ord('n'), ord('N')):
+                    checked = set()
+                elif ch in (10, 13):
+                    result = (mode, checked)
+                    break
+                elif ch == 27:
+                    break
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
+        screen.nodelay(True)
+        screen.clear()
+        if have_data:
+            rebuild_display()
+            draw_screen()
+            screen.refresh()
+        return result
+
     def adv_filter_dialog():
-        """[V] ADV FILTER window: pick one value per inventory field (Model, Location,
-        sysLocation, Type, Comment) - display only, ANDed with the view and the [M]
+        """[V] ADV FILTER window (Excel-style): per inventory field (Model, Location,
+        sysLocation, Type, Comment) check values and choose show-only / hide. OR within
+        a field, AND across fields - display only, ANDed with the view and the [M]
         regex, every host keeps being pinged. Works on a draft; APPLY activates it,
         ESC discards it. Pinging keeps running while the window is open."""
         vals   = adv_values(original_hosts_list)
@@ -7086,20 +7590,30 @@ if __name__=='__main__':
         if not fields:
             notice('ADV FILTER: NO INVENTORY VALUES (ADD A HOSTS .CSV FILE)', 3)
             return
-        draft = {k: v for k, v in adv_filter.items() if k in vals}
+        draft = {k: v for k, v in adv_filter.items() if k in vals}     # key -> (mode, values)
 
-        def choices(k):
-            ch = [('', 'ALL')] + [(v, '%s  (%d)' % (v, c)) for v, c in vals[k]['values']]
-            if vals[k]['empty']:
-                ch.append((ADV_NONE, '(empty)  (%d)' % vals[k]['empty']))
-            if draft.get(k) and draft[k] not in [c[0] for c in ch]:
-                ch.append((draft[k], draft[k] + '  (0)'))     # value no longer in the list
-            return ch
+        def entries(k):
+            v = vals.get(k) or {'values': [], 'empty': 0}
+            ent = [(x, x, c) for x, c in v['values']]
+            if v['empty']:
+                ent.append((ADV_NONE, '(empty)', v['empty']))
+            known = {e[0] for e in ent}
+            for x in sorted(draft.get(k, ('in', ()))[1]):              # no longer possible
+                if x not in known:
+                    ent.append((x, '(empty)' if x == ADV_NONE else x, 0))
+            return ent
+
+        def summary(k):
+            if k not in draft:
+                return 'ALL'
+            mode, vs = draft[k]
+            return '%s %d' % ('show only' if mode == 'in' else 'hide', len(vs))
 
         items  = fields + [('@apply', 'APPLY'), ('@reset', 'RESET ALL'), ('@cancel', 'CANCEL')]
         sel    = 0
         result = None
         lw     = max(len(label) for _k, label in fields)
+        foot_l = None
         screen.nodelay(False)
         stop_event = threading.Event()
         bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
@@ -7108,11 +7622,11 @@ if __name__=='__main__':
             while True:
                 # each field only offers what is still possible with the others' choice
                 vals = adv_values(original_hosts_list, draft)
-                for _k, _l in fields:
-                    vals.setdefault(_k, {'values': [], 'empty': 0})
                 rows, cols = screen.getmaxyx()
-                dialog_w = min(78, max(30, cols - 4))
-                dialog_h = len(items) + 6
+                dialog_w = min(70, max(30, cols - 4))
+                foot_l   = _wrap_footer('[UP/DN]=field [ENTER]=values [A]=apply [R]=reset [ESC]=cancel',
+                                        dialog_w - 4)
+                dialog_h = len(items) + 5 + len(foot_l)
                 dialog_y = max(0, rows // 2 - dialog_h // 2)
                 dialog_x = max(0, cols // 2 - dialog_w // 2)
                 for dy in range(dialog_h):
@@ -7124,16 +7638,15 @@ if __name__=='__main__':
                     if k.startswith('@'):
                         line = ('> ' if i == sel else '  ') + '[ ' + label + ' ]'
                     else:
-                        cur  = dict(choices(k)).get(draft.get(k, ''), 'ALL')
-                        line = ('> ' if i == sel else '  ') + label.ljust(lw) + ' : ' + cur
+                        line = ('> ' if i == sel else '  ') + label.ljust(lw) + ' : ' + summary(k)
                     screen_output(dialog_y + 3 + i, dialog_x,
                                   '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│',
                                   2 if i == sel else 1, 1 if i == sel else 0)
-                footer = ' [UP/DN]=field [LF/RT]=value [ENTER]=list [A]=apply [R]=reset [ESC]=cancel'
                 screen_output(dialog_y + 3 + len(items), dialog_x,
                               '│' + '─' * (dialog_w - 2) + '│', 1, 0)
-                screen_output(dialog_y + 4 + len(items), dialog_x,
-                              '│' + footer[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
+                for fi, fl in enumerate(foot_l):
+                    screen_output(dialog_y + 4 + len(items) + fi, dialog_x,
+                                  '│' + (' ' + fl)[:dialog_w - 2].ljust(dialog_w - 2) + '│', 1, 0)
                 screen_output(dialog_y + dialog_h - 1, dialog_x,
                               '└' + '─' * (dialog_w - 2) + '┘', 1, 1)
                 screen.refresh()
@@ -7144,14 +7657,6 @@ if __name__=='__main__':
                     sel = (sel - 1) % len(items)
                 elif ch in (curses.KEY_DOWN, ord('j'), 9):
                     sel = (sel + 1) % len(items)
-                elif ch in (curses.KEY_LEFT, curses.KEY_RIGHT) and not k.startswith('@'):
-                    ch_list = choices(k)
-                    pos = [c[0] for c in ch_list].index(draft.get(k, ''))
-                    pos = (pos + (1 if ch == curses.KEY_RIGHT else -1)) % len(ch_list)
-                    if ch_list[pos][0]:
-                        draft[k] = ch_list[pos][0]
-                    else:
-                        draft.pop(k, None)
                 elif ch in (ord('r'), ord('R')):
                     draft.clear()
                 elif ch in (ord('a'), ord('A')):
@@ -7168,21 +7673,20 @@ if __name__=='__main__':
                     elif k == '@cancel':
                         break
                     else:
-                        # the picker runs its own background pings - hand over
+                        # the multi-select runs its own background pings - hand over
                         stop_event.set()
                         bg_thread.join(timeout=float(args.waittime) + 10.0)
-                        ch_list = choices(k)
-                        cur_pos = [c[0] for c in ch_list].index(draft.get(k, ''))
-                        picked  = list_picker_dialog(dict(fields)[k].upper(),
-                                                     [c[1] for c in ch_list], cur_pos)
+                        cur_mode, cur_vals = draft.get(k, ('in', frozenset()))
+                        picked = adv_multi_dialog(dict(fields)[k].upper(), entries(k),
+                                                  cur_mode, cur_vals)
                         screen.nodelay(False)
                         stop_event = threading.Event()
                         bg_thread  = threading.Thread(target=run_background_pings,
                                                       args=(stop_event,), daemon=True)
                         bg_thread.start()
                         if picked is not None:
-                            if ch_list[picked][0]:
-                                draft[k] = ch_list[picked][0]
+                            if picked[1]:
+                                draft[k] = (picked[0], frozenset(picked[1]))
                             else:
                                 draft.pop(k, None)
         finally:
@@ -7643,6 +8147,7 @@ if __name__=='__main__':
             active_hosts_list[:]   = []
             original_hosts_list[:] = []
             host_state.clear()
+            host_hist.clear()
             host_meta.clear()
             host_csv_ip.clear()
             adv_filter.clear()
@@ -7659,6 +8164,7 @@ if __name__=='__main__':
             for _entry in host_state.values():
                 _entry[5] = 0
                 _entry[6] = ''
+            host_hist.clear()
             notice('CHANGE COUNTERS RESET', 2)
             write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
             message = 'change counters reset'
@@ -8003,13 +8509,15 @@ if __name__=='__main__':
         global display_list, hosts_count_up, hosts_count_down, hosts_count_flap
         display_list = build_display(active_hosts_list, host_state, sort_mode,
                                      tz_offset, flap_window)
-        if match_filter_re is not None or adv_filter:
-            display_list = apply_match_filter(display_list, match_filter_re)
+        # HOSTS/UP/DOWN/FLAPPING are the totals of the whole view - [M] and ADV FILTER
+        # only narrow what is shown, every host is still pinged
+        _now_ref = now_local(tz_offset)
         hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
         hosts_count_down = len(display_list) - hosts_count_up
-        _now_ref = now_local(tz_offset)
         hosts_count_flap = sum(1 for e in display_list
                                if host_is_flapping(e, _now_ref, flap_window))
+        if match_filter_re is not None or adv_filter:
+            display_list = apply_match_filter(display_list, match_filter_re)
 
     def draw_screen():
         """Paint the whole screen from the data of the last completed round.
@@ -8117,7 +8625,7 @@ if __name__=='__main__':
         hosts_up   = '{m: <6}'.format(m=hosts_count_up)
         hosts_down = '{m: <6}'.format(m=hosts_count_down)
         hosts_flap = '{m: <6}'.format(m=hosts_count_flap)
-        screen_output(rows - 1, 1,  'HOSTS: '   + str(num_of_hosts), 1, 1)
+        screen_output(rows - 1, 1,  'HOSTS: '   + str(hosts_count_up + hosts_count_down), 1, 1)
         _runtime_txt = ('RUNTIME: ' + run_time if run_time == RUNTIME_UNAVAILABLE
                         else 'RUNTIME: ' + str(run_time) + 's')
         screen_output(rows - 1, 14, _runtime_txt, 1, 1)
@@ -8342,6 +8850,7 @@ if __name__=='__main__':
             active_hosts_list   = []
             original_hosts_list = []
             host_state.clear()
+            host_hist.clear()
             host_meta.clear()
             host_csv_ip.clear()
             adv_filter.clear()
@@ -8532,6 +9041,7 @@ if __name__=='__main__':
             for _entry in host_state.values():
                 _entry[5] = 0
                 _entry[6] = ''
+            host_hist.clear()
             notice('CHANGE COUNTERS RESET', 2)
             write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
         elif cmd == 'ADD_COMMENT':
