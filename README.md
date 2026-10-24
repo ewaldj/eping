@@ -1,4 +1,4 @@
-# eping.py 3.70
+# eping.py 3.78
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -24,13 +24,13 @@ Installs/updates `eping.py`, `epinga.py`, `esplit.py`:
 ## Windows
 
 Portable Windows version (web GUI only, no installation): download and unpack
-[`eping-windows_v3.70.zip`](https://github.com/ewaldj/eping/blob/main/Windows_Version/eping-windows_v3.70.zip)
+[`eping-windows.zip`](https://github.com/ewaldj/eping/blob/main/Windows_Version/eping-windows.zip)
 ([folder](https://github.com/ewaldj/eping/tree/main/Windows_Version/)), then start `eping.exe`.
 
 - Contains `eping.exe` (small launcher window: web port, Start / Stop / Restart, open web GUI),
   `eping.py`, `epinga.py`, `fping.exe` + `cygwin1.dll` (fping for Windows) and an embedded Python.
-- The web GUI opens in the browser (default `http://127.0.0.1:8080`); a port already in use is reported
-  and can be changed in the launcher window.
+- The web GUI opens in the browser (default `http://127.0.0.1:8080`). The port is read from the hosts file
+  (`opt: -port 9000`); a port already in use is reported and can be changed in the launcher window.
 - No terminal (curses) mode and no `-wv`/`-wvc` on Windows; log file names use `-` instead of `:`.
 - Extra options: put them in `eping-args.txt` next to `eping.exe`. Details: `README-WINDOWS.txt` in the zip.
 
@@ -156,7 +156,7 @@ DOWN. Columns: hostname/IP, state, RTT (ms), last-change timestamp, change count
 |---|---|
 | `U` | view picker — all 9 views (see *Views and sort orders*) |
 | `M` | match filter — regex on hostname/IP and inventory fields, display only (see *Match filter*) |
-| `V` | ADV FILTER — pick Model/Location/sysLocation/Type/Comment values, display only (see *ADV FILTER*) |
+| `V` | ADV FILTER — check/uncheck Model/Location/sysLocation/Type/Comment values (show only / hide), display only (see *ADV FILTER*) |
 | `A` | add host — IP, hostname, CIDR (/13…/32), or `ip1-ip2` (max 524288) |
 | `D` | delete host — same formats/limits as add |
 | `F` | add hosts from a file |
@@ -246,6 +246,15 @@ Single self-contained page, no external resources.
 - Host field feeds both ADD/DELETE; ENTER triggers the button used last, ESC clears.
 - Files can also be dropped anywhere on the page (max 16MB, see *Host file format*).
 - Commands acknowledge immediately; a click aborts the running round.
+- **Host popup**: hovering a host row (after ~350 ms) shows everything known about it:
+  state, previous state, RTT, last check, changes, time in the current state, resolved/CSV
+  IP, inventory values (Model, Location, sysLocation, Type, Comment, serial) and its
+  history (last up to 50 state changes, newest first, merged with the log `COMMENT`s
+  by time). The data is fetched per host on demand (`GET /api/host`), the polled status
+  stays small. A click on the row pins the popup: the text can be selected, `COPY` copies
+  all of it, `DELETE` removes the host immediately (no confirmation; not shown in `-wv`),
+  `×`/ESC/click elsewhere closes it. The history lives in memory only; it is cleared by
+  ZERO CHANGES and CLEAR ALL.
 
 ### Views and sort orders
 
@@ -317,6 +326,7 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 |---|---|---|---|
 | GET | `/` | — | the page |
 | GET | `/api/status` | — | JSON: rows, counters, scan/phase info |
+| GET | `/api/host?name=...` | — | JSON: all known data and history of one host (mouse-over popup) |
 | GET | `/api/logfiles` | — | JSON list of `.csv`/`.txt`/`.html` files (FILE OPERATIONS, ADD FILE > FROM SERVER) |
 | GET | `/api/download/hosts_all` | — | full reference list, `.txt` |
 | GET | `/api/download/hosts_shown` | — | shown hosts, `.txt` |
@@ -328,13 +338,14 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | POST | `/api/add_from_server` | `{"names":[...]}` | add hosts from listed `.txt` files |
 | GET | `/api/report` | — | last GENERATE REPORT HTML; `404` until done |
 | POST | `/api/command` | `{"cmd":"...","value":"..."}` | control (see cmd list below) |
-| POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection |
+| POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection (same format as `adv_filter`) |
 | POST | `/api/upload` | host list, text | add hosts |
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
 `adv_filter`, `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
-`set_option`, `reset_options`, `run_report`, `save_hosts_file`, `exit`. `adv_filter` value: JSON object with the keys `model`, `location`, `sysloc`,
-`type`, `comment` (`{}` = off). `set_option`
+`set_option`, `reset_options`, `run_report`, `save_hosts_file`, `exit`. `adv_filter` value: JSON object `{"<field>":{"mode":"in|out","values":[...]}}` with the fields `model`,
+`location`, `sysloc`, `type`, `comment`; `\u0001none` as value = hosts without a value; `{}` = off
+(the old `{"<field>":"<value>"}` form is still accepted as `in` with one value). `set_option`
 value: `key=value`. `reset_log` value: logging off - optional custom file name (blank =
 auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
 custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
@@ -558,21 +569,26 @@ filter unchanged.
 
 ## ADV FILTER
 
-Display filter on the inventory values of a CSV import (*Inventory CSV import*): one
-value per field for `Model`, `Location`, `sysLocation`, `Type` and `Comment`. Display
-only - every host keeps being pinged. Needs hosts with inventory values; without them
-the dialog says so.
+Excel-style display filter on the inventory values of a CSV import (*Inventory CSV
+import*) for `Model`, `Location`, `sysLocation`, `Type` and `Comment`. Display only -
+every host keeps being pinged. Needs hosts with inventory values; without them the
+dialog says so.
 
 - **Open**: CLI `V`, web GUI button `ADV FILTER` or key `V`. A separate window; the
   filter only changes when applied.
-- **Choices**: per field `ALL` (no restriction), the values that occur with their host
-  count, and `(empty)` for hosts without a value. The lists narrow as you select: only
-  values still possible with the other selected fields are offered.
-- **Combination**: ANDed with the match filter (`M`) and the view. While active, the
-  CLI banner shows `DISPLAY FILTER ... ADV <Field>=<value>`.
-- **CLI window**: `↑`/`↓` field, `←`/`→` value, ENTER value list, `A` APPLY, `R` RESET
-  ALL (clears the selection), ESC CANCEL.
-- **Web window**: one drop-down per field, APPLY, RESET ALL, CLOSE.
+- **Per field**: check any number of values (with host count; `(empty)` = hosts without
+  a value) and choose the mode: `SHOW ONLY CHECKED` (include) or `HIDE CHECKED`
+  (exclude). Nothing checked = field not filtered.
+- **Combination**: values within a field are ORed, fields are ANDed with each other, with
+  the match filter (`M`) and the view. The lists narrow as you select: only values still
+  possible with the other fields' selection are offered.
+- **Web window**: one list per field with search box, `ALL`/`NONE` (act on the entries
+  matching the search), the mode toggle, APPLY, RESET ALL, CLOSE. Lists show the first
+  500 entries, the rest via search.
+- **CLI window**: `↑`/`↓` field, ENTER opens the value list (`SPACE` check, `I` show-only/hide,
+  `A` all, `N` none, ENTER ok, ESC cancel), then `A` APPLY, `R` RESET ALL, ESC CANCEL.
+  No search in the CLI list.
+- **Banner**: while active the CLI banner shows e.g. `ADV Type not in (Firewall, Switch)`.
 - **Reset**: SET REFERENCE and CLEAR ALL turn the filter off. It is not saved
   with `SAVE HOSTS FILE`.
 
