@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.85'
+VERSION = '3.86'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -2848,6 +2848,16 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="addFromClientModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <h3>ADD FROM CLIENT</h3>
+      <p>Choose a `.txt` or `.csv` hosts file from this computer to add its hosts.</p>
+      <input type="file" id="fileInputVis" accept=".txt,.csv,.list,text/plain" style="margin-bottom:14px;color:var(--fg)">
+      <div class="modal-buttons">
+        <button id="modalBtnAddFromClientCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
   <div id="chooseReportModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide xwide">
       <h3>CHOOSE LOGFILE</h3>
@@ -4087,9 +4097,21 @@ document.getElementById('btnClear').onclick  = function(){
 
 /* ---- host file upload ---- */
 var fileInput = document.getElementById('fileInput');
+var fileInputVis = document.getElementById('fileInputVis');
+var addFromClientModal = document.getElementById('addFromClientModal');
+function closeAddFromClient(){ addFromClientModal.style.display = 'none'; fileInputVis.value = ''; }
+function addFromClientOpen(){ return addFromClientModal.style.display === 'flex'; }
+document.getElementById('modalBtnAddFromClientCancel').onclick = closeAddFromClient;
+fileInputVis.addEventListener('change', function(){
+  var f = fileInputVis.files && fileInputVis.files[0];
+  closeAddFromClient();
+  if(f) uploadHostsFile(f, null);
+});
 fileInput.addEventListener('change', function(){
   var f = fileInput.files && fileInput.files[0];
-  if(!f) return;
+  if(f) uploadHostsFile(f, fileInput);
+});
+function uploadHostsFile(f, inp){
   var rd = new FileReader();
   rd.onload = function(){
     note('uploading ' + f.name + ' ...', true);
@@ -4097,10 +4119,10 @@ fileInput.addEventListener('change', function(){
       body: rd.result}).then(function(r){ return r.json(); }).then(function(j){
         if(!j.ok){ note('upload failed: ' + (j.error||''), false); }
       }).catch(function(){ note('upload failed', false); });
-    fileInput.value = '';
+    if(inp) inp.value = '';
   };
   rd.readAsText(f);
-});
+}
 
 var uploadServerFileInput = document.getElementById('uploadServerFileInput');
 uploadServerFileInput.addEventListener('change', function(){
@@ -4367,7 +4389,7 @@ document.getElementById('selDownload').onchange = function(){
   this.value = '';                              // reset - a select, not a toggle
   if(!what) return;
   if(what === 'add_from_server'){ openAddFromServer(); return; }
-  if(what === 'add_from_client'){ fileInput.click(); return; }
+  if(what === 'add_from_client'){ addFromClientModal.style.display = 'flex'; return; }   // visible input: Safari blocks click() from select change
   if(what === 'choose_logfile'){ openChooseLog(); return; }
   if(what === 'delete_files'){ openDeleteFiles(); return; }
   if(what === 'view_file'){ openViewFile(); return; }
@@ -4487,6 +4509,10 @@ document.addEventListener('keydown', function(e){
     }
     var sk = e.key.toLowerCase();
     if(sk === 'y' || e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
+    return;
+  }
+  if(addFromClientOpen()){
+    if(e.key === 'Escape'){ closeAddFromClient(); e.preventDefault(); }
     return;
   }
   if(chooseLogOpen()){

@@ -1,4 +1,4 @@
-# eping.py 3.85
+# eping.py 3.86
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -243,7 +243,7 @@ Single self-contained page, no external resources.
   | Entry | Does |
   |---|---|
   | ADD HOSTS FILE FROM SERVER | picks one or more `.txt` files or inventory `.csv` files already on the server, adds their hosts; a `.csv` without the inventory header, e.g. an eping log, is refused |
-  | ADD HOSTS FILE FROM CLIENT | local file picker (`.txt`/`.csv`), adds the hosts; a file can also be dropped anywhere on the page |
+  | ADD HOSTS FILE FROM CLIENT | dialog with a file picker (`.txt`/`.csv`; works in Safari), adds the hosts; a file can also be dropped anywhere on the page |
   | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched. If the displayed hosts carry inventory values (CSV import) an inventory `.csv` is written instead (`;` delimited, columns as in *Inventory CSV import*); a `.txt` name or hostfile then becomes `.csv`, the default is `eping-hosts.csv`. The options that differ from the default are written first as `opt:` lines (see *Host file format*); for a `.csv` the checkboxes `include options (opt: lines)` (default on) and `save as .txt (hosts only, no inventory)` (default off) are offered |
   | UPLOAD FILE TO SERVER | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
   | DOWNLOAD ALL HOSTS | full reference list: inventory `.csv` if the hosts carry inventory values, else `.txt`; non-default options first as `opt:` lines (`.csv`: checkboxes `include options`, default on, and `save as .txt`, default off) |
