@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.86'
+VERSION = '3.91'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -709,6 +709,26 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
     elif old in host_csv_ip:
         host_csv_ip.setdefault(new, host_csv_ip[old])
     forget_names([new])   # force a fresh forward lookup for the new identity
+
+def merge_csv_ips_into_lists(hosts, original_hosts_list, active_hosts_list,
+                             host_state, up_seen, down_streak):
+    """ADD LIST with an inventory CSV: a CSV host whose IP is already in the lists as a
+    plain IP entry (e.g. from a .txt file) updates that entry - it is renamed to the
+    CSV hostname in place (history kept) instead of being added a second time.
+    Returns the number of renamed entries. host_csv_ip holds the IP of each CSV host."""
+    cur = set(original_hosts_list) | set(active_hosts_list)
+    renamed = 0
+    for h in hosts:
+        if h in cur:
+            continue
+        ip = host_csv_ip.get(h)
+        if ip and ip != h and ip in cur:
+            _rename_host_in_place(ip, h, original_hosts_list, active_hosts_list,
+                                  host_state, up_seen, down_streak)
+            cur.discard(ip)
+            cur.add(h)
+            renamed += 1
+    return renamed
 
 def _forward_confirms(name, ip):
     """True if 'name' has a forward record (A for an IPv4 ip, AAAA for an IPv6 ip)
@@ -1768,7 +1788,7 @@ def parse_hosts_from_text(text, stats=None, use_names=False, name=None):
     recognised by its header; anything else - and every file named *.txt - is parsed
     as a plain host list (_parse_plain_hosts). A NUL byte separates concatenated files."""
     csv_ok = not (name and str(name).lower().endswith('.txt'))
-    out, seen, networks, skipped = [], set(), 0, []
+    out, seen, networks, skipped, ignored = [], set(), 0, [], []
     csv_stats = {}
     for seg in (text or '').split('\x00'):
         sub = {}
@@ -1781,6 +1801,7 @@ def parse_hosts_from_text(text, stats=None, use_names=False, name=None):
             csv_stats['csv'] = True
         networks += sub.get('networks', 0)
         skipped.extend(sub.get('skipped', []))
+        ignored.extend(sub.get('ignored', []))
         for h in got:
             if h not in seen:
                 seen.add(h)
@@ -1788,6 +1809,7 @@ def parse_hosts_from_text(text, stats=None, use_names=False, name=None):
     if stats is not None:
         stats['networks'] = networks
         stats['skipped']  = skipped
+        stats['ignored']  = ignored
         stats.update(csv_stats)
     return out
 
@@ -1804,6 +1826,7 @@ def _parse_plain_hosts(text, stats=None):
     fqdns    = []
     networks = 0
     skipped  = []
+    ignored  = []
     for line in (text or '').splitlines():
         line = line.split('#')[0]          # ignore comments
         for word in line.replace(',', ' ').replace(';', ' ').split():
@@ -1823,6 +1846,8 @@ def _parse_plain_hosts(text, stats=None):
                 ips.append(normalize_ip(word.rsplit('/', 1)[0]))   # single-host IPv6 CIDR, no expansion
             elif match_re(word, fqdn_re):
                 fqdns.append(word)
+            else:
+                ignored.append(word)
     seen = set()
     out  = []
     for h in ips + fqdns:
@@ -1832,6 +1857,7 @@ def _parse_plain_hosts(text, stats=None):
     if stats is not None:
         stats['networks'] = networks
         stats['skipped']  = skipped
+        stats['ignored']  = ignored
     return out
 
 def extract_opt_lines(text):
@@ -2848,6 +2874,19 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="hostListModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>ADD / DELETE HOST LIST</h3>
+      <p>Paste hosts: IPv4/IPv6, hostname, IPv4 CIDR - separated by new line, comma, semicolon or blank; `#` starts a comment.</p>
+      <textarea id="hostListText" rows="10" spellcheck="false" style="width:100%;box-sizing:border-box;margin-bottom:8px;background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;resize:vertical"></textarea>
+      <div id="hostListInfo" style="min-height:34px;margin-bottom:12px;font-size:12px;color:var(--dim)">&nbsp;</div>
+      <div class="modal-buttons">
+        <button id="hostListAddBtn" disabled>ADD</button>
+        <button id="hostListDelBtn" class="danger" disabled>DELETE</button>
+        <button id="hostListCancelBtn">CANCEL</button>
+      </div>
+    </div>
+  </div>
   <div id="addFromClientModal" class="modal-overlay" style="display:none">
     <div class="modal-box">
       <h3>ADD FROM CLIENT</h3>
@@ -3006,6 +3045,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
       <button id="btnAdd" title="add the given host(s) to the list - same input as DELETE">ADD</button>
       <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
+      <button id="btnList" title="paste a list of hosts (one per line, or separated by comma/semicolon/blank) to add or delete - also opened by Ctrl/Cmd+V on the page">ADD/DEL LIST</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
      <span class="grp">
@@ -4095,6 +4135,68 @@ document.getElementById('commentInput').addEventListener('keydown', function(e){
 document.getElementById('btnClear').onclick  = function(){
   if(confirm('Remove ALL hosts and reset their state?')){ post('clear'); } };
 
+/* ---- ADD/DEL LIST window (paste a host list), preview before applying ---- */
+var hostListModal = document.getElementById('hostListModal');
+var hostListText  = document.getElementById('hostListText');
+var hostListInfo  = document.getElementById('hostListInfo');
+var hostListAddBtn = document.getElementById('hostListAddBtn');
+var hostListDelBtn = document.getElementById('hostListDelBtn');
+var hostListTimer = null, hostListSeq = 0, hostListInList = 0, hostListNew = 0;
+function hostListOpen(){ return hostListModal.style.display === 'flex'; }
+function closeHostList(){ hostListModal.style.display = 'none'; hostListText.value = ''; }
+function openHostList(text){
+  hostListText.value = text || '';
+  hostListModal.style.display = 'flex';
+  hostListPreviewNow();
+  hostListText.focus();
+}
+function hostListPost(action){
+  return fetch('api/hostlist', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text: hostListText.value, action: action})}).then(function(r){ return r.json(); });
+}
+function hostListPreviewNow(){
+  var seq = ++hostListSeq;
+  if(!hostListText.value.trim()){
+    hostListInfo.innerHTML = '&nbsp;'; hostListAddBtn.disabled = true; hostListDelBtn.disabled = true; return;
+  }
+  hostListPost('preview').then(function(j){
+    if(seq !== hostListSeq || !j.ok) return;
+    hostListInList = j.in_list; hostListNew = j.new;
+    var t = j.found + ' host(s) found: ' + j.new + ' new (ADD), ' + j.in_list + ' already in list (DELETE)';
+    if(j.csv) t += ' - CSV: existing hosts are updated with its data' + (j.renamed ? ' (' + j.renamed + ' IP entries renamed to hostname)' : '');
+    if(j.networks) t += ' - ' + j.networks + ' network(s) expanded';
+    if(j.ignored) t += ' - ' + j.ignored + ' ignored: ' + j.ignored_sample.join(', ') + (j.ignored > j.ignored_sample.length ? ' ...' : '');
+    if(j.skipped.length) t += ' - mask out of range: ' + j.skipped.join(', ');
+    hostListInfo.textContent = t;
+    hostListAddBtn.disabled = !(j.new || (j.csv && (j.in_list || j.renamed)));
+    hostListDelBtn.disabled = !j.in_list;
+  }).catch(function(){});
+}
+hostListText.addEventListener('input', function(){
+  clearTimeout(hostListTimer); hostListTimer = setTimeout(hostListPreviewNow, 300); });
+function hostListRun(action){
+  note(action === 'add' ? 'adding host list ...' : 'removing host list ...', true);
+  hostListPost(action).then(function(j){ if(!j.ok){ note('list failed: ' + (j.error||''), false); } })
+    .catch(function(){ note('list failed', false); });
+  closeHostList();
+}
+hostListAddBtn.onclick = function(){ hostListRun('add'); };
+hostListDelBtn.onclick = function(){
+  if(hostListInList > 20 && !confirm('Remove ' + hostListInList + ' hosts from the list?')) return;
+  hostListRun('del'); };
+document.getElementById('hostListCancelBtn').onclick = closeHostList;
+document.getElementById('btnList').onclick = function(){ openHostList(''); };
+/* Ctrl/Cmd+V with no field focused and no window open: open the window with the clipboard text */
+document.addEventListener('paste', function(e){
+  var a = document.activeElement, tn = a && a.tagName;
+  if(isReadOnly || hostListOpen() || tn === 'INPUT' || tn === 'TEXTAREA' || tn === 'SELECT') return;
+  if(document.querySelector('.modal-overlay[style*="flex"]')) return;
+  var t = e.clipboardData && e.clipboardData.getData('text');
+  if(!t || !t.trim()) return;
+  e.preventDefault();
+  openHostList(t);
+});
+
 /* ---- host file upload ---- */
 var fileInput = document.getElementById('fileInput');
 var fileInputVis = document.getElementById('fileInputVis');
@@ -4509,6 +4611,10 @@ document.addEventListener('keydown', function(e){
     }
     var sk = e.key.toLowerCase();
     if(sk === 'y' || e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
+    return;
+  }
+  if(hostListOpen()){
+    if(e.key === 'Escape'){ closeHostList(); e.preventDefault(); }
     return;
   }
   if(addFromClientOpen()){
@@ -5802,6 +5908,45 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
 
+        # --- ADD/DEL LIST window: preview (no change) or queue add_list/del_list ---
+        if path in ('/api/hostlist', 'api/hostlist'):
+            raw = self._read_body(WEB_MAX_UPLOAD)
+            if raw is None:
+                self._respond(413, 'application/json; charset=utf-8',
+                              json.dumps({'ok': False, 'error': 'text too large'}))
+                return
+            try:
+                req = json.loads(raw.decode('utf-8', 'replace') or '{}')
+            except Exception:
+                req = {}
+            text   = str(req.get('text', ''))
+            action = str(req.get('action', 'preview'))
+            if action in ('add', 'del'):
+                if not self._queue_command((action + '_list', text)):
+                    return
+                self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
+                return
+            pstats = {}
+            _m0, _c0 = set(host_meta), set(host_csv_ip)
+            found  = parse_hosts_from_text(text, pstats, True)
+            with web_lock:
+                present = set(web_state.get('host_list_all') or [])
+            n_ren = (sum(1 for h in found if h not in present and host_csv_ip.get(h) in present
+                         and host_csv_ip.get(h) != h) if pstats.get('csv') else 0)
+            for _k in set(host_meta) - _m0:           # preview only - keep no CSV data of it
+                host_meta.pop(_k, None)
+            for _k in set(host_csv_ip) - _c0:
+                host_csv_ip.pop(_k, None)
+            n_in = sum(1 for h in found if h in present)
+            self._respond(200, 'application/json; charset=utf-8', json.dumps({
+                'ok': True, 'found': len(found), 'in_list': n_in,
+                'csv': bool(pstats.get('csv')), 'renamed': n_ren,
+                'new': len(found) - n_in - n_ren, 'networks': pstats.get('networks', 0),
+                'ignored': len(pstats.get('ignored', [])),
+                'ignored_sample': pstats.get('ignored', [])[:8],
+                'skipped': pstats.get('skipped', [])[:5]}))
+            return
+
         # --- FILE ACTIONS > UPLOAD: save a *.txt/*.csv file as-is, no host
         # parsing (see /api/upload above for that) ---
         if path in ('/api/upload_server_file', 'api/upload_server_file'):
@@ -6658,6 +6803,47 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message += ' - please wait, pinging ...'
                             write_log_info(args.disable_logging, logfile_file_name,
                                            'ADD -f (uploaded, ' + str(added) + ' host(s))', tz_offset)
+            elif cmd in ('add_list', 'del_list'):
+                lst_stats = {}
+                lst_hosts = parse_hosts_from_text(value, lst_stats, addr_mode not in (2, 3))
+                if not lst_hosts:
+                    message = ('list: mask must be /%d../%d: %s'
+                               % (CIDR_MIN_MASK, CIDR_MAX_MASK, lst_stats['skipped'][0])
+                               if lst_stats.get('skipped') else 'list: no valid host found')
+                elif cmd == 'add_list':
+                    renamed = (merge_csv_ips_into_lists(lst_hosts, original_hosts_list,
+                                                        active_hosts_list, host_state,
+                                                        up_seen, down_streak)
+                               if lst_stats.get('csv') else 0)
+                    before_active = set(active_hosts_list)
+                    added, err = add_hosts_to(lst_hosts, active_hosts_list, original_hosts_list)
+                    if err:
+                        message = 'list ' + err
+                    else:
+                        message = ('list: ' + str(added) + ' new host(s) of '
+                                   + str(len(lst_hosts)) + ' found')
+                        if lst_stats.get('csv'):
+                            message += (', %d existing host(s) updated (%d renamed to hostname)'
+                                        % (len(lst_hosts) - added, renamed))
+                        if lst_stats.get('ignored'):
+                            message += ', %d ignored' % len(lst_stats['ignored'])
+                        if added:
+                            pending_add_hosts |= (set(lst_hosts) - before_active)
+                            message += ' - please wait, pinging ...'
+                            write_log_info(args.disable_logging, logfile_file_name,
+                                           'ADD list (' + str(added) + ' host(s))', tz_offset)
+                else:
+                    removed = remove_hosts_from(lst_hosts, active_hosts_list,
+                                                original_hosts_list, host_state)
+                    up_seen.difference_update(lst_hosts)
+                    for _h in lst_hosts:
+                        down_streak.pop(_h, None)
+                    forget_names(lst_hosts)
+                    message = ('list: removed ' + str(removed) + ' of '
+                               + str(len(lst_hosts)) + ' host(s) found')
+                    if removed:
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       'DEL list (' + str(removed) + ' host(s))', tz_offset)
             elif cmd == 'set_ref':
                 # what is actually shown becomes the new reference list - the view
                 # filter (active_hosts_list) AND the [M]/display filter (display_list
@@ -8356,6 +8542,52 @@ if __name__=='__main__':
                 if removed:
                     write_log_info(args.disable_logging, logfile_file_name,
                                    host_spec_cli('DEL', bval), tz_offset)
+
+        elif bcmd in ('add_list', 'del_list'):
+            lst_stats = {}
+            lst_hosts = parse_hosts_from_text(bval, lst_stats, not (prefer_ip or ip_only_mode))
+            if not lst_hosts:
+                message = ('list: mask must be /%d..%d: %s'
+                           % (CIDR_MIN_MASK, CIDR_MAX_MASK, lst_stats['skipped'][0])
+                           if lst_stats.get('skipped') else 'list: no valid host found')
+                notice(message.upper(), 3)
+            elif bcmd == 'add_list':
+                renamed = (merge_csv_ips_into_lists(lst_hosts, original_hosts_list,
+                                                    active_hosts_list, host_state,
+                                                    up_seen, down_streak)
+                           if lst_stats.get('csv') else 0)
+                before_active = set(active_hosts_list)
+                added, err = add_hosts_to(lst_hosts, active_hosts_list, original_hosts_list)
+                if err:
+                    notice(('LIST ' + err).upper(), 3)
+                    message = 'list ' + err
+                else:
+                    message = ('list: ' + str(added) + ' new host(s) of '
+                               + str(len(lst_hosts)) + ' found')
+                    if lst_stats.get('csv'):
+                        message += (', %d existing host(s) updated (%d renamed to hostname)'
+                                    % (len(lst_hosts) - added, renamed))
+                    if lst_stats.get('ignored'):
+                        message += ', %d ignored' % len(lst_stats['ignored'])
+                    notice(message.upper(), 2)
+                    if added:
+                        pending_add_hosts |= (set(lst_hosts) - before_active)
+                        message += ' - please wait, pinging ...'
+                        write_log_info(args.disable_logging, logfile_file_name,
+                                       'ADD list (' + str(added) + ' host(s))', tz_offset)
+            else:
+                removed = remove_hosts_from(lst_hosts, active_hosts_list,
+                                            original_hosts_list, host_state)
+                up_seen.difference_update(lst_hosts)
+                for _h in lst_hosts:
+                    down_streak.pop(_h, None)
+                forget_names(lst_hosts)
+                message = ('list: removed ' + str(removed) + ' of '
+                           + str(len(lst_hosts)) + ' host(s) found')
+                notice(message.upper(), 2 if removed else 3)
+                if removed:
+                    write_log_info(args.disable_logging, logfile_file_name,
+                                   'DEL list (' + str(removed) + ' host(s))', tz_offset)
 
         elif bcmd == 'upload':
             up_stats  = {}
