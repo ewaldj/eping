@@ -3,7 +3,7 @@
 Web GUI version of [eping](https://github.com/ewaldj/eping) for macOS 10.13+ (Apple Silicon and Intel).
 A small launcher app (`eping.app`) starts eping in the background, opens the web GUI and offers
 Start / Stop / Restart / Change port / Update in a dialog. Same functions as the Windows version.
-Python 3 and fping 5.5 (universal) are used; fping is included.
+Python 3.11 (for Apple Silicon and Intel) and fping 5.5 (universal) are included.
 
 ## Download
 
@@ -31,8 +31,7 @@ The installer removes the flag from the installed eping files itself.
 
 ## Requirements
 
-- `python3` 3.6+ (`xcode-select --install` or `brew install python3`)
-- `fping`: the `fping` file in the eping folder is used first, otherwise Homebrew
+macOS 10.13+. Nothing else has to be installed: the `python-aarch64` / `python-x86_64` folders and `fping` in the eping folder are used first (system `python3` and Homebrew `fping` are only a fallback).
 
 ## Update
 
