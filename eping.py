@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.84'
+VERSION = '3.85'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -516,6 +516,8 @@ def create_sample_csv(filename=SAMPLE_CSV_NAME):
         return False        # a read-only directory must not stop eping
 
 use_check_source = True   # set from --no_check_source in main
+csv_ip_fallback  = True   # set from --no_csv_fallback in main: a CSV hostname that does not resolve is pinged by its CSV IP
+_csv_fb_names    = frozenset()  # hostnames pinged by their CSV IP in the last round (host popup)
 web_readonly     = False  # True with --web_view: the CLI drives, the browser only looks
 
 _fping_caps = None
@@ -902,14 +904,23 @@ def prepare_targets(hosts, ttl, progress_cb=None):
             for n in pending:
                 resolve_name(n, ttl)
 
+    global _csv_fb_names
     targets     = []
     name_map    = {}
     unresolved  = []
+    fallback    = set()
     for h in hosts:
         if is_ip_host(h):
             target = h
         else:
             target = resolve_name(h, ttl)
+            if not target and csv_ip_fallback:
+                # no DNS record, but the inventory CSV has an address for this host: ping that
+                target = host_csv_ip.get(h) or ''
+                if target and is_ip_host(target):
+                    fallback.add(h)
+                else:
+                    target = ''
             if not target:
                 unresolved.append(h)
                 continue
@@ -917,6 +928,7 @@ def prepare_targets(hosts, ttl, progress_cb=None):
             name_map[target] = []
             targets.append(target)
         name_map[target].append(h)
+    _csv_fb_names = frozenset(fallback)
     return targets, name_map, unresolved
 
 
@@ -2363,6 +2375,8 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
             scan_desc += (' (--rate %d not reachable, -i floor 1ms)' % rate_pps)
     if use_check_source and '--check-source' in fping_capabilities():
         scan_desc += ', check-source'
+    if _csv_fb_names:
+        scan_desc += ', %d by CSV IP (no DNS)' % len(_csv_fb_names)
     if _scan_error:
         scan_desc += ' | ERROR: ' + _scan_error
 
@@ -4698,6 +4712,7 @@ function tipRowsOf(d){
   }
   add('state', d.state, up ? 'up' : 'down');
   if(d.changes > 0) add('previous', d.prev);
+  if(d.dns_fb) add('dns', 'no DNS record - pinged by the CSV address', 'down');
   if(d.ip && d.ip !== d.host) add('address', d.ip);
   add('rtt (ms)', d.rtt && d.rtt.indexOf('-') !== 0 ? d.rtt : '');
   add('last check', d.last_check);
@@ -5305,7 +5320,7 @@ _OPT_ARGS     = None
 _ARG_DEFAULTS = {}
 # flag-less switches: dest -> flag
 _OPT_SWITCHES = (('disable_versioncheck', '-du'), ('force_ipv4', '-4'), ('force_ipv6', '-6'),
-                 ('diag', '-dg'), ('no_check_source', '-ncs'), ('web', '-web'),
+                 ('diag', '-dg'), ('no_check_source', '-ncs'), ('no_csv_fallback', '-ncf'), ('web', '-web'),
                  ('web_view', '-wv'), ('web_view_control', '-wvc'))
 # ADV OPTIONS key -> argparse dest of its default
 _OPT_KEY_DEST = {'backoff': 'backoff', 'timeout': 'timeout', 'retries': 'retries',
@@ -5986,6 +6001,7 @@ def host_details(name, tz_offset=0):
             'prev': str(row[4]).strip() if row[4] else '', 'last_check': str(row[2]),
             'rtt': str(row[3]), 'changes': row[5], 'change_ts': str(row[6] or ''),
             'since_s': since, 'csv_ip': host_csv_ip.get(name, ''),
+            'dns_fb': name in _csv_fb_names,
             'csv_hostname': meta[0], 'serial': meta[1], 'model': meta[2],
             'location': meta[3], 'sysloc': meta[4], 'type': meta[5], 'comment': meta[6],
             'hist': hist_list(name, tz_offset)}
@@ -6319,6 +6335,8 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
     parts.append('-lmf ' + str(args.log_max_files))
     if args.no_check_source:
         parts.append('-ncs')
+    if args.no_csv_fallback:
+        parts.append('-ncf')
     if args.web:
         parts.append('-web')
     if args.web_view:
@@ -7053,6 +7071,7 @@ if __name__=='__main__':
     parser.add_argument('-cf', '--confirm', default=str(CONFIRM_DEF), dest='confirm', help="consecutive DOWN observations before a host leaves UP (default: " + str(CONFIRM_DEF) + ", 1 = report every single observation)")
     parser.add_argument('-ds', '--down_slices', default=str(DOWN_SLICES_DEF), dest='down_slices', help="spread the known DOWN hosts over N rounds, range 1-" + str(DOWN_SLICES_MAX) + " (default: " + str(DOWN_SLICES_DEF) + ", 1 = probe all of them every round)")
     parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries, range 0-" + str(FULL_SWEEP_MAX) + " (default: " + str(FULL_SWEEP_DEF) + ", 0 = disabled/never)")
+    parser.add_argument('-ncf', '--no_csv_fallback', action="store_true", dest='no_csv_fallback', help="do not ping the CSV address of a host whose name does not resolve (default: it is pinged by the CSV IP and marked in the host popup)")
     parser.add_argument('-ncs', '--no_check_source', action="store_true", dest='no_check_source', help="do not pass --check-source to fping (only needed for hosts replying from a different address)")
     parser.add_argument('-web', '--web', action="store_true", dest='web', help="start the web gui instead of the terminal (CLI) output")
     parser.add_argument('-wv', '--web_view', action="store_true", dest='web_view', help="CLI mode plus a read-only web view on --port (browser shows the same data, no controls)")
@@ -7095,6 +7114,7 @@ if __name__=='__main__':
     retries = args.retries
     interval = args.interval
     use_check_source = not args.no_check_source
+    csv_ip_fallback = not args.no_csv_fallback
     dns_family = '4' if args.force_ipv4 else ('6' if args.force_ipv6 else 'auto')
 
     # check online current version
@@ -7345,6 +7365,7 @@ if __name__=='__main__':
                 "# opt: -ds 4                        # spread known DOWN hosts over N rounds\n",
                 "# opt: -fs 10                       # every Nth run: full retries for everyone (0 = never)\n",
                 "# opt: -ncs                         # do not pass --check-source to fping\n",
+                "# opt: -ncf                         # CSV: do not ping the CSV IP of a name without DNS record\n",
                 "# opt: -web                         # start the web gui instead of the CLI\n",
                 "# opt: -wv                          # CLI mode plus a read-only web view\n",
                 "# opt: -port 8080                   # http port for -web / -wv\n",
