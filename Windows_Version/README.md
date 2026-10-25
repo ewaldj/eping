@@ -2,6 +2,7 @@
 
 Web GUI version of [eping](https://github.com/ewaldj/eping) for Windows 10/11 (x64).
 Python and fping are bundled, nothing else has to be installed.
+The browser opens as soon as eping answers; the window title shows the launcher version.
 
 ## Download
 
@@ -34,4 +35,4 @@ package if `eping-windows` is newer.
 - The web GUI listens on 127.0.0.1 only; add `-bind 0.0.0.0` to `eping-args.txt` to reach it from the network.
 - Terminal (curses) mode and `-wv` / `-wvc` are not available on Windows.
 - If no replies show up, check the firewall (ICMP echo) or start once as Administrator.
-- Details: [README-WINDOWS.txt](README-WINDOWS.txt), main project: [eping](https://github.com/ewaldj/eping), <https://www.jeitler.cc>
+- Details: `README-WINDOWS.txt` in the zip, main project: [eping](https://github.com/ewaldj/eping), <https://www.jeitler.cc>

@@ -23,16 +23,32 @@ Installs/updates `eping.py`, `epinga.py`, `esplit.py`:
 
 ## Windows
 
-Portable Windows version (web GUI only, no installation): download and unpack
-[`eping-windows.zip`](https://github.com/ewaldj/eping/blob/main/Windows_Version/eping-windows.zip)
-([folder](https://github.com/ewaldj/eping/tree/main/Windows_Version/)), then start `eping.exe`.
+Web GUI version for Windows 10/11 (x64), no terminal mode. Python and fping are included.
+Details: [Windows_Version](https://github.com/ewaldj/eping/tree/main/Windows_Version/)
 
-- Contains `eping.exe` (small launcher window: web port, Start / Stop / Restart, open web GUI),
-  `eping.py`, `epinga.py`, `fping.exe` + `cygwin1.dll` (fping for Windows) and an embedded Python.
-- The web GUI opens in the browser (default `http://127.0.0.1:8080`). The port is read from the hosts file
-  (`opt: -port 9000`); a port already in use is reported and can be changed in the launcher window.
-- No terminal (curses) mode and no `-wv`/`-wvc` on Windows; log file names use `-` instead of `:`.
+- Installer: [`eping-installer.exe`](https://github.com/ewaldj/eping/raw/main/Windows_Version/eping-installer.exe)
+  downloads the package and installs it (current user or all users, Start menu / desktop shortcut, uninstaller).
+- Portable: unpack [`eping-windows.zip`](https://github.com/ewaldj/eping/raw/main/Windows_Version/eping-windows.zip)
+  and start `eping.exe`.
+- `eping.exe` is a small launcher window (web port, Start / Stop / Restart, open web GUI, console log, update).
+  The browser opens as soon as eping answers (default `http://127.0.0.1:8080`). The port is read from the
+  hosts file (`opt: -port 9000`); a port already in use is reported and can be changed in the window.
+- Update: `eping.exe` checks `eversions` at start and every 6 hours; an Update button replaces `eping.py` /
+  `epinga.py`, or the whole package if the `eping-windows` line in `eversions` is newer.
+- No `-wv`/`-wvc` on Windows; log file names use `-` instead of `:`.
 - Extra options: put them in `eping-args.txt` next to `eping.exe`. Details: `README-WINDOWS.txt` in the zip.
+
+## macOS
+
+Web GUI version for macOS 10.13+ (Apple Silicon and Intel). Python 3.11 and fping 5.5 are included.
+Details: [OSX_Version](https://github.com/ewaldj/eping/tree/main/OSX_Version/)
+
+- Installer: unzip [`eping-installer-mac.zip`](https://github.com/ewaldj/eping/raw/main/OSX_Version/eping-installer-mac.zip)
+  and open `eping-installer.app` (current user or all users, uninstall).
+- Portable: unpack [`eping-mac.zip`](https://github.com/ewaldj/eping/raw/main/OSX_Version/eping-mac.zip)
+  and open `eping.app`.
+- The apps are not notarized: use right-click / Open, or `xattr -dr com.apple.quarantine <folder>` once.
+- `eping.app` shows the same window as the Windows launcher; the update check uses the `eping-mac` line in `eversions`.
 
 ## Quick start
 
