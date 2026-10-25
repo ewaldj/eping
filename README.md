@@ -1,4 +1,4 @@
-# eping.py 3.84
+# eping.py 3.85
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -15,7 +15,7 @@ Written by Ewald Jeitler — <https://www.jeitler.cc>
 
 ## Installation / Update
 
-Installs/updates `eping.py`, `epinga.py`, `esplit.py`:
+Installs/updates `eping.py`, `epinga.py`:
 
 ```sh
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/ewaldj/eping/refs/heads/main/e-install.sh)"
@@ -136,7 +136,8 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
 - **Columns used**: `IP Address`, `Hostname`, `Serial Number`, `Model`, `Location`,
   `sysLocation`, `Type`, `Comment`. All other columns are ignored.
 - **Host entry**: the `Hostname` (default; rows without an IP are pinged by name too,
-  NO-DNS if it does not resolve). A name that is not a valid hostname falls back to the
+  NO-DNS if it does not resolve). A name without DNS record is pinged by the row's
+  IP instead (marked in the host popup, `-ncf` turns this off). A name that is not a valid hostname falls back to the
   IP; rows without a usable entry are ignored. In the IP modes (`-ipo`, PREFER IP
   ADDRESS, also when active while the file is added) the entry is the IP address
   instead and rows without a valid IP are ignored. `-ph` is not needed for a CSV.
@@ -422,6 +423,7 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-ipo` | — | off | start with IP ONLY |
 | `-gn` | — | off | GET NAMES once at startup |
 | `-ncs` | — | off | skip `--check-source` |
+| `-ncf` | — | off | CSV: do not ping the CSV IP of a name without DNS record |
 | `-up` | — | 0 | learning phase: after N rounds keep only hosts seen UP |
 | `-setref` | — | off | with `-up`: hosts seen UP become new reference list |
 
@@ -715,21 +717,3 @@ Each bucket: Download (`<base>-<up|down|flap|nodns>-hosts.txt`) + Copy (clipboar
 
 Row click expands: state-change history with timestamps, per-host stats (IP, uptime,
 downtime, span, first/last seen, RTT min/avg/max).
-
-# esplit.py 1.14
-
-Splits a large CSV logfile into smaller parts by size.
-
-```sh
-./esplit.py                                      # interactive menu
-./esplit.py -i eping-log_2026-09-05.csv -o parts -s 20   # ~20MB parts
-```
-
-| Option | Effect |
-|---|---|
-| `-i`, `--input FILE` | CSV file to split (omit for interactive picker) |
-| `-o`, `--output DIR` | output folder (created if missing) |
-| `-s`, `--size MB` | max size per part |
-
-Each part: `part_NNN.csv`, own header row. Rows never split across parts; a
-`#COMMENT#` row lands in whichever part it falls into.

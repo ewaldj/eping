@@ -12,7 +12,6 @@ set -euo pipefail
 readonly CUSTOM_GITHUB_TOOLS=(
     "eping.py|https://raw.githubusercontent.com/ewaldj/eping/main/eping.py"
     "epinga.py|https://raw.githubusercontent.com/ewaldj/eping/main/epinga.py"
-    "esplit.py|https://raw.githubusercontent.com/ewaldj/eping/main/esplit.py"
 )
 
 readonly DEFAULT_BINDIR="/usr/local/bin"
