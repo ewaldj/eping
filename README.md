@@ -1,4 +1,4 @@
-# eping.py 3.86
+# eping.py 3.91
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -233,7 +233,7 @@ Single self-contained page, no external resources.
   - Row 1: view select (9 views), sort order select, SET REFERENCE, ZERO CHANGES,
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, RESET LOG, FILE OPERATIONS
     select, EXIT, font size.
-  - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), comment
+  - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), ADD/DEL LIST, comment
     field (COMMENT), GENERATE REPORT select.
   - View select, sort order select, address mode select and ADV OPTIONS all match the
     CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS (incl. ADD HOSTS FILE FROM CLIENT/
@@ -262,6 +262,13 @@ Single self-contained page, no external resources.
   `+`/`−` font size (works while typing). No keyboard shortcut for `X`/ADV OPTIONS or
   GENERATE REPORT - click required.
 - Host field feeds both ADD/DELETE; ENTER triggers the button used last, ESC clears.
+- **ADD/DEL LIST** (button after DELETE; also Ctrl/Cmd+V on the page while no field has focus): paste a
+  host list - one per line or separated by comma/semicolon/blank, `#` comment, CIDR expanded. A live
+  preview shows found / new / already in list / ignored words / masks out of range; ADD and DELETE are
+  enabled only if they would change something (DELETE over 20 hosts asks to confirm; exact name match
+  only). A pasted inventory `.csv` (with the `IP Address`/`Hostname` header) also updates hosts already in
+  the list: IP entries (e.g. from a `.txt`) are renamed to the CSV hostname, history kept, and the CSV
+  values are attached. Works with `-wvc` too.
 - Files can also be dropped anywhere on the page (max 16MB, see *Host file format*).
 - Commands acknowledge immediately; a click aborts the running round.
 - **Host popup**: hovering a host row (after ~350 ms) shows everything known about it:
