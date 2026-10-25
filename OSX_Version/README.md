@@ -1,8 +1,8 @@
 # eping for macOS
 
 Web GUI version of [eping](https://github.com/ewaldj/eping) for macOS 10.13+ (Apple Silicon and Intel).
-A small launcher app (`eping.app`) starts eping in the background, opens the web GUI and offers
-Start / Stop / Restart / Change port / Update in a dialog. Same functions as the Windows version.
+A small launcher app (`eping.app`) starts eping in the background, opens the web GUI and shows a small window with
+Start / Stop / Restart / port / Open web GUI / Console log / Update. Same functions as the Windows version.
 Python 3.11 (for Apple Silicon and Intel) and fping 5.5 (universal) are included.
 
 ## Download
@@ -36,7 +36,7 @@ macOS 10.13+. Nothing else has to be installed: the `python-aarch64` / `python-x
 ## Update
 
 The launcher checks `eversions` on GitHub at start and every 6 hours. If `eping.py` / `epinga.py` are
-newer, "More... / Update now" replaces them; if `eping-mac` is newer, the whole package is replaced.
+newer, the Update button replaces them; if `eping-mac` is newer, the whole package is replaced.
 
 ## Notes
 
