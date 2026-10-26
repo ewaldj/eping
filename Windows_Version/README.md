@@ -24,6 +24,10 @@ The browser opens as soon as eping answers; the window title shows the launcher 
 
 Hosts files, logs and reports are stored in the eping folder.
 
+## Window
+
+Below the buttons: checkboxes *Disable autostart* and *Disable logging* (`-dl`), *Disable file* (`-df`, no hosts file), a *CLI options* field (stored in `eping-args.txt`) and a *Check updates* button. Settings apply at Start / Restart.
+
 ## Update
 
 `eping.exe` checks `eversions` on GitHub at start and every 6 hours. If a newer version
