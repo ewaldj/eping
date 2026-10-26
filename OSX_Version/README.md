@@ -33,6 +33,10 @@ The installer removes the flag from the installed eping files itself.
 
 macOS 10.13+. Nothing else has to be installed: the `python-aarch64` / `python-x86_64` folders and `fping` in the eping folder are used first (system `python3` and Homebrew `fping` are only a fallback).
 
+## Window
+
+Below the buttons: checkboxes *Disable autostart* and *Disable logging* (`-dl`), *Disable file* (`-df`, no hosts file), a *CLI options* field (stored in `eping-args.txt`) and a *Check updates* button. Settings (`eping-launcher.cfg`) apply at Start / Restart.
+
 ## Update
 
 The launcher checks `eversions` on GitHub at start and every 6 hours. If `eping.py` / `epinga.py` are
