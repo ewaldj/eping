@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.00'
+VERSION = '4.01'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -96,9 +96,9 @@ DOWN_SLICES_DEF    = 4        # DOWN hosts are spread over this many rounds (1 =
 FLAP_WINDOW_MAX    = 72000     # minutes = 50 days - see -fw validation
 FLAP_WINDOW_DEF    = FLAP_WINDOW_MAX
 
-# [U] cycles through these views. Like before, the filter also shrinks what is pinged,
-# which is what makes UP-ONLY shorten the cycle. Hosts filtered away are not probed and
-# therefore cannot come back until the view is switched to ALL again.
+# [U] cycles through these views. A view is a pure display filter, evaluated live on
+# every refresh (see view_hosts()): all hosts keep being pinged. Only SET REFERENCE
+# drops the hosts that are not shown from the host list.
 FILTER_MODES = [
     ('ALL HOSTS',   'ALL',   'ALL'),
     ('UP',          'UP',    'UP'),
@@ -1709,6 +1709,12 @@ def apply_match_filter(rows, pattern):
         return rows
     return [r for r in rows
             if host_visible(pattern, r[0], r[8] if len(r) > 8 and r[8] else '')]
+
+def view_hosts(mode, hosts, host_state, tz_offset, flap_window=FLAP_WINDOW_DEF):
+    """Hosts of 'hosts' shown by the view 'mode' (live; mode 0 = all, list unchanged)."""
+    if mode <= 0:
+        return hosts
+    return filter_hosts(mode, hosts, host_state, tz_offset, flap_window)
 
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF, up_seen=None):
@@ -7309,7 +7315,6 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                          tz_offset, flap_window, up_seen)
                 if next_list or next_mode == 0:
                     filter_mode       = next_mode
-                    active_hosts_list = apply_addr_mode(next_list)
                     message = 'view: ' + FILTER_MODES[filter_mode][0]
                     write_log_info(args.disable_logging, logfile_file_name,
                                    'FILTER ' + FILTER_MODES[filter_mode][0], tz_offset)
@@ -7327,7 +7332,6 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                                tz_offset, flap_window, up_seen)
                     if target_list or target_mode == 0:
                         filter_mode       = target_mode
-                        active_hosts_list = apply_addr_mode(target_list)
                         message = 'view: ' + WEB_VIEW_MODES[filter_mode][0]
                         write_log_info(args.disable_logging, logfile_file_name,
                                        'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
@@ -7359,9 +7363,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         # IP ONLY is active - see the startup (-ipo) path above
                         active_hosts_list = [h for h in active_hosts_list if is_ip_host(h)]
                     else:
-                        base_list = filter_hosts(filter_mode, original_hosts_list,
-                                                 host_state, tz_offset, flap_window, up_seen)
-                        active_hosts_list = apply_addr_mode(base_list)
+                        active_hosts_list = apply_addr_mode(list(original_hosts_list))
                         message = 'address mode: ' + ADDR_MODE_LABELS[addr_mode]
             elif cmd == 'get_names':
                 if gn_thread is not None and gn_thread.is_alive():
@@ -7508,7 +7510,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # what is actually shown becomes the new reference list - the view
                 # filter (active_hosts_list) AND the [M]/display filter (display_list
                 # narrows it further) both apply, see quick/quick_rows just below
-                shown_hosts = [o[0] for o in build_display(active_hosts_list, host_state,
+                shown_hosts = [o[0] for o in build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state,
                                                             sort_mode, tz_offset, flap_window)]
                 if match_filter_re is not None or adv_filter:
                     shown_hosts = [h for h in shown_hosts
@@ -7734,7 +7736,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         if cmds or gn_just_finished:
             # view and order are pure display changes - show them at once instead of
             # letting the browser wait for the running round, same as the CLI does
-            quick    = build_display(active_hosts_list, host_state, sort_mode,
+            quick    = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
                                      tz_offset, flap_window)
             quick_up = sum(1 for e in quick if 'UP' in e[1])
             quick_total = len(quick)
@@ -7774,15 +7776,18 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 learning_phase = False
             else:
                 learning_done = True
-                active_hosts_list = sorted(up_seen, key=lambda h: (
-                    int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')))
-                active_hosts_list = apply_addr_mode(active_hosts_list)
                 if args.set_reference:
                     # -setref: same as the 'set_ref' web command, once learning ends
-                    _keep = set(active_hosts_list)   # once, not per element (was O(n^2))
+                    _up_list = apply_addr_mode(sorted(up_seen, key=lambda h: (
+                        int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf'))))
+                    _keep = set(_up_list)   # once, not per element (was O(n^2))
                     prune_dropped_hosts([h for h in original_hosts_list if h not in _keep],
                                         host_state, up_seen, down_streak)
-                    original_hosts_list = list(active_hosts_list)
+                    original_hosts_list = list(_up_list)
+                    active_hosts_list   = _up_list
+                    filter_mode = 0
+                else:
+                    filter_mode = 1    # UP view (display filter), every host is still pinged
                 learning_phase = True
         else:
             learning_phase = True
@@ -7831,7 +7836,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         phase['state'] = time.time() - _t
 
         _t = time.time()
-        display_list = build_display(active_hosts_list, host_state, sort_mode,
+        display_list = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
                                      tz_offset, flap_window)
         # HOSTS/HOSTS-UP/HOSTS-DOWN are the totals for the whole current view - a
         # [M] display filter narrows what's SHOWN, not what's actually being pinged,
@@ -9281,9 +9286,6 @@ if __name__=='__main__':
                                      tz_offset, flap_window, up_seen)
             if next_list or next_mode == 0:
                 filter_mode       = next_mode
-                active_hosts_list = (apply_prefer_ip(next_list, int(args.dns_ttl)) if prefer_ip
-                                     else apply_prefer_hostname(next_list, int(args.dns_ttl))
-                                     if prefer_hostname else next_list)
                 screen.clear()
                 write_log_info(args.disable_logging, logfile_file_name,
                                'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
@@ -9302,9 +9304,6 @@ if __name__=='__main__':
                                            tz_offset, flap_window, up_seen)
                 if target_list or target_mode == 0:
                     filter_mode       = target_mode
-                    active_hosts_list = (apply_prefer_ip(target_list, int(args.dns_ttl)) if prefer_ip
-                                         else apply_prefer_hostname(target_list, int(args.dns_ttl))
-                                         if prefer_hostname else target_list)
                     screen.clear()
                     write_log_info(args.disable_logging, logfile_file_name,
                                    'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
@@ -9338,11 +9337,10 @@ if __name__=='__main__':
                     notice(io_msg.upper(), 2)
                     message = io_msg
                 else:
-                    base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
-                                             tz_offset, flap_window, up_seen)
-                    active_hosts_list = (apply_prefer_ip(base_list, int(args.dns_ttl)) if prefer_ip
-                                         else apply_prefer_hostname(base_list, int(args.dns_ttl))
-                                         if prefer_hostname else base_list)
+                    _full = list(original_hosts_list)
+                    active_hosts_list = (apply_prefer_ip(_full, int(args.dns_ttl)) if prefer_ip
+                                         else apply_prefer_hostname(_full, int(args.dns_ttl))
+                                         if prefer_hostname else _full)
                     message = 'address mode: ' + ADDR_MODE_LABELS[target_mode]
             elif not (0 <= target_mode < len(ADDR_MODE_LABELS)):
                 message = 'invalid address mode'
@@ -9828,7 +9826,7 @@ if __name__=='__main__':
         # mirror the same fix as run_web_mode(): HOSTS-UP/DOWN in the web view should
         # be the totals for the current view, not narrowed by the [M] display filter
         # the way the curses screen's own hosts_count_up/down are (left untouched here).
-        total_list = build_display(active_hosts_list, host_state, sort_mode,
+        total_list = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
                                    tz_offset, flap_window)
         total_up   = sum(1 for e in total_list if 'UP' in e[1])
         total_down = len(total_list) - total_up
@@ -9857,7 +9855,7 @@ if __name__=='__main__':
         so they can take effect at once instead of after the next scan round.
         """
         global display_list, hosts_count_up, hosts_count_down, hosts_count_flap
-        display_list = build_display(active_hosts_list, host_state, sort_mode,
+        display_list = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
                                      tz_offset, flap_window)
         # HOSTS/UP/DOWN/FLAPPING are the totals of the whole view - [M] and ADV FILTER
         # only narrow what is shown, every host is still pinged
@@ -10232,9 +10230,6 @@ if __name__=='__main__':
                                         tz_offset, flap_window, up_seen)
                 if new_list or new_mode == 0:
                     filter_mode       = new_mode
-                    active_hosts_list = (apply_prefer_ip(new_list, int(args.dns_ttl)) if prefer_ip
-                                         else apply_prefer_hostname(new_list, int(args.dns_ttl))
-                                         if prefer_hostname else new_list)
                     screen.clear()
                     write_log_info(args.disable_logging, logfile_file_name,
                                    'FILTER ' + WEB_VIEW_MODES[filter_mode][0], tz_offset)
@@ -10285,11 +10280,10 @@ if __name__=='__main__':
                     ip_only_mode = True
                     notice(io_msg.upper(), 2)
                 else:
-                    base_list = filter_hosts(filter_mode, original_hosts_list, host_state,
-                                             tz_offset, flap_window, up_seen)
-                    active_hosts_list = (apply_prefer_ip(base_list, int(args.dns_ttl)) if prefer_ip
-                                         else apply_prefer_hostname(base_list, int(args.dns_ttl))
-                                         if prefer_hostname else base_list)
+                    _full = list(original_hosts_list)
+                    active_hosts_list = (apply_prefer_ip(_full, int(args.dns_ttl)) if prefer_ip
+                                         else apply_prefer_hostname(_full, int(args.dns_ttl))
+                                         if prefer_hostname else _full)
                     notice('ADDRESS MODE: ' + items[picked], 2)
         elif cmd == 'GET_NAMES':
             if gn_thread is not None and gn_thread.is_alive():
@@ -10513,20 +10507,23 @@ if __name__=='__main__':
                 learning_phase = False
             else:
                 learning_done = True
-                active_hosts_list = sorted(up_seen, key=lambda h: (
-                    int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')
-                ))
-                active_hosts_list = (apply_prefer_ip(active_hosts_list, int(args.dns_ttl)) if prefer_ip
-                                     else apply_prefer_hostname(active_hosts_list, int(args.dns_ttl))
-                                     if prefer_hostname else active_hosts_list)
                 if args.set_reference:
                     # -setref: same as pressing [S]/SET REFERENCE once learning ends
-                    _keep = set(active_hosts_list)   # once, not per element (was O(n^2))
+                    _up_list = sorted(up_seen, key=lambda h: (
+                        int(ipaddress.ip_address(h)) if is_ip_host(h) else float('inf')
+                    ))
+                    _up_list = (apply_prefer_ip(_up_list, int(args.dns_ttl)) if prefer_ip
+                                else apply_prefer_hostname(_up_list, int(args.dns_ttl))
+                                if prefer_hostname else _up_list)
+                    _keep = set(_up_list)   # once, not per element (was O(n^2))
                     prune_dropped_hosts([h for h in original_hosts_list if h not in _keep],
                                         host_state, up_seen, down_streak)
-                    original_hosts_list = list(active_hosts_list)
+                    original_hosts_list = list(_up_list)
+                    active_hosts_list   = _up_list
+                    filter_mode = 0
+                else:
+                    filter_mode = 1    # UP view (display filter), every host is still pinged
                 screen.clear()
-                filter_mode = 1        # the learning phase leaves an UP-only view
                 learning_phase = True
                 # same as after a command: the list changed, repaint at once
                 if have_data:
