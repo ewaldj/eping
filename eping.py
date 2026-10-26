@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.01'
+VERSION = '4.02'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1715,6 +1715,13 @@ def view_hosts(mode, hosts, host_state, tz_offset, flap_window=FLAP_WINDOW_DEF):
     if mode <= 0:
         return hosts
     return filter_hosts(mode, hosts, host_state, tz_offset, flap_window)
+
+def view_rows(rows, mode, host_state, tz_offset, flap_window=FLAP_WINDOW_DEF):
+    """Rows (from build_display) of the hosts shown by the view 'mode' (live)."""
+    if mode <= 0:
+        return rows
+    keep = set(filter_hosts(mode, [r[0] for r in rows], host_state, tz_offset, flap_window))
+    return [r for r in rows if r[0] in keep]
 
 def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
                  flap_window=FLAP_WINDOW_DEF, up_seen=None):
@@ -3433,7 +3440,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
    <span id="ctrls">
     <span class="ctrls-row" id="ctrlsRow1">
      <span id="ctrlsMain">
-      <select id="selFilter" title="choose which hosts are shown and pinged - a host outside the current view is not checked until a view including it is selected again">
+      <select id="selFilter" title="display filter: choose which hosts are shown (evaluated live) - all hosts keep being pinged until SET REFERENCE removes the hosts that are not shown">
         <option value="0">ALL HOSTS</option>
         <option value="1">CURRENTLY-UP</option>
         <option value="3">ALWAYS-UP</option>
@@ -3451,7 +3458,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="3">FLAP/UP/DOWN</option>
         <option value="4">FLAP/DOWN/UP</option>
       </select>
-      <button id="btnSetRef" title="use the hosts currently shown as the new reference list">SET REFERENCE</button>
+      <button id="btnSetRef" title="use the hosts currently shown as the new reference list - all other hosts are removed and no longer pinged">SET REFERENCE</button>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
       <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
       <select id="selAddrMode" title="Deduplication when the same host is entered as both a hostname and its IP: hostname &amp; ip keeps both as given (no dedup) | prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
@@ -3524,8 +3531,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <span class="u">HOSTS-UP: <b id="sUp">0</b></span>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
     <span>FLAPPING: <b id="sFlap">0</b></span>
-    <span title="hosts matching the display filter, out of the totals above"
-          id="sShownWrap">HOSTS-SHOWN: <b id="sShown">0</b></span>
+    <span title="hosts shown by the view and display filters, out of all hosts"
+          id="sShownWrap">SHOWN: <b id="sShown">0</b></span>
     <span id="sLog"></span>
     <span class="msg" id="msg"></span>
     <span id="scrollHint"></span>
@@ -5606,7 +5613,7 @@ function poll(){
     document.getElementById('sFlap').textContent    = s.hosts_flap;
     var swrap = document.getElementById('sShownWrap');
     var advOn = !!(s.adv_filter && Object.keys(s.adv_filter).length);
-    swrap.style.display = (s.match_filter || advOn) ? '' : 'none';
+    swrap.style.display = '';   // SHOWN is always visible
     lastAdv = {values: s.adv_values || {}, filter: s.adv_filter || {}};
     document.getElementById('btnAdvFilter').className = advOn ? 'on' : '';
     document.getElementById('sShown').textContent   = s.hosts_shown;
@@ -7736,10 +7743,13 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         if cmds or gn_just_finished:
             # view and order are pure display changes - show them at once instead of
             # letting the browser wait for the running round, same as the CLI does
-            quick    = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
-                                     tz_offset, flap_window)
-            quick_up = sum(1 for e in quick if 'UP' in e[1])
-            quick_total = len(quick)
+            # HOSTS / HOSTS-UP / HOSTS-DOWN count all hosts, the view and the display
+            # filters only narrow what is SHOWN
+            quick_all = build_display(active_hosts_list, host_state, sort_mode,
+                                      tz_offset, flap_window)
+            quick_up = sum(1 for e in quick_all if 'UP' in e[1])
+            quick_total = len(quick_all)
+            quick    = view_rows(quick_all, filter_mode, host_state, tz_offset, flap_window)
             if match_filter_re is not None or adv_filter:
                 quick = apply_match_filter(quick, match_filter_re)
             with web_lock:
@@ -7836,16 +7846,15 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
         phase['state'] = time.time() - _t
 
         _t = time.time()
-        display_list = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
-                                     tz_offset, flap_window)
-        # HOSTS/HOSTS-UP/HOSTS-DOWN are the totals for the whole current view - a
-        # [M] display filter narrows what's SHOWN, not what's actually being pinged,
-        # so it must not make these look like only 2 hosts exist. hosts_count_shown
-        # is the post-filter count, reported separately (HOSTS-SHOWN in the web GUI).
-        hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
-        hosts_count_down = len(display_list) - hosts_count_up
-        hosts_count_flap = sum(1 for e in display_list
+        display_all = build_display(active_hosts_list, host_state, sort_mode,
+                                    tz_offset, flap_window)
+        # HOSTS/HOSTS-UP/HOSTS-DOWN/FLAPPING count all hosts - the view and the [M] /
+        # ADV display filters only narrow what is SHOWN (hosts_count_shown below).
+        hosts_count_up   = sum(1 for e in display_all if 'UP' in e[1])
+        hosts_count_down = len(display_all) - hosts_count_up
+        hosts_count_flap = sum(1 for e in display_all
                                if host_is_flapping(e, now_local(tz_offset), flap_window))
+        display_list = view_rows(display_all, filter_mode, host_state, tz_offset, flap_window)
         if match_filter_re is not None or adv_filter:
             display_list = apply_match_filter(display_list, match_filter_re)
         hosts_count_shown = len(display_list)
@@ -9773,6 +9782,7 @@ if __name__=='__main__':
     hosts_count_up = 0
     hosts_count_down = 0
     hosts_count_flap  = 0
+    hosts_count_shown = 0
     run_time       = '0.00'
     phase          = {}
     used_scan      = ''
@@ -9826,7 +9836,7 @@ if __name__=='__main__':
         # mirror the same fix as run_web_mode(): HOSTS-UP/DOWN in the web view should
         # be the totals for the current view, not narrowed by the [M] display filter
         # the way the curses screen's own hosts_count_up/down are (left untouched here).
-        total_list = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
+        total_list = build_display(active_hosts_list, host_state, sort_mode,
                                    tz_offset, flap_window)
         total_up   = sum(1 for e in total_list if 'UP' in e[1])
         total_down = len(total_list) - total_up
@@ -9855,17 +9865,20 @@ if __name__=='__main__':
         so they can take effect at once instead of after the next scan round.
         """
         global display_list, hosts_count_up, hosts_count_down, hosts_count_flap
-        display_list = build_display(view_hosts(filter_mode, active_hosts_list, host_state, tz_offset, flap_window), host_state, sort_mode,
-                                     tz_offset, flap_window)
-        # HOSTS/UP/DOWN/FLAPPING are the totals of the whole view - [M] and ADV FILTER
-        # only narrow what is shown, every host is still pinged
+        global hosts_count_shown
+        display_all = build_display(active_hosts_list, host_state, sort_mode,
+                                    tz_offset, flap_window)
+        # HOSTS/UP/DOWN/FLAPPING count all hosts - the view, [M] and ADV FILTER only
+        # narrow what is shown (SHOWN), every host is still pinged
         _now_ref = now_local(tz_offset)
-        hosts_count_up   = sum(1 for e in display_list if 'UP' in e[1])
-        hosts_count_down = len(display_list) - hosts_count_up
-        hosts_count_flap = sum(1 for e in display_list
+        hosts_count_up   = sum(1 for e in display_all if 'UP' in e[1])
+        hosts_count_down = len(display_all) - hosts_count_up
+        hosts_count_flap = sum(1 for e in display_all
                                if host_is_flapping(e, _now_ref, flap_window))
+        display_list = view_rows(display_all, filter_mode, host_state, tz_offset, flap_window)
         if match_filter_re is not None or adv_filter:
             display_list = apply_match_filter(display_list, match_filter_re)
+        hosts_count_shown = len(display_list)
 
     def draw_screen():
         """Paint the whole screen from the data of the last completed round.
@@ -9985,11 +9998,13 @@ if __name__=='__main__':
         screen_output(rows - 1, 67, 'DOWN: ', 1, 1)
         screen_output(rows - 1, 73, hosts_down, 3, 1)
         screen_output(rows - 1, 79, 'FLAPPING: ', 1, 1)
-        screen_output(rows - 1, 89, hosts_flap.rstrip() + ' |', 1, 1)
+        screen_output(rows - 1, 89, hosts_flap.rstrip(), 1, 1)
+        screen_output(rows - 1, 96, 'SHOWN: ', 1, 1)
+        screen_output(rows - 1, 103, ('{m: <6}'.format(m=hosts_count_shown)).rstrip() + ' |', 1, 1)
         if args.disable_logging:
-            screen_output(rows - 1, 99, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
+            screen_output(rows - 1, 113, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
         else:
-            screen_output(rows - 1, 99, 'LOGGING-OFF', 1, 1)
+            screen_output(rows - 1, 113, 'LOGGING-OFF', 1, 1)
         if num_of_hosts > 0 and maxhosts < num_of_hosts:
             tts_text = ' | TERMINAL TOO SMALL '
             screen_output(rows - 1, cols - len(tts_text), tts_text, 3, 2)

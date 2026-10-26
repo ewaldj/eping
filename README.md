@@ -1,4 +1,4 @@
-# eping.py 4.01
+# eping.py 4.02
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -224,8 +224,8 @@ Single self-contained page, no external resources.
 
 - Table: CLI-style columns, filled top-down then next column right. Horizontal scroll
   if needed ("SCROLL RIGHT FOR MORE" hint in the stats bar).
-- Footer stats: HOSTS, RUNTIME, HOST UP/DOWN/FLAPPING, for the whole current view regardless
-  of the match filter and the ADV FILTER (HOSTS-SHOWN = shown count). The CLI footer counts the same way. RUNTIME shows `n/a` briefly during a background round.
+- Footer stats: HOSTS, RUNTIME, HOST UP/DOWN/FLAPPING always count all hosts; SHOWN is the
+  number of rows displayed after the view, the match filter and the ADV FILTER. The CLI footer counts the same way. RUNTIME shows `n/a` briefly during a background round.
 - Adding many hosts (`ADD`, ADD HOSTS FILE, upload) shows "added N host(s) - please wait,
   pinging ..." until they appear with a state, then `done`.
 - Font size 6–28px (slider, `A−`/`A+`, `+`/`−` keys), stored in `localStorage`.
