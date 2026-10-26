@@ -1,4 +1,4 @@
-# eping.py 4.00
+# eping.py 4.01
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -181,7 +181,7 @@ DOWN. Columns: hostname/IP, state, RTT (ms), last-change timestamp, change count
 | `F` | add hosts from a file |
 | `O` | sort order picker — 5 orders (see *Views and sort orders*) |
 | `T` | add comment — timestamped CSV row (logging on only) |
-| `S` | set reference — shown list becomes new base list |
+| `S` | set reference — shown list becomes new base list (hosts not shown are removed and no longer pinged) |
 | `Z` | zero changes — reset CH-TIME/CH NO, states kept |
 | `C` | clear all hosts and state |
 | `P` | address mode picker — 4 modes (see *Address modes*) |
@@ -289,9 +289,11 @@ unless lowered). `CH NO` counts changes; `Z` resets it.
 
 CLI `U` and web GUI's view select/`U` picker (see *CLI mode*) reach the same 9 views.
 The web GUI's own `U` keyboard shortcut only cycles ALL HOSTS → CURRENTLY-UP →
-UP+FLAPPING → ALL HOSTS (see *Web GUI* keyboard shortcuts). A view also limits what's
-probed — filtered hosts aren't probed until back to ALL HOSTS. Host list snapshotted at
-switch time. A view with no matches is rejected, previous view stays active.
+UP+FLAPPING → ALL HOSTS (see *Web GUI* keyboard shortcuts). A view is a pure display
+filter, evaluated live on every refresh: all hosts keep being pinged, a host that goes
+DOWN leaves `CURRENTLY-UP`, a host that comes UP appears. Only SET REFERENCE removes the
+hosts that are not shown from the host list (they are no longer pinged) and resets the
+view to ALL HOSTS. A view with no matches is rejected, previous view stays active.
 
 `ALWAYS-UP`/`ALWAYS-DOWN`: never changed state this run (`CH NO` = 0). `NO-DNS` counts
 as DOWN for `CURRENTLY-DOWN`/`ALWAYS-DOWN`/`DOWN+FLAPPING`.
@@ -437,7 +439,7 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-sshkey` | file | agent | private key file for `-ssh` |
 | `-sshhk` | accept-new/ask/off | accept-new | host key check for `-ssh` |
 | `-ncf` | — | off | CSV: do not ping the CSV IP of a name without DNS record |
-| `-up` | — | 0 | learning phase: after N rounds keep only hosts seen UP |
+| `-up` | — | 0 | learning phase: after N rounds show only hosts seen UP (view CURRENTLY-UP; all hosts are still pinged until SET REFERENCE) |
 | `-setref` | — | off | with `-up`: hosts seen UP become new reference list |
 
 Hard-enforced at startup and live via ADV OPTIONS (`-web` only), same bounds.
