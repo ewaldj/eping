@@ -1,4 +1,4 @@
-# eping.py 3.99
+# eping.py 4.00
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -435,7 +435,7 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-ncs` | — | off | skip `--check-source` |
 | `-ssh` | `[USER@]HOST[:PORT]` | off | run fping on a jump host via ssh (see *SSH source (JUMPHOST)*) |
 | `-sshkey` | file | agent | private key file for `-ssh` |
-| `-sshhk` | ask/accept-new/off | ask | host key check for `-ssh` |
+| `-sshhk` | accept-new/ask/off | accept-new | host key check for `-ssh` |
 | `-ncf` | — | off | CSV: do not ping the CSV IP of a name without DNS record |
 | `-up` | — | 0 | learning phase: after N rounds keep only hosts seen UP |
 | `-setref` | — | off | with `-up`: hosts seen UP become new reference list |
@@ -505,9 +505,9 @@ JUMPHOST button in the web GUI (after ADV OPTIONS).
 - Window: HOST, PORT, USER, PASSWORD (key passphrase), HOST KEY, KEY FILE. TEST checks ssh, login and
   fping on the jump host, CONNECT switches the scan source, USE LOCAL switches back. A missing local
   `ssh` is shown in the window.
-- HOST KEY: `ask` (default) - an unknown key is shown with its fingerprint and must be accepted with
-  TRUST KEY; `accept-new` - hosts seen for the first time are trusted automatically, a changed key is
-  still refused; `off` - no check at all (insecure).
+- HOST KEY: `accept-new` (default) - hosts seen for the first time are trusted automatically, a changed
+  key is still refused; `ask` - an unknown key is shown with its fingerprint and must be accepted with
+  TRUST KEY; `off` - no check at all (insecure).
 - The switch is applied at the start of the next round; hosts, states and counters are kept.
 - Connection loss: results of the round are discarded, hosts keep their state, a banner is shown and
   eping reconnects. Logged as `#COMMENT#` rows (`JUMPHOST ... OFFLINE: <reason>`, `JUMPHOST ... ONLINE

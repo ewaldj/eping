@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.99'
+VERSION = '4.00'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -533,7 +533,7 @@ SSH_MAX_PROCS   = 4       # parallel fping runs per round (sshd MaxSessions is 1
 SSH_MAX_PROCS_NT = 2      # Windows OpenSSH has no ControlMaster: every run is its own connection
 SSH_REMOTE_PATH = '/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin'   # fping often lives in sbin
 SSH_TEST_TIMEOUT = 40
-SSH_HOSTKEY_MODES = ('ask', 'accept-new', 'off')   # unknown host key: confirm / trust new hosts / no check at all
+SSH_HOSTKEY_MODES = ('accept-new', 'ask', 'off')   # unknown host key: confirm / trust new hosts / no check at all
 ssh_cfg    = None         # active SshCfg; None = local fping
 ssh_target = None         # ssh_cfg.target, None = local (quick test used all over)
 SOURCE_LABEL = 'local'    # log column SOURCE
@@ -545,14 +545,14 @@ _source_events = []       # pending comment texts (JUMPHOST OFFLINE / ONLINE, SO
 _ssh_pending  = None      # None = no change, False = switch to local, SshCfg = switch to it
 _ssh_lock     = threading.Lock()
 _ssh_cfgs     = []        # every SshCfg that owns a temp dir (cleaned at exit)
-_jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'ask'}   # form values of the last try (never the secret)
+_jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'accept-new'}   # form values of the last try (never the secret)
 _jump_hostkeys = {}       # (host, port) -> hashed known_hosts lines offered by TRUST KEY
 
 class SshCfg(object):
     """One jump host: where, how to log in, and its private temp dir (ControlPath + askpass)."""
-    def __init__(self, host, user=None, port=None, key=None, secret='', hostkey='ask'):
+    def __init__(self, host, user=None, port=None, key=None, secret='', hostkey='accept-new'):
         self.host, self.user, self.port = host, (user or None), (port or None)
-        self.hostkey = hostkey if hostkey in SSH_HOSTKEY_MODES else 'ask'
+        self.hostkey = hostkey if hostkey in SSH_HOSTKEY_MODES else 'accept-new'
         self.key = os.path.expanduser(key) if key else None
         self.secret = secret or ''
         self.target = (self.user + '@' if self.user else '') + host
@@ -792,7 +792,7 @@ def ssh_apply_pending():
     ssh_activate(p if p is not False else None)
     _source_events.append('SOURCE SWITCH %s -> %s' % (old, SOURCE_LABEL))
 
-def ssh_init(target, key, hostkey='ask'):
+def ssh_init(target, key, hostkey='accept-new'):
     """-ssh at startup: ask for the secret, trust the host key (ssh's own prompt), verify
     that fping works on the jump host. Exits with a clear message on any problem."""
     parsed = ssh_parse_target(target)
@@ -848,9 +848,9 @@ def jump_cfg_from(req):
         return None, 'port: 1-65535'
     if key and not os.path.isfile(os.path.expanduser(key)):
         return None, 'key file not found: ' + key
-    hk = str(req.get('hostkey', 'ask'))
+    hk = str(req.get('hostkey', 'accept-new'))
     if hk not in SSH_HOSTKEY_MODES:
-        hk = 'ask'
+        hk = 'accept-new'
     _jump_last.update(host=host, user=user, port=port, key=key, hostkey=hk)
     return SshCfg(host, user, int(port) if port else None, key, secret, hk), ''
 
@@ -3290,8 +3290,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">USER</td><td colspan="3"><input type="text" id="jumpUser" style="width:100%;box-sizing:border-box" placeholder="login name" autocomplete="off" spellcheck="false"></td></tr>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">PASSWORD</td><td colspan="3"><input type="password" id="jumpSecret" style="width:100%;box-sizing:border-box" placeholder="password, or key passphrase (empty = key/agent only)" autocomplete="new-password"></td></tr>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">HOST KEY</td><td colspan="3"><select id="jumpHostKey" style="width:100%;box-sizing:border-box">
-          <option value="ask">ask - confirm an unknown host key (TRUST KEY)</option>
           <option value="accept-new">accept new hosts automatically (a changed key is still refused)</option>
+          <option value="ask">ask - confirm an unknown host key (TRUST KEY)</option>
           <option value="off">off - no host key check at all (insecure)</option></select></td></tr>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">KEY FILE</td><td colspan="3"><input type="text" id="jumpKey" style="width:100%;box-sizing:border-box" placeholder="optional, path on the computer running eping.py" autocomplete="off" spellcheck="false"></td></tr>
       </table>
@@ -7174,7 +7174,7 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
         parts.append('-ssh ' + args.ssh)
         if getattr(args, 'ssh_key', None):
             parts.append('-sshkey ' + args.ssh_key)
-        if getattr(args, 'ssh_hostkey', 'ask') != 'ask':
+        if getattr(args, 'ssh_hostkey', 'accept-new') != 'accept-new':
             parts.append('-sshhk ' + args.ssh_hostkey)
     return ' '.join(parts)
 
@@ -7947,7 +7947,7 @@ if __name__=='__main__':
     parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries, range 0-" + str(FULL_SWEEP_MAX) + " (default: " + str(FULL_SWEEP_DEF) + ", 0 = disabled/never)")
     parser.add_argument('-ssh', '--ssh', dest='ssh', metavar='[USER@]HOST[:PORT]', default=None, help="run fping on this jump host via ssh instead of locally (system ssh; password or key passphrase is asked at startup; the jump host resolves the names and needs a working fping)")
     parser.add_argument('-sshkey', '--ssh_key', dest='ssh_key', metavar='FILE', default=None, help="private key file for -ssh (default: ssh agent / default keys)")
-    parser.add_argument('-sshhk', '--ssh_hostkey', dest='ssh_hostkey', choices=SSH_HOSTKEY_MODES, default='ask', help="host key check for -ssh: ask = confirm an unknown key (default), accept-new = trust hosts seen for the first time, off = no check at all (insecure)")
+    parser.add_argument('-sshhk', '--ssh_hostkey', dest='ssh_hostkey', choices=SSH_HOSTKEY_MODES, default='accept-new', help="host key check for -ssh: accept-new = trust hosts seen for the first time, a changed key is refused (default); ask = confirm an unknown key; off = no check at all (insecure)")
     parser.add_argument('-ncf', '--no_csv_fallback', action="store_true", dest='no_csv_fallback', help="do not ping the CSV address of a host whose name does not resolve (default: it is pinged by the CSV IP and marked in the host popup)")
     parser.add_argument('-ncs', '--no_check_source', action="store_true", dest='no_check_source', help="do not pass --check-source to fping (only needed for hosts replying from a different address)")
     parser.add_argument('-web', '--web', action="store_true", dest='web', help="start the web gui instead of the terminal (CLI) output")
@@ -8567,7 +8567,7 @@ if __name__=='__main__':
         labels  = ['HOST', 'PORT', 'USER', 'PASSWORD', 'HOST KEY', 'KEY FILE']
         keys    = ['host', 'port', 'user', 'secret', 'hostkey', 'key']
         vals    = [_jump_last.get('host', ''), _jump_last.get('port', ''), _jump_last.get('user', ''),
-                   '', _jump_last.get('hostkey', 'ask'), _jump_last.get('key', '')]
+                   '', _jump_last.get('hostkey', 'accept-new'), _jump_last.get('key', '')]
         hk_text = {'ask': 'ask (confirm unknown key)', 'accept-new': 'accept new hosts', 'off': 'OFF - no check (insecure)'}
         pre     = ssh_prereq()
         status  = ['']
