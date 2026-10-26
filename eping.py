@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '3.91'
+VERSION = '3.99'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -185,6 +185,9 @@ import zipfile
 import gzip
 import socket
 import shlex
+import getpass
+import tempfile
+import atexit
 import concurrent.futures
 import urllib.request
 import urllib.error
@@ -520,6 +523,373 @@ csv_ip_fallback  = True   # set from --no_csv_fallback in main: a CSV hostname t
 _csv_fb_names    = frozenset()  # hostnames pinged by their CSV IP in the last round (host popup)
 web_readonly     = False  # True with --web_view: the CLI drives, the browser only looks
 
+# ---- SSH source: fping runs on a jump host, results come back over ssh ----
+# Set with -ssh at startup or at runtime with the JUMPHOST window (web gui / [J]).
+# System ssh only. The secret (password / key passphrase) lives in memory and reaches
+# ssh through SSH_ASKPASS; with ControlMaster (not on Windows) one connection carries
+# all fping runs. Local DNS is not used: the jump host resolves the names. A source
+# switch is queued and applied at the start of the next round (ssh_apply_pending).
+SSH_MAX_PROCS   = 4       # parallel fping runs per round (sshd MaxSessions is 10 per connection)
+SSH_MAX_PROCS_NT = 2      # Windows OpenSSH has no ControlMaster: every run is its own connection
+SSH_REMOTE_PATH = '/usr/sbin:/sbin:/usr/local/bin:/usr/local/sbin'   # fping often lives in sbin
+SSH_TEST_TIMEOUT = 40
+SSH_HOSTKEY_MODES = ('ask', 'accept-new', 'off')   # unknown host key: confirm / trust new hosts / no check at all
+ssh_cfg    = None         # active SshCfg; None = local fping
+ssh_target = None         # ssh_cfg.target, None = local (quick test used all over)
+SOURCE_LABEL = 'local'    # log column SOURCE
+_remote_help = ''         # 'fping -h' of the jump host (capability probe)
+_source_fail_reason = ''  # set by a failed ssh run during the current round
+_source_down  = False
+_source_alert = ''         # visible error text while the ssh source is down
+_source_events = []       # pending comment texts (JUMPHOST OFFLINE / ONLINE, SOURCE SWITCH), written by update_host_state()
+_ssh_pending  = None      # None = no change, False = switch to local, SshCfg = switch to it
+_ssh_lock     = threading.Lock()
+_ssh_cfgs     = []        # every SshCfg that owns a temp dir (cleaned at exit)
+_jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'ask'}   # form values of the last try (never the secret)
+_jump_hostkeys = {}       # (host, port) -> hashed known_hosts lines offered by TRUST KEY
+
+class SshCfg(object):
+    """One jump host: where, how to log in, and its private temp dir (ControlPath + askpass)."""
+    def __init__(self, host, user=None, port=None, key=None, secret='', hostkey='ask'):
+        self.host, self.user, self.port = host, (user or None), (port or None)
+        self.hostkey = hostkey if hostkey in SSH_HOSTKEY_MODES else 'ask'
+        self.key = os.path.expanduser(key) if key else None
+        self.secret = secret or ''
+        self.target = (self.user + '@' if self.user else '') + host
+        self.label = self.target + (':' + str(self.port) if self.port else '')
+        self.dir = None
+        self.help = ''
+        self.version = ''
+
+    def prepare(self):
+        if self.dir:
+            return
+        self.dir = tempfile.mkdtemp(prefix='eping-ssh-', dir=('/tmp' if os.name != 'nt' else None))
+        _ssh_cfgs.append(self)
+        if self.secret:
+            if os.name == 'nt':
+                name, body = 'askpass.cmd', '@echo off\r\necho %EPING_SSHPW%\r\n'
+            else:
+                name, body = 'askpass.sh', ('#!/bin/sh\ncase "$1" in *yes/no*|*ingerprint*) exit 1;; esac\n'
+                                            'printf \'%s\\n\' "$EPING_SSHPW"\n')
+            hp = os.path.join(self.dir, name)
+            with open(hp, 'w') as f:
+                f.write(body)
+            os.chmod(hp, 0o700)
+
+    def close(self):
+        d, self.dir = self.dir, None
+        if self in _ssh_cfgs:
+            _ssh_cfgs.remove(self)
+        if not d:
+            return
+        try:
+            if os.name != 'nt':
+                subprocess.run(['ssh', '-o', 'ControlPath=' + os.path.join(d, 'c-%C'), '-O', 'exit']
+                               + (['-p', str(self.port)] if self.port else []) + [self.target],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=5)
+        except Exception:
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+
+def ssh_shutdown():
+    """Close every connection and remove all temp dirs (exit paths)."""
+    for c in list(_ssh_cfgs):
+        c.close()
+
+def ssh_parse_target(value):
+    """'user@host[:port]' / 'host' / 'user@[v6addr]:port' -> (user, host, port) or None."""
+    m = re.match(r'^(?:([A-Za-z0-9._][A-Za-z0-9._-]*)@)?(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._][A-Za-z0-9._-]*)'
+                 r'(?::(\d{1,5}))?$', (value or '').strip())
+    if not m:
+        return None
+    user, host, port = m.groups()
+    port = int(port) if port else None
+    if port is not None and not (1 <= port <= 65535):
+        return None
+    return user, host.strip('[]'), port
+
+def ssh_prereq():
+    """Is an OpenSSH client available? {'ok', 'version', 'keyscan', 'hint'}"""
+    if not shutil.which('ssh'):
+        if sys.platform.startswith('win'):
+            hint = "OpenSSH client not found. Windows: Settings > Apps > Optional features > add 'OpenSSH Client'."
+        elif sys.platform == 'darwin':
+            hint = "OpenSSH client not found (/usr/bin/ssh ships with macOS - check PATH)."
+        else:
+            hint = "OpenSSH client not found. Install it, e.g. 'sudo apt install openssh-client'."
+        return {'ok': False, 'version': '', 'keyscan': False, 'hint': hint}
+    ver = ''
+    try:
+        p = subprocess.run(['ssh', '-V'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, encoding='utf-8', errors='replace', timeout=5)
+        ver = (p.stdout or '').strip().splitlines()[0] if (p.stdout or '').strip() else ''
+    except Exception:
+        pass
+    return {'ok': True, 'version': ver, 'keyscan': bool(shutil.which('ssh-keyscan')), 'hint': ''}
+
+def ssh_base(c):
+    """ssh command prefix (options only, no destination) for jump host c."""
+    cmd = ['ssh', '-T', '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=10',
+           '-o', 'ServerAliveCountMax=3', '-o', 'LogLevel=ERROR']
+    if c.hostkey == 'off':           # no host key check, nothing stored (insecure)
+        cmd += ['-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=' + ('NUL' if os.name == 'nt' else '/dev/null')]
+    elif c.hostkey == 'accept-new':  # trust hosts seen for the first time, still refuse a changed key
+        cmd += ['-o', 'StrictHostKeyChecking=accept-new']
+    else:
+        cmd += ['-o', 'StrictHostKeyChecking=yes']
+    if c.secret:
+        cmd += ['-o', 'NumberOfPasswordPrompts=1']
+    else:
+        cmd += ['-o', 'BatchMode=yes']
+    if c.key:
+        cmd += ['-i', c.key, '-o', 'IdentitiesOnly=yes']
+    if c.port:
+        cmd += ['-p', str(c.port)]
+    if os.name != 'nt' and c.dir:
+        cmd += ['-o', 'ControlMaster=auto', '-o', 'ControlPath=' + os.path.join(c.dir, 'c-%C'),
+                '-o', 'ControlPersist=30']
+    return cmd
+
+def ssh_env(c):
+    env = os.environ.copy()
+    if c is not None and c.secret and c.dir:
+        env['SSH_ASKPASS'] = os.path.join(c.dir, 'askpass.cmd' if os.name == 'nt' else 'askpass.sh')
+        env['SSH_ASKPASS_REQUIRE'] = 'force'
+        env.setdefault('DISPLAY', 'eping:0')       # OpenSSH < 8.4 only uses askpass with DISPLAY set
+        env['EPING_SSHPW'] = c.secret
+    return env
+
+def ssh_wrap(argv, c=None):
+    """Full local command that runs argv on the jump host (targets via stdin)."""
+    c = c or ssh_cfg
+    inner = 'PATH="$PATH:%s"; export PATH; exec %s' % (
+        SSH_REMOTE_PATH, ' '.join(shlex.quote(a) for a in argv))
+    return ssh_base(c) + [c.target, 'sh -c ' + shlex.quote(inner)]
+
+def ssh_exec(c, script, timeout=SSH_TEST_TIMEOUT):
+    """Run a /bin/sh script on jump host c. Returns (returncode, output)."""
+    inner = 'PATH="$PATH:%s"; export PATH\n%s' % (SSH_REMOTE_PATH, script)
+    try:
+        p = subprocess.run(ssh_base(c) + [c.target, 'sh -c ' + shlex.quote(inner)],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           encoding='utf-8', errors='replace', timeout=timeout, env=ssh_env(c))
+        return p.returncode, p.stdout or ''
+    except FileNotFoundError:
+        return 255, 'ssh command not found'
+    except subprocess.TimeoutExpired:
+        return 255, 'ssh timeout'
+
+_SSH_CHECK = r'''command -v fping >/dev/null 2>&1 || { echo EPING_NOFPING; exit 0; }
+echo "EPING_VERSION=$(fping -v 2>&1 | head -1)"
+out=$(fping -4 -c1 -t500 127.0.0.1 2>&1); echo "EPING_RC=$?"; echo "EPING_OUT=$out"
+echo EPING_HELP_BEGIN; fping -h 2>&1; echo EPING_HELP_END'''
+
+def ssh_scan_hostkeys(c):
+    """Fetch the jump host's keys (hashed known_hosts lines) and their fingerprints."""
+    lines, fps = [], []
+    try:
+        p = subprocess.run(['ssh-keyscan', '-H', '-T', '5'] + (['-p', str(c.port)] if c.port else []) + [c.host],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           encoding='utf-8', errors='replace', timeout=15)
+        lines = [l for l in (p.stdout or '').splitlines() if l.strip() and not l.startswith('#')]
+        for l in lines:
+            q = subprocess.run(['ssh-keygen', '-lf', '-'], input=l + '\n', stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, encoding='utf-8', errors='replace', timeout=5)
+            m = re.search(r'(SHA256:\S+).*\((\w+)\)', q.stdout or '')
+            if m:
+                fps.append('%s %s' % (m.group(2), m.group(1)))
+    except Exception:
+        pass
+    _jump_hostkeys[(c.host, c.port)] = lines
+    return fps
+
+def ssh_trust_hostkeys(host, port):
+    """Append the keys that were shown to the user to ~/.ssh/known_hosts. Returns an error or ''."""
+    lines = _jump_hostkeys.get((host, port)) or []
+    if not lines:
+        return 'no host key to trust - run TEST first'
+    try:
+        d = os.path.join(os.path.expanduser('~'), '.ssh')
+        os.makedirs(d, mode=0o700, exist_ok=True)
+        with open(os.path.join(d, 'known_hosts'), 'a') as f:
+            f.write('\n'.join(lines) + '\n')
+    except OSError as e:
+        return 'cannot write known_hosts: ' + str(e)
+    return ''
+
+def ssh_check(c):
+    """Verify jump host c: login, fping present and allowed to ping. Never raises/exits.
+    Returns dict: ok, code (ok|nossh|hostkey|hostkey_changed|auth|conn|nofping|perm),
+    error, version, help, fingerprints."""
+    r = {'ok': False, 'code': '', 'error': '', 'version': '', 'help': '', 'fingerprints': []}
+    pre = ssh_prereq()
+    if not pre['ok']:
+        r.update(code='nossh', error=pre['hint'])
+        return r
+    c.prepare()
+    rc, out = ssh_exec(c, _SSH_CHECK)
+    if rc == 255 and 'Host key verification failed' in out:
+        if 'IDENTIFICATION HAS CHANGED' in out:
+            r.update(code='hostkey_changed', error='The host key of %s CHANGED (possible attack). '
+                     'Fix ~/.ssh/known_hosts only if you know why.' % c.host)
+        else:
+            r.update(code='hostkey', fingerprints=ssh_scan_hostkeys(c),
+                     error='Host key of %s is not known yet - check the fingerprint and TRUST KEY.' % c.host)
+        return r
+    if 'EPING_NOFPING' in out:
+        r.update(code='nofping', error='fping was not found on %s (searched PATH + %s). '
+                 "Install it there, e.g. 'sudo apt install fping'." % (c.target, SSH_REMOTE_PATH))
+        return r
+    if 'EPING_RC=' not in out:
+        why = out.strip().splitlines()[-1] if out.strip() else 'rc=' + str(rc)
+        r.update(code=('auth' if 'Permission denied' in out else 'conn'),
+                 error='connection to %s failed: %s' % (c.target, why))
+        return r
+    r['version'] = (re.search(r'EPING_VERSION=(.*)', out) or [None, '?'])[1].strip()
+    code = (re.search(r'EPING_RC=(\d+)', out) or [None, '-1'])[1]
+    if code != '0':
+        detail = (re.search(r'EPING_OUT=(.*)', out) or [None, ''])[1].strip()
+        r.update(code='perm', error='fping on %s does not work (%s; exit %s): %s - usually missing ICMP '
+                 'permission: needs root, setuid/cap_net_raw, or net.ipv4.ping_group_range covering the user.'
+                 % (c.target, r['version'], code, detail))
+        return r
+    m = re.search(r'EPING_HELP_BEGIN\n(.*)EPING_HELP_END', out, re.S)
+    r.update(ok=True, code='ok', help=(m.group(1) if m else ''))
+    c.help, c.version = r['help'], r['version']
+    return r
+
+def ssh_activate(c):
+    """Make c the active source (c=None: local). Only called between rounds."""
+    global ssh_cfg, ssh_target, SOURCE_LABEL, _remote_help, _fping_caps, _source_down, _source_alert
+    old = ssh_cfg
+    ssh_cfg, ssh_target = c, (c.target if c else None)
+    SOURCE_LABEL = c.label if c else 'local'
+    _remote_help = c.help if c else ''
+    _fping_caps = None
+    _source_down = False
+    _source_alert = ''
+    if old is not None and old is not c:
+        old.close()
+
+def ssh_request(c):
+    """Queue a source switch (c = SshCfg, or False for local); applied at the next round."""
+    global _ssh_pending
+    with _ssh_lock:
+        if isinstance(_ssh_pending, SshCfg) and _ssh_pending is not c:
+            _ssh_pending.close()
+        _ssh_pending = c
+
+def ssh_apply_pending():
+    """Start of every round: switch the source if one was requested."""
+    global _ssh_pending
+    with _ssh_lock:
+        p, _ssh_pending = _ssh_pending, None
+    if p is None:
+        return
+    old = SOURCE_LABEL
+    ssh_activate(p if p is not False else None)
+    _source_events.append('SOURCE SWITCH %s -> %s' % (old, SOURCE_LABEL))
+
+def ssh_init(target, key, hostkey='ask'):
+    """-ssh at startup: ask for the secret, trust the host key (ssh's own prompt), verify
+    that fping works on the jump host. Exits with a clear message on any problem."""
+    parsed = ssh_parse_target(target)
+    if not parsed:
+        error_handler("ERROR: -ssh: expected [user@]host[:port] (IPv6: user@[addr]:port): " + str(target))
+    pre = ssh_prereq()
+    if not pre['ok']:
+        error_handler("ERROR: -ssh: " + pre['hint'])
+    user, host, port = parsed
+    if key and not os.path.isfile(os.path.expanduser(key)):
+        error_handler("ERROR: -sshkey: file not found: " + os.path.expanduser(key))
+    secret = ''
+    if sys.stdin.isatty():
+        try:
+            secret = getpass.getpass('SSH password / key passphrase for %s (ENTER = none, key or agent only): '
+                                     % ((user + '@' if user else '') + host))
+        except (EOFError, KeyboardInterrupt):
+            error_handler("ERROR: -ssh: aborted")
+    c = SshCfg(host, user, port, key, secret, hostkey)
+    print('SSH source %s: connecting ...' % c.label)
+    sys.stdout.flush()
+    r = ssh_check(c)
+    if r['code'] == 'hostkey':
+        if not sys.stdin.isatty():
+            error_handler("ERROR: -ssh: host key of %s is not known (run ssh %s once to trust it)" % (host, c.target))
+        print('Host key of %s is not known yet - ssh asks for confirmation:' % host)
+        sys.stdout.flush()
+        env = os.environ.copy()
+        env.pop('SSH_ASKPASS', None)
+        subprocess.call(['ssh', '-o', 'StrictHostKeyChecking=ask', '-o', 'PreferredAuthentications=none',
+                         '-o', 'ConnectTimeout=10'] + (['-p', str(port)] if port else [])
+                        + [c.target, 'true'], env=env)
+        r = ssh_check(c)
+    if not r['ok']:
+        c.close()
+        error_handler("ERROR: -ssh: " + r['error'])
+    ssh_activate(c)
+    print('SSH source %s: OK (%s)' % (c.label, r['version']))
+    sys.stdout.flush()
+
+def jump_cfg_from(req):
+    """JUMPHOST window fields (dict) -> (SshCfg, error)."""
+    host = str(req.get('host', '')).strip()
+    user = str(req.get('user', '')).strip()
+    port = str(req.get('port', '')).strip()
+    key  = str(req.get('key', '')).strip()
+    secret = str(req.get('secret', ''))
+    if not re.match(r'^[A-Za-z0-9._][A-Za-z0-9._:%-]*$', host):
+        return None, 'host: enter a hostname or IP address'
+    if user and not re.match(r'^[A-Za-z0-9._][A-Za-z0-9._-]*$', user):
+        return None, 'user: invalid characters'
+    if port and not (port.isdigit() and 1 <= int(port) <= 65535):
+        return None, 'port: 1-65535'
+    if key and not os.path.isfile(os.path.expanduser(key)):
+        return None, 'key file not found: ' + key
+    hk = str(req.get('hostkey', 'ask'))
+    if hk not in SSH_HOSTKEY_MODES:
+        hk = 'ask'
+    _jump_last.update(host=host, user=user, port=port, key=key, hostkey=hk)
+    return SshCfg(host, user, int(port) if port else None, key, secret, hk), ''
+
+def jump_info():
+    return {'ssh': ssh_prereq(), 'active': SOURCE_LABEL if ssh_cfg else '', 'last': dict(_jump_last),
+            'pending': ('local' if _ssh_pending is False else (_ssh_pending.label if _ssh_pending else ''))}
+
+def jump_handle(req):
+    """JUMPHOST window actions (web gui). info | test | trust | connect | local."""
+    act = str(req.get('action', 'info'))
+    if act == 'info':
+        return dict(ok=True, **jump_info())
+    if act == 'local':
+        ssh_request(False)
+        return dict(ok=True, message='switching to local fping at the next round', **jump_info())
+    c, err = jump_cfg_from(req)
+    if c is None:
+        return dict(ok=False, code='input', error=err)
+    if act == 'trust':
+        e = ssh_trust_hostkeys(c.host, c.port)
+        return dict(ok=not e, code='trust', error=e, message='' if e else 'host key trusted - press TEST')
+    r = ssh_check(c)
+    if act == 'test' or not r['ok']:
+        c.close()
+        return r
+    ssh_request(c)                               # connect
+    r['message'] = 'connected to %s - switching at the next round' % c.label
+    return r
+
+def source_set(down, reason=''):
+    """Track the SSH source state; a change queues one #INFO# log line."""
+    global _source_down, _source_alert
+    _source_alert = ('JUMPHOST %s OFFLINE - %s - reconnecting' % (SOURCE_LABEL, reason)) if down else ''
+    if down != _source_down:
+        _source_down = down
+        # logged as a comment row (shown in epinga.py's comment timeline)
+        _source_events.append(('JUMPHOST %s OFFLINE: %s' % (SOURCE_LABEL, reason)) if down
+                              else ('JUMPHOST %s ONLINE again' % SOURCE_LABEL))
+
 _fping_caps = None
 def fping_capabilities():
     """Probe 'fping -h' once and remember which optional flags this build supports."""
@@ -527,9 +897,12 @@ def fping_capabilities():
     if _fping_caps is None:
         caps = set()
         try:
-            p = subprocess.run(['fping', '-h'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               encoding='utf-8', errors='replace', timeout=5)
-            text = p.stdout or ''
+            if ssh_target:
+                text = _remote_help
+            else:
+                p = subprocess.run(['fping', '-h'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   encoding='utf-8', errors='replace', timeout=5)
+                text = p.stdout or ''
             for flag in ('--check-source', '--seqmap-timeout'):
                 if flag in text:
                     caps.add(flag)
@@ -850,6 +1223,8 @@ def get_names_start(original_hosts_list, dns_ttl):
     Returns (thread, result_holder, candidates); thread is None (nothing started)
     when there is nothing to look up. Poll thread.is_alive() and, once False, call
     get_names_finish() with result_holder."""
+    if ssh_target:                          # reverse DNS here would not match the jump host's view
+        return None, None, []
     covered_ips = set()
     for h in original_hosts_list:
         if not is_ip_host(h):
@@ -890,7 +1265,7 @@ def prepare_targets(hosts, ttl, progress_cb=None):
     command is waiting): nothing is returned for this round ([], {}, []), the lookups
     already running still fill the cache, so the next round only resolves the rest.
     """
-    if ttl <= 0:
+    if ttl <= 0 or ssh_target:      # ssh: the jump host resolves the names
         return list(hosts), dict((h, [h]) for h in hosts), []
 
     pending = []
@@ -1046,16 +1421,20 @@ def timed_fping(hosts, lock, cmd_base, stats, slot):
 
 def fping_cmd(summary_hosts_list, lock, cmd_base=None):
     # Run fping on a subset of hosts and append parsed results to the global list.
-    global fping_cmd_output_raw_total
+    global fping_cmd_output_raw_total, _source_fail_reason
 
     if not summary_hosts_list:
         return
 
     cmd = list(cmd_base) if cmd_base else build_fping_cmd(interval)
 
-    use_stdin = len(summary_hosts_list) > FPING_STDIN_THRESH
+    use_stdin = len(summary_hosts_list) > FPING_STDIN_THRESH or bool(ssh_target)
     if not use_stdin:
         cmd.extend(summary_hosts_list)
+    popen_env = None
+    if ssh_target:
+        cmd = ssh_wrap(cmd)
+        popen_env = ssh_env(ssh_cfg)
 
     with _procs_lock:
         if _abort_scan:
@@ -1069,12 +1448,16 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
             stdin=(subprocess.PIPE if use_stdin else subprocess.DEVNULL),
             encoding='utf-8', errors='replace',
             bufsize=1,
+            env=popen_env,
         )
     except FileNotFoundError:
         # never sys.exit() inside a worker thread - it would only kill this thread
         # and leave the main loop running with an empty result. Report via scan_desc.
         global _scan_error
-        _scan_error = "fping not found - install it via 'sudo apt install fping' or 'brew install fping'"
+        if ssh_target:
+            _source_fail_reason = 'ssh command not found'
+        else:
+            _scan_error = "fping not found - install it via 'sudo apt install fping' or 'brew install fping'"
         return
 
     with _procs_lock:
@@ -1090,11 +1473,17 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
 
     # parse while streaming - no second pass over a buffered copy of the output
     fping_result_data = []
+    stray = collections.deque(maxlen=3)        # non-result lines (ssh errors), for the SOURCE DOWN reason
     for line in ping.stdout:
         row = parse_fping_line(line, get_date_time())
         if row is not None:
             fping_result_data.append(row)
+        elif ssh_target and line.strip():
+            stray.append(line.strip())
     ping.wait()
+    if ssh_target and (ping.returncode == 255 or (not fping_result_data and ping.returncode not in (0, 1, 2)
+                                                  and not _abort_scan)):
+        _source_fail_reason = (' / '.join(stray) or ('ssh/fping exit ' + str(ping.returncode)))[:200]
     with _procs_lock:
         try:
             _running_procs.remove(ping)
@@ -1638,12 +2027,13 @@ def sigint_handler(signal, frame):
     # ThreadPoolExecutor whose worker threads are not daemons, so sys.exit() would
     # block here until every in-flight PTR lookup finishes (or times out) instead of
     # stopping right away.
+    ssh_shutdown()
     os._exit(0)
 
 # ---- inventory CSV import: hosts + per-device columns carried into the log ----
 LOG_HEADER = ['TIMESTAMP','HOSTNAME','PREVIOUS_STATE','CURRENT_STATE','RTT',
               'NO_OF_CHANGES','CHANGE_TIMESTAMP','TBD','IP',
-              'INV_HOSTNAME','SERIAL_NUMBER','MODEL','LOCATION','SYSLOCATION','TYPE','INV_COMMENT']
+              'INV_HOSTNAME','SERIAL_NUMBER','MODEL','LOCATION','SYSLOCATION','TYPE','INV_COMMENT','SOURCE']
 _CSV_META_COLS = ('hostname', 'serial number', 'model', 'location', 'syslocation', 'type', 'comment')
 _EMPTY_META    = ('',) * len(_CSV_META_COLS)
 host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..16)
@@ -2012,6 +2402,9 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
     The TBD column carries the number of currently suppressed observations.
     """
     now_str = get_date_time()
+    while _source_events:
+        _ev = _source_events.pop(0)
+        write_log_comment(logging_enabled, logfile_file_name, _ev, tz_offset)   # shown in the report's comment timeline
     if down_streak is None:
         down_streak = {}
     # process in real chronological order (not the IP/hostname sort order the caller
@@ -2102,7 +2495,7 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
                              new_state.replace(' ', ''), rtt, changes, change_ts, tbd,
                              resolved_ip]
                             + list(host_meta.get(hostname) or host_meta.get(resolved_ip)
-                                   or _EMPTY_META))
+                                   or _EMPTY_META) + [SOURCE_LABEL])
     if log_fh is not None:
         log_fh.close()
     if host_hist:                                   # drop the history of deleted hosts
@@ -2294,6 +2687,7 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
     Returns (sorted rows, scan description, (full_count, reduced_count), timings).
     """
     global fping_cmd_output_raw_total
+    ssh_apply_pending()                     # JUMPHOST switch requested since the last round
     fping_cmd_output_raw_total = list()
     timings = {'dns': 0.0, 'ping': 0.0, 'groups': []}
 
@@ -2336,6 +2730,8 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
         by_fam = {'4': [], '6': []}
         for t in grp_targets:
             fam = ip_version_str(t)
+            if not fam and ssh_target:             # name resolved on the jump host
+                fam = '6' if dns_family == '6' else '4'
             if fam:
                 by_fam[fam].append(t)
         for fam in ('4', '6'):
@@ -2354,6 +2750,8 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
     for slot, (grp_targets, grp_retries, grp_name, fam) in enumerate(subgroups):
         procs, interval_ms = tune_group(len(grp_targets), probed_total,
                                         rate_pps, threads_arg, interval_arg)
+        if ssh_target:
+            procs = min(procs, SSH_MAX_PROCS_NT if os.name == 'nt' else SSH_MAX_PROCS)
         cmd_base = build_fping_cmd(interval_ms, grp_retries, fam)
         for chunk in split_seq(grp_targets, procs):
             thread_list.append(threading.Thread(target=timed_fping,
@@ -2373,8 +2771,9 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
         meta.append((grp_name, len(grp_targets),
                      retries if grp_retries is None else grp_retries, procs, interval_ms))
     _t = time.time()
-    global _scan_error
+    global _scan_error, _source_fail_reason
     _scan_error = ''
+    _source_fail_reason = ''
     scan_reset_abort()
     for t in thread_list:
         t.start()
@@ -2391,6 +2790,11 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
         for t in thread_list:
             t.join(timeout=10)
     timings['ping'] = time.time() - _t
+    if ssh_target:
+        if _source_fail_reason:
+            fping_cmd_output_raw_total = list()    # no result of a broken source: hosts keep their state
+            _scan_error = 'SSH SOURCE DOWN (%s): %s - reconnecting' % (SOURCE_LABEL, _source_fail_reason)
+        source_set(bool(_source_fail_reason), _source_fail_reason)
     if total_pps < 0:
         scan_desc = ' + '.join(parts) + ', unpaced (-i 0)'
     else:
@@ -2526,7 +2930,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   #deleteFilesBtn:disabled{opacity:.4;cursor:default}
   .fsbox{display:flex;align-items:center;gap:4px;margin-left:auto;color:var(--dim)}
   .fsbox button{padding:4px 9px}
-  input[type=text]{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
+  input[type=text],input[type=password]{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
                    padding:4px 8px;font:inherit;border-radius:3px;min-width:200px}
   select{background:var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235d6b5d' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center;
          background-size:9px 5px;
@@ -2535,7 +2939,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
          -webkit-appearance:none;-moz-appearance:none;appearance:none}
   select:hover{border-color:var(--acc)}
   select.on{border-color:var(--up);color:var(--up)}
-  input[type=text]:focus{outline:none;border-color:var(--acc)}
+  input[type=text]:focus,input[type=password]:focus{outline:none;border-color:var(--acc)}
   input[type=text].delmode{border-color:var(--down);color:var(--down)}
   input[type=range]{width:110px;accent-color:var(--acc)}
   /* unites an input + its action button(s) as one group - no border/background,
@@ -2679,6 +3083,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
+<div id="srcErr" style="display:none;background:#b3261e;color:#fff;font-weight:bold;text-align:center;padding:6px 10px;position:sticky;top:0;z-index:50"></div>
 <div class="layout">
   <div id="banner" class="banner" style="display:none"></div>
   <div id="resetLogModal" class="modal-overlay" style="display:none">
@@ -2874,6 +3279,34 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="jumpModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>JUMPHOST</h3>
+      <p>Run fping on a jump host via ssh instead of on this computer (the jump host resolves the names and needs fping with ICMP permission). Hosts and states are kept.</p>
+      <div id="jumpPrereq" style="font-size:12px;margin-bottom:10px"></div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">HOST</td><td><input type="text" id="jumpHost" style="width:100%;box-sizing:border-box" placeholder="jump.example.com or IP" autocomplete="off" spellcheck="false"></td>
+            <td style="padding:3px 8px 3px 12px;white-space:nowrap">PORT</td><td><input type="text" id="jumpPort" style="width:64px;min-width:0" placeholder="22" autocomplete="off"></td></tr>
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">USER</td><td colspan="3"><input type="text" id="jumpUser" style="width:100%;box-sizing:border-box" placeholder="login name" autocomplete="off" spellcheck="false"></td></tr>
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">PASSWORD</td><td colspan="3"><input type="password" id="jumpSecret" style="width:100%;box-sizing:border-box" placeholder="password, or key passphrase (empty = key/agent only)" autocomplete="new-password"></td></tr>
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">HOST KEY</td><td colspan="3"><select id="jumpHostKey" style="width:100%;box-sizing:border-box">
+          <option value="ask">ask - confirm an unknown host key (TRUST KEY)</option>
+          <option value="accept-new">accept new hosts automatically (a changed key is still refused)</option>
+          <option value="off">off - no host key check at all (insecure)</option></select></td></tr>
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">KEY FILE</td><td colspan="3"><input type="text" id="jumpKey" style="width:100%;box-sizing:border-box" placeholder="optional, path on the computer running eping.py" autocomplete="off" spellcheck="false"></td></tr>
+      </table>
+      <div id="jumpWarn" style="display:none;font-size:11px;color:var(--flap,#d9a400);margin-top:6px">This page is not served from this computer (HTTP, no encryption): the password would cross the network in clear text. Prefer a key.</div>
+      <div id="jumpFp" style="display:none;margin-top:8px;font-size:12px"></div>
+      <div id="jumpStatus" style="min-height:34px;margin:10px 0;font-size:12px;color:var(--dim);word-break:break-word">&nbsp;</div>
+      <div class="modal-buttons">
+        <button id="jumpTestBtn">TEST</button>
+        <button id="jumpConnectBtn">CONNECT</button>
+        <button id="jumpLocalBtn">USE LOCAL</button>
+        <button id="jumpTrustBtn" style="display:none">TRUST KEY</button>
+        <button id="jumpCloseBtn">CLOSE</button>
+      </div>
+    </div>
+  </div>
   <div id="hostListModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>ADD / DELETE HOST LIST</h3>
@@ -2894,6 +3327,19 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <input type="file" id="fileInputVis" accept=".txt,.csv,.list,text/plain" style="margin-bottom:14px;color:var(--fg)">
       <div class="modal-buttons">
         <button id="modalBtnAddFromClientCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
+  <div id="reportSrcModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>SELECT JUMPHOST</h3>
+      <p>Active logfile. Select the jump hosts (or local) to analyse - only their
+         periods are calculated. ENTER = GENERATE (default: all sources).</p>
+      <div id="reportSrcList" style="max-height:220px;overflow-y:auto;margin-bottom:14px;
+           border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 10px;box-sizing:border-box"></div>
+      <div class="modal-buttons">
+        <button id="modalBtnReportSrcGo">GENERATE</button>
+        <button id="modalBtnReportSrcCancel">CANCEL</button>
       </div>
     </div>
   </div>
@@ -3010,6 +3456,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </select>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
+      <button id="btnJump" title="ping from a jump host via ssh instead of from this computer">JUMPHOST</button>
       <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
       <select id="selDownload" title="add hosts from a file on the server or from your computer, download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
@@ -3058,6 +3505,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="" selected disabled hidden>GENERATE REPORT</option>
        <option value="active">ACTIVE LOGFILE</option>
        <option value="choose">CHOOSE LOGFILE</option>
+       <option value="sources">SELECT JUMPHOST</option>
       </select>
     </span>
    </span>
@@ -4135,6 +4583,85 @@ document.getElementById('commentInput').addEventListener('keydown', function(e){
 document.getElementById('btnClear').onclick  = function(){
   if(confirm('Remove ALL hosts and reset their state?')){ post('clear'); } };
 
+/* ---- JUMPHOST window: test / connect / back to local ---- */
+var jumpModal = document.getElementById('jumpModal');
+var jumpStatus = document.getElementById('jumpStatus');
+var jumpBusy = false;
+function jumpOpen(){ return jumpModal.style.display === 'flex'; }
+function closeJump(){ jumpModal.style.display = 'none'; document.getElementById('jumpSecret').value = ''; }
+function jumpSay(text, cls){
+  jumpStatus.textContent = text || '\u00a0';
+  jumpStatus.style.color = cls === 'ok' ? 'var(--up,#3fb950)' : (cls === 'err' ? 'var(--down,#f85149)' : 'var(--dim)');
+}
+function jumpFields(action){
+  return {action: action, host: document.getElementById('jumpHost').value, port: document.getElementById('jumpPort').value,
+          user: document.getElementById('jumpUser').value, key: document.getElementById('jumpKey').value,
+          hostkey: document.getElementById('jumpHostKey').value,
+          secret: document.getElementById('jumpSecret').value};
+}
+function jumpButtons(){
+  var blocked = jumpBusy || (window.jumpNoSsh === true);
+  ['jumpTestBtn','jumpConnectBtn'].forEach(function(id){ document.getElementById(id).disabled = blocked; });
+  document.getElementById('jumpLocalBtn').disabled = jumpBusy;
+}
+function jumpCall(action, busyText){
+  jumpBusy = true; jumpButtons(); jumpSay(busyText, '');
+  document.getElementById('jumpFp').style.display = 'none';
+  document.getElementById('jumpTrustBtn').style.display = 'none';
+  return fetch('api/jumphost', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(jumpFields(action))}).then(function(r){ return r.json(); }).then(function(j){
+      jumpBusy = false; jumpButtons();
+      if(j.ok){ jumpSay(j.message || ('OK' + (j.version ? ' - ' + j.version : '')), 'ok'); }
+      else { jumpSay(j.error || 'failed', 'err'); }
+      if(j.code === 'hostkey'){
+        var fp = document.getElementById('jumpFp');
+        fp.textContent = 'Fingerprint(s): ' + (j.fingerprints && j.fingerprints.length ? j.fingerprints.join('  |  ') : 'not readable (ssh-keyscan missing)');
+        fp.style.display = 'block';
+        document.getElementById('jumpTrustBtn').style.display = (j.fingerprints && j.fingerprints.length) ? '' : 'none';
+      }
+      return j;
+    }).catch(function(){ jumpBusy = false; jumpButtons(); jumpSay('request failed', 'err'); });
+}
+function openJump(){
+  jumpModal.style.display = 'flex';
+  document.getElementById('jumpWarn').style.display =
+    (['localhost','127.0.0.1','[::1]'].indexOf(location.hostname) < 0) ? 'block' : 'none';
+  jumpSay('', '');
+  fetch('api/jumphost', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'info'})}).then(function(r){ return r.json(); }).then(function(j){
+      var pre = document.getElementById('jumpPrereq');
+      window.jumpNoSsh = !(j.ssh && j.ssh.ok);
+      if(j.ssh && j.ssh.ok){
+        pre.style.color = 'var(--dim)';
+        pre.textContent = 'ssh client: ' + (j.ssh.version || 'found') + (j.ssh.keyscan ? '' : ' (ssh-keyscan missing: unknown host keys cannot be trusted here)') +
+          ' | source: ' + (j.active ? j.active : 'local') + (j.pending ? ' (switching to ' + j.pending + ')' : '');
+      } else {
+        pre.style.color = 'var(--down,#f85149)';
+        pre.textContent = (j.ssh && j.ssh.hint) || 'OpenSSH client not found on this computer.';
+      }
+      if(j.last){
+        if(j.last.hostkey) document.getElementById('jumpHostKey').value = j.last.hostkey;
+        ['host','port','user','key'].forEach(function(k){
+          var el = document.getElementById('jump' + k.charAt(0).toUpperCase() + k.slice(1));
+          if(el && !el.value) el.value = j.last[k] || '';
+        });
+      }
+      jumpButtons();
+    }).catch(function(){});
+  jumpButtons();
+}
+document.getElementById('btnJump').onclick = openJump;
+document.getElementById('jumpCloseBtn').onclick = closeJump;
+document.getElementById('jumpHostKey').onchange = function(){
+  jumpSay(this.value === 'off' ? 'Host key check OFF: a man-in-the-middle would not be noticed.' : '', this.value === 'off' ? 'err' : ''); };
+document.getElementById('jumpTestBtn').onclick = function(){ jumpCall('test', 'testing connection ...'); };
+document.getElementById('jumpConnectBtn').onclick = function(){
+  jumpCall('connect', 'connecting ...').then(function(j){ if(j && j.ok){ setTimeout(closeJump, 1200); } }); };
+document.getElementById('jumpLocalBtn').onclick = function(){
+  jumpCall('local', 'switching ...').then(function(j){ if(j && j.ok){ setTimeout(closeJump, 1200); } }); };
+document.getElementById('jumpTrustBtn').onclick = function(){
+  jumpCall('trust', 'saving host key ...').then(function(j){ if(j && j.ok){ jumpCall('test', 'testing connection ...'); } }); };
+
 /* ---- ADD/DEL LIST window (paste a host list), preview before applying ---- */
 var hostListModal = document.getElementById('hostListModal');
 var hostListText  = document.getElementById('hostListText');
@@ -4357,7 +4884,7 @@ var REPORT_WAIT_HTML = '<!doctype html><html><head><meta charset="UTF-8">'
 // this, so the picker below enforces the same cap instead of letting the user
 // select more and lose files without any indication.
 var REPORT_MAX_FILES = 25;
-function runReport(values){
+function runReport(values, sources){
   // window.open() must happen synchronously in the click handler or browsers
   // treat it as a popup and block it - open a blank tab now, fill it in once
   // poll() sees the report become ready (or close it again on error).
@@ -4367,10 +4894,18 @@ function runReport(values){
     reportWindow.document.close();
   }
   note(PENDING.run_report, true);
+  postReport(Array.isArray(values) ? values : (values ? [values] : []), sources || null);
+}
+function reportAbort(msg){
+  if(reportWindow && !reportWindow.closed) reportWindow.close();
+  reportWindow = null;
+  note(msg, false);
+}
+function postReport(names, sources){
   // post() only carries a single 'value' string - multi-file selection needs
-  // its own 'values' array, so this bypasses post() for the array case.
-  var body = Array.isArray(values) ? {cmd: 'run_report', values: values}
-                                    : {cmd: 'run_report', value: values || ''};
+  // its own 'values' array, so this bypasses post().
+  var body = names.length ? {cmd: 'run_report', values: names} : {cmd: 'run_report', value: ''};
+  if(sources) body.sources = sources;
   fetch('api/command', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)})
     .then(function(r){ return r.json().then(function(j){ return {ok: r.ok && j.ok, err: j.error}; }); })
@@ -4379,23 +4914,62 @@ function runReport(values){
       // rotation between picking it and clicking GENERATE) never flips
       // web_state['report'] to 'error' server-side - without this, the blank
       // tab above would sit on "please wait" forever with no explanation.
-      if(!res.ok){
-        if(reportWindow && !reportWindow.closed) reportWindow.close();
-        reportWindow = null;
-        note('report failed: ' + (res.err || 'request rejected'), false);
-      }
+      if(!res.ok) reportAbort('report failed: ' + (res.err || 'request rejected'));
     })
-    .catch(function(){
-      if(reportWindow && !reportWindow.closed) reportWindow.close();
-      reportWindow = null;
-      note('report failed: request error', false);
-    });
+    .catch(function(){ reportAbort('report failed: request error'); });
 }
+var reportSrcModal = document.getElementById('reportSrcModal');
+function reportSrcOpen(){ return reportSrcModal.style.display === 'flex'; }
+function openReportSourcesPick(){
+  // SELECT SOURCES: sources of the active logfile -> pick -> report
+  fetch('api/log_sources', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({names: []})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j && j.sources && j.sources.length > 1){ openReportSources(j.sources); }
+      else { note('the active logfile has only one jump host / source' + (j && j.sources && j.sources.length ? ' (' + j.sources[0] + ')' : ''), false); }
+    })
+    .catch(function(){ note('failed to read the sources', false); });
+}
+function openReportSources(sources){
+  var list = document.getElementById('reportSrcList');
+  list.innerHTML = '';
+  sources.forEach(function(sname){
+    var lab = document.createElement('label');
+    lab.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;color:var(--fg);font-size:12px;cursor:pointer';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.className = 'reportSrcCb'; cb.value = sname; cb.checked = true;
+    cb.onchange = function(){
+      document.getElementById('modalBtnReportSrcGo').disabled = !document.querySelectorAll('.reportSrcCb:checked').length;
+    };
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode(sname));
+    list.appendChild(lab);
+  });
+  document.getElementById('modalBtnReportSrcGo').disabled = false;
+  reportSrcModal.style.display = 'flex';
+  document.getElementById('modalBtnReportSrcGo').focus();
+}
+function closeReportSources(){ reportSrcModal.style.display = 'none'; }
+function runReportSources(){
+  if(!reportSrcOpen()) return;
+  var all = document.querySelectorAll('.reportSrcCb');
+  var sel = document.querySelectorAll('.reportSrcCb:checked');
+  if(!sel.length) return;
+  closeReportSources();
+  runReport('', sel.length === all.length ? null
+    : Array.prototype.map.call(sel, function(cb){ return cb.value; }));
+}
+document.getElementById('modalBtnReportSrcGo').onclick = runReportSources;
+document.getElementById('modalBtnReportSrcCancel').onclick = function(){
+  closeReportSources();
+};
 document.getElementById('selGenReport').onchange = function(){
   var what = this.value;
   this.value = '';                              // reset - a select, not a toggle
   if(what === 'active'){ runReport(''); }
   else if(what === 'choose'){ openChooseReport(); }
+  else if(what === 'sources'){ openReportSourcesPick(); }
 };
 var chooseReportFiles = [];
 var chooseReportSort  = {key: 'mtime', dir: 'desc'};
@@ -4611,6 +5185,15 @@ document.addEventListener('keydown', function(e){
     }
     var sk = e.key.toLowerCase();
     if(sk === 'y' || e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
+    return;
+  }
+  if(reportSrcOpen()){
+    if(e.key === 'Escape'){ closeReportSources(); e.preventDefault(); }
+    else if(e.key === 'Enter'){ runReportSources(); e.preventDefault(); }
+    return;
+  }
+  if(jumpOpen()){
+    if(e.key === 'Escape'){ closeJump(); e.preventDefault(); }
     return;
   }
   if(hostListOpen()){
@@ -5000,6 +5583,13 @@ function poll(){
       document.getElementById('ro').textContent = '- read only, controlled from the terminal';
     }
     isReadOnly = !!s.readonly;
+    var bj = document.getElementById('btnJump');
+    if(bj){
+      var se = document.getElementById('srcErr');
+      if(se){ se.textContent = s.source_error || ''; se.style.display = s.source_error ? 'block' : 'none'; }
+      bj.style.borderColor = s.source ? 'var(--acc)' : '';
+      bj.title = s.source ? ('pinging via jump host ' + s.source + ' - click to change') : 'ping from a jump host via ssh instead of from this computer';
+    }
     document.getElementById('clock').textContent = s.datetime;
     document.getElementById('sHosts').textContent   = s.hosts;
     document.getElementById('sRuntime').textContent = s.run_time;
@@ -5258,7 +5848,26 @@ def render_view_file_page(name, content, queue_names):
     )
 
 
-def generate_epinga_report(logpaths):
+def log_sources(paths):
+    """Distinct SOURCE values of the given logfiles ('local' first); [] without SOURCE column."""
+    out = set()
+    for p in paths:
+        try:
+            with open(p, 'r', encoding='utf-8', errors='replace', newline='') as f:
+                rd = csv.reader(f)
+                hdr = next(rd, None)
+                if not hdr or 'SOURCE' not in hdr or 'HOSTNAME' not in hdr:
+                    continue
+                i, h = hdr.index('SOURCE'), hdr.index('HOSTNAME')
+                for r in rd:
+                    if len(r) > i and len(r) > h and r[h] not in ('#COMMENT#', '#INFO#'):
+                        out.add(r[i].strip() or 'local')
+        except OSError:
+            pass
+    return sorted(out, key=lambda x: (x != 'local', x))
+
+
+def generate_epinga_report(logpaths, sources=None):
     """Run epinga.py against one or more logfiles and produce an HTML report -
     core logic shared by the web gui's GENERATE REPORT (run_epinga_report, below)
     and the curses [N] ANALYSE NOW key. logpaths is a single path (str) or a
@@ -5295,8 +5904,11 @@ def generate_epinga_report(logpaths):
         report_path = report_base + '_report-' + str(suffix) + '.html'
         suffix += 1
     try:
+        src_args = []
+        for _s in (sources or []):
+            src_args += ['--source', _s]
         proc = subprocess.run([sys.executable, epinga_path, '-f', analyse_path, '-q',
-                               '--html', report_path, '--no-version-check', '--no-open'],
+                               '--html', report_path, '--no-version-check', '--no-open'] + src_args,
                               env=dict(os.environ, PYTHONIOENCODING='utf-8'),
                               stdin=subprocess.DEVNULL,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -5316,7 +5928,7 @@ def generate_epinga_report(logpaths):
     return report_path, None
 
 
-def run_epinga_report(target_paths=None):
+def run_epinga_report(target_paths=None, sources=None):
     """GENERATE REPORT (web gui): analyse one or more logfiles with epinga.py
     and make the resulting HTML available at /api/report. target_paths picks
     one or more arbitrary *.csv files (DOWNLOAD... CHOOSE LOGFILE picker -
@@ -5332,7 +5944,7 @@ def run_epinga_report(target_paths=None):
     else:
         with web_lock:
             logpaths = web_state.get('logfile') or ''
-    report_path, err = generate_epinga_report(logpaths)
+    report_path, err = generate_epinga_report(logpaths, sources)
     if report_path:
         with _report_lock:
             _report_file_path = report_path
@@ -5702,6 +6314,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 _tz = 0
             snapshot['datetime'] = now_local(_tz).strftime("%d/%m/%Y %H:%M:%S")
+            snapshot['source'] = SOURCE_LABEL if ssh_cfg else ''
+            snapshot['source_error'] = _source_alert if ssh_cfg else ''
             body = json.dumps(snapshot)      # serialize outside the lock - no stall of the ping loop
             self._respond(200, 'application/json; charset=utf-8', body)
         elif path in ('/api/logfiles', 'api/logfiles'):
@@ -5908,6 +6522,20 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
 
+        # --- JUMPHOST window: info / test / trust key / connect / local ---
+        if path in ('/api/jumphost', 'api/jumphost'):
+            raw = self._read_body(65536) or b'{}'
+            try:
+                req = json.loads(raw.decode('utf-8', 'replace') or '{}')
+            except Exception:
+                req = {}
+            try:
+                res = jump_handle(req if isinstance(req, dict) else {})
+            except Exception as e:
+                res = {'ok': False, 'code': 'conn', 'error': 'internal error: ' + str(e)}
+            self._respond(200, 'application/json; charset=utf-8', json.dumps(res))
+            return
+
         # --- ADD/DEL LIST window: preview (no change) or queue add_list/del_list ---
         if path in ('/api/hostlist', 'api/hostlist'):
             raw = self._read_body(WEB_MAX_UPLOAD)
@@ -6014,6 +6642,30 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                           json.dumps({'ok': not errors, 'added': added, 'errors': errors}))
             return
 
+        if path in ('/api/log_sources', 'api/log_sources'):
+            # SOURCE values of the logfile(s) a report would analyse (empty names = active logfile)
+            raw = self._read_body(WEB_MAX_UPLOAD)
+            try:
+                data = json.loads(raw.decode('utf-8', 'replace')) if raw else {}
+            except Exception:
+                data = {}
+            names = data.get('names') if isinstance(data, dict) else None
+            names = [str(n)[:256] for n in names[:REPORT_MAX_FILES]] if isinstance(names, list) else []
+            paths = []
+            for n in names:
+                if not safe_cwd_filename(n, ('.csv',)) or not os.path.isfile(n):
+                    self._respond(400, 'application/json; charset=utf-8',
+                                  json.dumps({'ok': False, 'error': 'invalid filename'}))
+                    return
+                paths.append(n)
+            if not paths:
+                with web_lock:
+                    act = web_state.get('logfile') or ''
+                paths = [act] if act and os.path.isfile(act) else []
+            self._respond(200, 'application/json; charset=utf-8',
+                          json.dumps({'ok': True, 'sources': log_sources(paths)}))
+            return
+
         if path in ('/api/delete_logfile', 'api/delete_logfile'):
             raw = self._read_body(WEB_MAX_UPLOAD)
             try:
@@ -6073,6 +6725,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 names = [value]
             else:
                 names = []
+            raw_src = payload.get('sources')
+            report_sources = [str(x)[:256] for x in raw_src[:64]] if isinstance(raw_src, list) and raw_src else None
             target_paths = None
             if names:
                 target_paths = []
@@ -6092,7 +6746,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     _report_running = True
                     web_state['report'] = {'status': 'running', 'error': ''}
             if not already_running:
-                threading.Thread(target=run_epinga_report, args=(target_paths,), daemon=True).start()
+                threading.Thread(target=run_epinga_report, args=(target_paths, report_sources), daemon=True).start()
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
         if not self._queue_command((cmd, value)):
@@ -6516,6 +7170,12 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
         parts.append('-wvc')
     parts.append('-port ' + str(args.web_port))
     parts.append('-bind ' + args.web_bind)
+    if getattr(args, 'ssh', None):
+        parts.append('-ssh ' + args.ssh)
+        if getattr(args, 'ssh_key', None):
+            parts.append('-sshkey ' + args.ssh_key)
+        if getattr(args, 'ssh_hostkey', 'ask') != 'ask':
+            parts.append('-sshhk ' + args.ssh_hostkey)
     return ' '.join(parts)
 
 
@@ -7057,6 +7717,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 sys.stdout.flush()
                 # os._exit(), not sys.exit(): see sigint_handler() for why - a
                 # running [G] GET NAMES lookup must not delay shutdown.
+                ssh_shutdown()
                 os._exit(0)
 
         # ADV OPTIONS #INFO# debounce - a value that hasn't changed again in
@@ -7235,7 +7896,8 @@ if __name__=='__main__':
             except Exception:
                 pass
 
-    if not is_program_installed("fping"):
+    if (not is_program_installed("fping")
+            and not any(a in ('-ssh', '--ssh') or a.startswith(('-ssh=', '--ssh=')) for a in sys.argv[1:])):
         error_handler("ERROR: The command 'fping' was not found. \n Install it via 'sudo apt install fping' (Debian/Ubuntu), 'brew install fping' (macOS), or however it works on your system.")
 
     default_hostfile = 'eping-hosts.txt'
@@ -7283,6 +7945,9 @@ if __name__=='__main__':
     parser.add_argument('-cf', '--confirm', default=str(CONFIRM_DEF), dest='confirm', help="consecutive DOWN observations before a host leaves UP (default: " + str(CONFIRM_DEF) + ", 1 = report every single observation)")
     parser.add_argument('-ds', '--down_slices', default=str(DOWN_SLICES_DEF), dest='down_slices', help="spread the known DOWN hosts over N rounds, range 1-" + str(DOWN_SLICES_MAX) + " (default: " + str(DOWN_SLICES_DEF) + ", 1 = probe all of them every round)")
     parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries, range 0-" + str(FULL_SWEEP_MAX) + " (default: " + str(FULL_SWEEP_DEF) + ", 0 = disabled/never)")
+    parser.add_argument('-ssh', '--ssh', dest='ssh', metavar='[USER@]HOST[:PORT]', default=None, help="run fping on this jump host via ssh instead of locally (system ssh; password or key passphrase is asked at startup; the jump host resolves the names and needs a working fping)")
+    parser.add_argument('-sshkey', '--ssh_key', dest='ssh_key', metavar='FILE', default=None, help="private key file for -ssh (default: ssh agent / default keys)")
+    parser.add_argument('-sshhk', '--ssh_hostkey', dest='ssh_hostkey', choices=SSH_HOSTKEY_MODES, default='ask', help="host key check for -ssh: ask = confirm an unknown key (default), accept-new = trust hosts seen for the first time, off = no check at all (insecure)")
     parser.add_argument('-ncf', '--no_csv_fallback', action="store_true", dest='no_csv_fallback', help="do not ping the CSV address of a host whose name does not resolve (default: it is pinged by the CSV IP and marked in the host popup)")
     parser.add_argument('-ncs', '--no_check_source', action="store_true", dest='no_check_source', help="do not pass --check-source to fping (only needed for hosts replying from a different address)")
     parser.add_argument('-web', '--web', action="store_true", dest='web', help="start the web gui instead of the terminal (CLI) output")
@@ -7647,6 +8312,11 @@ if __name__=='__main__':
     # no hosts at all is fine - eping starts empty and hosts can be added later
     # (CLI: [A]=ADD HOST, web gui: ADD HOST / UPLOAD FILE)
 
+    if args.ssh:
+        ssh_init(args.ssh, args.ssh_key, args.ssh_hostkey)
+    elif args.ssh_key:
+        error_handler("ERROR: -sshkey needs -ssh")
+
     # processes and -i are derived per round and per retry group (tune_group),
     # so args.num_of_threads keeps its value ('auto' or the number the user asked for)
 
@@ -7710,6 +8380,7 @@ if __name__=='__main__':
             # no maybe_run_epinga() prompt in web mode - see the 'exit' cmd handler
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
+            ssh_shutdown()
             os._exit(0)
         signal.signal(signal.SIGINT, _web_sigint)
         run_web_mode(list(summary_hosts_list), host_state, args, logfile_file_name,
@@ -7884,6 +8555,190 @@ if __name__=='__main__':
             draw_screen()
             screen.refresh()
         return input_str.strip()
+
+    def jumphost_dialog():
+        """[J] JUMPHOST - curses form: HOST/PORT/USER/PASSWORD/KEY FILE + TEST, CONNECT, USE LOCAL.
+        Same actions as the web gui window (jump_handle). Pinging keeps running meanwhile."""
+        rows, cols = screen.getmaxyx()
+        dw = min(76, max(40, cols - 4))
+        dh = 18
+        dy = max(0, rows // 2 - dh // 2)
+        dx = max(0, cols // 2 - dw // 2)
+        labels  = ['HOST', 'PORT', 'USER', 'PASSWORD', 'HOST KEY', 'KEY FILE']
+        keys    = ['host', 'port', 'user', 'secret', 'hostkey', 'key']
+        vals    = [_jump_last.get('host', ''), _jump_last.get('port', ''), _jump_last.get('user', ''),
+                   '', _jump_last.get('hostkey', 'ask'), _jump_last.get('key', '')]
+        hk_text = {'ask': 'ask (confirm unknown key)', 'accept-new': 'accept new hosts', 'off': 'OFF - no check (insecure)'}
+        pre     = ssh_prereq()
+        status  = ['']
+        status_cls = 1
+        fps     = []
+        can_trust = False
+        focus   = 0
+        busy    = {'t': None, 'res': None, 'act': ''}
+        spin    = '|/-\\'
+        tick    = 0
+
+        def buttons():
+            b = [('TEST', 'test'), ('CONNECT', 'connect'), ('USE LOCAL', 'local')]
+            if can_trust:
+                b.append(('TRUST KEY', 'trust'))
+            b.append(('CLOSE', 'close'))
+            return b
+
+        def wrap(text, width):
+            out, line = [], ''
+            for w in str(text).split():
+                if len(line) + len(w) + 1 > width and line:
+                    out.append(line)
+                    line = w
+                else:
+                    line = (line + ' ' + w).strip()
+            if line:
+                out.append(line)
+            return out or ['']
+
+        def draw():
+            for y in range(dh):
+                screen_output(dy + y, dx, ' ' * dw, 1, 0)
+            screen_output(dy, dx, '┌' + '─' * (dw - 2) + '┐', 1, 1)
+            screen_output(dy + 1, dx, '│' + 'JUMPHOST'.center(dw - 2) + '│', 1, 1)
+            screen_output(dy + 2, dx, '│' + '─' * (dw - 2) + '│', 1, 0)
+            if pre['ok']:
+                info = 'ssh: ' + (pre['version'] or 'found') + ' | source: ' + (SOURCE_LABEL if ssh_cfg else 'local')
+                cls = 1
+            else:
+                info = pre['hint']
+                cls = 3
+            screen_output(dy + 3, dx, '│' + (' ' + info)[:dw - 2].ljust(dw - 2) + '│', cls, 0)
+            fw = dw - 16
+            for i, lab in enumerate(labels):
+                shown = ('*' * len(vals[i])) if keys[i] == 'secret' else (hk_text[vals[i]] + '  [ENTER/SPACE=change]' if keys[i] == 'hostkey' else vals[i])
+                shown = shown[-fw:] if len(shown) > fw else shown
+                line = ' ' + lab.ljust(10) + (shown + '_' * 0).ljust(fw) + ' '
+                screen_output(dy + 4 + i, dx, '│' + line[:dw - 2].ljust(dw - 2) + '│', 2 if focus == i else 1, 1 if focus == i else 0)
+            screen_output(dy + 10, dx, '│' + ' ' * (dw - 2) + '│', 1, 0)
+            lines = []
+            for t in status:
+                lines.extend(wrap(t, dw - 4))
+            for f in fps:
+                lines.extend(wrap(f, dw - 4))
+            for i in range(4):
+                txt = lines[i] if i < len(lines) else ''
+                screen_output(dy + 11 + i, dx, '│' + (' ' + txt)[:dw - 2].ljust(dw - 2) + '│', status_cls, 0)
+            bl = buttons()
+            col = dx + 2
+            screen_output(dy + 15, dx, '│' + ' ' * (dw - 2) + '│', 1, 0)
+            for i, (name, _a) in enumerate(bl):
+                lab = ' [' + name + '] '
+                hi = (focus == len(labels) + i)
+                screen_output(dy + 15, col, lab, 2 if hi else 1, 1 if hi else 0)
+                col += len(lab) + 1
+            screen_output(dy + 16, dx, '│' + ' TAB/arrows=move  ENTER=select  ESC=close'.ljust(dw - 2) + '│', 1, 0)
+            screen_output(dy + 17, dx, '└' + '─' * (dw - 2) + '┘', 1, 1)
+            if focus < len(labels) and keys[focus] != 'hostkey' and not busy['t']:
+                curses.curs_set(1)
+                shown_len = min(len(vals[focus]), fw)
+                screen.move(dy + 4 + focus, dx + 12 + shown_len)
+            else:
+                curses.curs_set(0)
+            screen.refresh()
+
+        def start(action):
+            nonlocal status, status_cls, fps, can_trust
+            req = {'action': action}
+            for k, v in zip(keys, vals):
+                req[k] = v
+            status, status_cls, fps, can_trust = [{'test': 'testing connection ...', 'connect': 'connecting ...',
+                                                   'trust': 'saving host key ...', 'local': 'switching ...'}[action]], 1, [], False
+            busy['act'] = action
+            busy['res'] = None
+
+            def work():
+                try:
+                    busy['res'] = jump_handle(req)
+                except Exception as e:
+                    busy['res'] = {'ok': False, 'code': 'conn', 'error': 'internal error: ' + str(e)}
+            busy['t'] = threading.Thread(target=work, daemon=True)
+            busy['t'].start()
+
+        stop_event = threading.Event()
+        bg_thread  = threading.Thread(target=run_background_pings, args=(stop_event,), daemon=True)
+        bg_thread.start()
+        done_msg = None
+        screen.timeout(150)
+        try:
+            while True:
+                draw()
+                if busy['t'] is not None and not busy['t'].is_alive():
+                    res, act = busy['res'] or {}, busy['act']
+                    busy['t'] = None
+                    if res.get('ok'):
+                        status = [res.get('message') or ('OK' + (' - ' + res['version'] if res.get('version') else ''))]
+                        status_cls = 2
+                        if act in ('connect', 'local'):
+                            done_msg = status[0]
+                            break
+                        if act == 'trust':
+                            start('test')
+                    else:
+                        status = [res.get('error') or 'failed']
+                        status_cls = 3
+                        if res.get('code') == 'hostkey':
+                            fps = ['Fingerprint: ' + f for f in (res.get('fingerprints') or [])] or \
+                                  ['Fingerprint not readable (ssh-keyscan missing)']
+                            can_trust = bool(res.get('fingerprints'))
+                            if can_trust:
+                                focus = len(labels) + len(buttons()) - 2      # TRUST KEY: ENTER = yes
+                                status = status + ['Press ENTER to trust this key (or set HOST KEY to accept/off).']
+                    continue
+                ch = screen.getch()
+                if busy['t'] is not None:
+                    tick += 1
+                    status[0] = status[0].rstrip(' |/-\\') + ' ' + spin[tick % 4]
+                    continue                       # busy: keys are ignored until the answer is in
+                if ch == -1:
+                    continue
+                nfocus = len(labels) + len(buttons())
+                if ch == 27:
+                    break
+                elif ch in (9, curses.KEY_DOWN):
+                    focus = (focus + 1) % nfocus
+                elif ch in (curses.KEY_UP, getattr(curses, 'KEY_BTAB', -2)):
+                    focus = (focus - 1) % nfocus
+                elif ch in (10, 13, 32) and focus < len(labels) and keys[focus] == 'hostkey':
+                    vals[focus] = SSH_HOSTKEY_MODES[(SSH_HOSTKEY_MODES.index(vals[focus]) + 1) % 3]
+                elif ch in (10, 13):
+                    if focus < len(labels):
+                        focus = (focus + 1) % nfocus
+                    else:
+                        name, act = buttons()[focus - len(labels)]
+                        if act == 'close':
+                            break
+                        if act in ('test', 'connect') and not pre['ok']:
+                            status, status_cls = [pre['hint']], 3
+                        else:
+                            start(act)
+                elif focus < len(labels):
+                    if ch in (curses.KEY_BACKSPACE, 127, 8):
+                        vals[focus] = vals[focus][:-1]
+                    elif 32 <= ch <= 126 and len(vals[focus]) < 255:
+                        vals[focus] += chr(ch)
+        finally:
+            stop_event.set()
+            bg_thread.join(timeout=float(args.waittime) + 10.0)
+            screen.timeout(-1)
+            for i in range(len(vals)):
+                vals[i] = ''                       # drop the typed secret
+            curses.curs_set(0)
+            screen.nodelay(True)
+            screen.clear()
+            if have_data:
+                rebuild_display()
+                draw_screen()
+                screen.refresh()
+        if done_msg:
+            notice('JUMPHOST: ' + done_msg.upper(), 2, 3)
 
     def key_confirm_dialog(title, lines, valid_keys):
         """Show a message box and wait for a single keypress out of valid_keys
@@ -8857,6 +9712,7 @@ if __name__=='__main__':
             if is_newer_version(remote_version, VERSION):
                 print_update_notice(remote_version)
             sys.stdout.flush()
+            ssh_shutdown()
             os._exit(0)
 
         if have_data:
@@ -9020,7 +9876,9 @@ if __name__=='__main__':
         fping is still running, so a resize or a filter change shows immediately.
         """
         rows, cols = screen.getmaxyx()
-        if is_newer_version(remote_version, VERSION):
+        if _source_alert:
+            screen_print_center_top(_source_alert[:max(10, cols - 2)], 3)
+        elif is_newer_version(remote_version, VERSION):
             screen_print_center_top('Update available - please visit https://www.jeitler.cc', 3)
         elif gn_thread is not None and gn_thread.is_alive():
             screen_print_center_top(
@@ -9150,17 +10008,17 @@ if __name__=='__main__':
         l_tiny  = ' [L]RSTLOG '         if args.disable_logging else ' [L]STARTLOG '
         keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=DISPLAY FILTER ', ' [V]=ADV FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
-                      ' [C]=CLEAR ALL ', ' [P]=ADDR MODE ', ' [X]=ADV OPTIONS ',
+                      ' [C]=CLEAR ALL ', ' [P]=ADDR MODE ', ' [X]=ADV OPTIONS ', ' [J]=JUMPHOST ',
                       ' [N]=ANALYSE NOW ', ' [G]=GET NAMES ', ' [R]=SCREEN REFRESH ', l_full, ' [E]=EXIT ']
         keys_short = [' [U]=' + fm[1] + ' ', ' [M]=FILTER ', ' [V]=ADV FLT ', ' [A]=ADD ', ' [D]=DEL ', ' [F]=FILE ',
                       ' [O]=' + sm[1] + ' ', ' [T]=COMMENT ', ' [S]=SET REF ', ' [Z]=ZERO ',
-                      ' [C]=CLEAR ', ' [P]=ADDR ', ' [X]=ADV OPT ',
+                      ' [C]=CLEAR ', ' [P]=ADDR ', ' [X]=ADV OPT ', ' [J]=JUMP ',
                       ' [N]=ANALYSE ', ' [G]=NAMES ', ' [R]=REFRESH ', l_short, ' [E]=EXIT ']
         keys_tiny  = [' [U]' + fm[2] + ' ', ' [M]FLT ', ' [V]AFLT ', ' [A]ADD ', ' [D]DEL ', ' [F]FILE ',
                       ' [O]' + sm[1] + ' ', ' [T]CMT ', ' [S]REF ', ' [Z]ZERO ',
-                      ' [C]CLR ', ' [P]ADDR ', ' [X]ADV ',
+                      ' [C]CLR ', ' [P]ADDR ', ' [X]ADV ', ' [J]JMP ',
                       ' [N]ANLZ ', ' [G]NAME ', ' [R]RFR ', l_tiny, ' [E]EXIT ']
-        keys_micro = [' U ', ' M ', ' V ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' X ', ' N ', ' G ', ' R ', ' L ', ' E ']
+        keys_micro = [' U ', ' M ', ' V ', ' A ', ' D ', ' F ', ' O ', ' T ', ' S ', ' Z ', ' C ', ' P ', ' X ', ' J ', ' N ', ' G ', ' R ', ' L ', ' E ']
         for keys in (keys_full, keys_short, keys_tiny, keys_micro):
             if sum(len(k) for k in keys) + 2 <= cols:
                 break
@@ -9169,7 +10027,8 @@ if __name__=='__main__':
             highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and match_filter_re is not None)
                         or (idx == 2 and bool(adv_filter))
                         or (idx == 6 and sort_mode != 0)
-                        or (idx == 11 and (prefer_hostname or prefer_ip)))
+                        or (idx == 11 and (prefer_hostname or prefer_ip))
+                        or (idx == 13 and bool(ssh_cfg)))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)
             key_col += len(label)
 
@@ -9302,6 +10161,8 @@ if __name__=='__main__':
                 cmd = 'ADDR_MODE_PICKER'
             elif k in (ord('x'), ord('X')):
                 cmd = 'ADV_OPTIONS'
+            elif k in (ord('j'), ord('J')):
+                cmd = 'JUMPHOST'
             elif k in (ord('n'), ord('N')):
                 cmd = 'ANALYSE_NOW'
             elif k in (ord('g'), ord('G')):
@@ -9382,6 +10243,8 @@ if __name__=='__main__':
                     notice('NO HOSTS MATCH ' + WEB_VIEW_MODES[new_mode][0], 3)
         elif cmd == 'ADV_OPTIONS':
             adv_options_dialog()
+        elif cmd == 'JUMPHOST':
+            jumphost_dialog()
         elif cmd == 'ANALYSE_NOW':
             # [N] curses equivalent of the web gui's GENERATE REPORT button -
             # runs epinga.py against the current logfile in the background (see
@@ -9623,6 +10486,7 @@ if __name__=='__main__':
             maybe_run_epinga(logfile_file_name, args.disable_logging)
             sys.stdout.flush()
             # os._exit(), not sys.exit(): see sigint_handler() for why.
+            ssh_shutdown()
             os._exit(0)
 
         # a command only changes what is shown - repaint at once instead of making

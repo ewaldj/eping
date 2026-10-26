@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.35'
+VERSION = '2.37'
 version = VERSION   # legacy alias
 
 import re
@@ -155,7 +155,7 @@ class HostStats:
     __slots__ = ('first_ts', 'last_ts', 'current_state', 'prev_ts',
                  'rtt_min', 'rtt_max', 'rtt_sum', 'rtt_cnt',
                  'time_up', 'time_down', 'time_nodns',
-                 'changes', 'no_of_changes', 'ip', 'meta')
+                 'changes', 'no_of_changes', 'ip', 'meta', 'gaps', 'gap_total')
 
     def __init__(self, ts, state, ip=''):
         self.first_ts      = ts
@@ -173,6 +173,8 @@ class HostStats:
         self.no_of_changes = 0
         self.ip             = ip or ''   # last known pinged IP (from the CSV's IP column)
         self.meta           = None       # dict of inventory columns (see META_LOG_COLS), created on first value
+        self.gaps           = []         # [(start, end)] periods of other sources (only with --source)
+        self.gap_total      = datetime.timedelta(0)
 
     # ── feed one CSV row ──────────────────────────────────────────────────────
     def feed(self, ts, prev_state, cur_state, rtt_raw, no_of_changes_raw, ip_raw=''):
@@ -204,6 +206,18 @@ class HostStats:
         if ip_raw:
             self.ip = ip_raw
 
+    def new_segment(self, ts, state=''):
+        # --source: rows of other sources lie between the last row and this one.
+        # Close the open interval at the last own row, skip the gap.
+        if ts and self.last_ts and ts > self.last_ts:
+            self._add_time(self.current_state, self.last_ts - self.prev_ts)
+            self.gaps.append((self.last_ts, ts))
+            self.gap_total += ts - self.last_ts
+            self.prev_ts = ts
+            self.last_ts = ts
+        if state:
+            self.current_state = state    # a change during the gap is not ours
+
     def _add_time(self, state, delta):
         if state == 'UP':
             self.time_up    += delta
@@ -230,7 +244,7 @@ class HostStats:
     @property
     def total_span(self):
         if self.first_ts and self.last_ts:
-            return self.last_ts - self.first_ts
+            return self.last_ts - self.first_ts - self.gap_total
         return datetime.timedelta(0)
 
     @property
@@ -255,7 +269,27 @@ META_LOG_COLS = (('inv_name', 'INV_HOSTNAME'), ('serial', 'SERIAL_NUMBER'), ('mo
                  ('comment', 'INV_COMMENT'))
 
 # ── stream-parse the CSV ──────────────────────────────────────────────────────
-def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False):
+def list_sources(filename):
+    """Distinct SOURCE values of a logfile (empty = 'local'); [] if the column is absent."""
+    out = set()
+    try:
+        with open(filename, 'r', encoding='utf-8', errors='replace', newline='') as fh:
+            rd = csv.reader(fh)
+            hdr = next(rd, None)
+            if not hdr or 'SOURCE' not in hdr:
+                return []
+            i = hdr.index('SOURCE')
+            h = hdr.index('HOSTNAME') if 'HOSTNAME' in hdr else 1
+            for r in rd:
+                if len(r) > i and len(r) > h and r[h] not in ('#COMMENT#', '#INFO#'):
+                    out.add(r[i].strip() or 'local')
+    except OSError as e:
+        die(str(e))
+    return sorted(out)
+
+
+def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False, source=None):
+    source = set(source) if source else None     # selected SOURCE values
     try:
         file_size = os.path.getsize(filename)
     except OSError as e:
@@ -286,6 +320,11 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
             die(f'"{filename}" does not look like an eping logfile (wrong header).')
 
         has_meta = 'INV_HOSTNAME' in reader.fieldnames   # logs from eping.py 3.62+
+        if source and 'SOURCE' not in reader.fieldnames:
+            if source != {'local'}:
+                die('"' + filename + '" has no SOURCE column (all rows are local).')
+            source = None       # old log: everything is local
+        last_src = {}           # hostname -> source of its previous row (any source)
 
         def field(row, key):
             # a truncated last line (log still being written) yields None for the
@@ -326,6 +365,15 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
             if ts_end   and ts > ts_end:
                 continue
 
+            if source:
+                src = field(row, 'SOURCE') or 'local'
+                prev_src = last_src.get(hostname)
+                last_src[hostname] = src
+                if src not in source:
+                    continue
+                new_seg = prev_src is not None and prev_src not in source
+            else:
+                new_seg = False
             prev_state = field(row, 'PREVIOUS_STATE')
             cur_state  = field(row, 'CURRENT_STATE')
             if not cur_state:
@@ -340,6 +388,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
                 # this row) so a first row that already carries a change counts as one
                 hosts[hostname] = HostStats(ts, prev_state or cur_state, ip_raw)
                 host_order.append(hostname)
+            elif new_seg:
+                hosts[hostname].new_segment(ts, prev_state)
             hosts[hostname].feed(ts, prev_state, cur_state, rtt_raw, noc, ip_raw)
             if has_meta:
                 hs = hosts[hostname]
@@ -549,7 +599,7 @@ def print_summary(hosts, host_order, sort_by='name'):
 
 
 # ── HTML export ───────────────────────────────────────────────────────────────
-def build_report_data(hosts, host_order, filename, rows_read, base='', comments=None, infos=None):
+def build_report_data(hosts, host_order, filename, rows_read, base='', comments=None, infos=None, source=''):
     """Serialize all analysis data to a plain dict for JSON embedding."""
     rows = []
     for h in host_order:
@@ -578,6 +628,7 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
             'span':          fmt_td(s.total_span),
             'first_ts':      s.first_ts.strftime(TS_FMT) if s.first_ts else '',
             'last_ts':       s.last_ts.strftime(TS_FMT)  if s.last_ts  else '',
+            'gaps': [[a.strftime(TS_FMT), b.strftime(TS_FMT)] for a, b in s.gaps],
             'events': [
                 {'ts': (ts.strftime(TS_FMT) if ts else ''), 'frm': frm, 'to': to}
                 for ts, frm, to in s.changes
@@ -596,6 +647,7 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
     ]
     return {
         'filename':     filename,
+        'source':       source or '',
         'base':         base,
         'generated':    datetime.datetime.now().strftime(TS_FMT),
         'rows_read':    rows_read,
@@ -918,6 +970,7 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     </svg>epinga &nbsp;·&nbsp; Analysis Report<small class="ver">v{VERSION}</small></h1>
     <div class="meta">
       File: <strong>{filename_html}</strong> &nbsp;|&nbsp;
+      {('Source: <strong>' + html_lib.escape(str(data.get('source'))) + '</strong> &nbsp;|&nbsp; ') if data.get('source') else ''}
       Generated: {data['generated']} &nbsp;|&nbsp;
       {data['rows_read']:,} rows &nbsp;|&nbsp;
       {n_total} hosts &nbsp;|&nbsp;
@@ -1180,11 +1233,31 @@ function buildTimeline(h) {{
   }}
   if (hEnd > t) segs.push({{start: t, end: hEnd, state}});
 
+  // --source: periods of other sources are not drawn
+  let draw = segs;
+  if (h.gaps && h.gaps.length) {{
+    draw = [];
+    const gp = h.gaps.map(g => [new Date(g[0].replace(' ','T')).getTime(), new Date(g[1].replace(' ','T')).getTime()]);
+    for (const sg of segs) {{
+      let parts = [[sg.start, sg.end]];
+      for (const g of gp) {{
+        const nx = [];
+        for (const p of parts) {{
+          if (g[1] <= p[0] || g[0] >= p[1]) {{ nx.push(p); continue; }}
+          if (g[0] > p[0]) nx.push([p[0], g[0]]);
+          if (g[1] < p[1]) nx.push([g[1], p[1]]);
+        }}
+        parts = nx;
+      }}
+      for (const p of parts) draw.push({{start: p[0], end: p[1], state: sg.state}});
+    }}
+  }}
+
   // blank prefix/suffix (host not yet / no longer monitored)
   const preW  = ((hStart - G_START) / G_SPAN * 100).toFixed(3);
   const postW = ((G_END   - hEnd)   / G_SPAN * 100).toFixed(3);
 
-  const segHtml = segs.map(seg => {{
+  const segHtml = draw.map(seg => {{
     const l = ((seg.start - G_START) / G_SPAN * 100).toFixed(3);
     const w = ((seg.end   - seg.start) / G_SPAN * 100).toFixed(3);
     const c = seg.state === 'UP' ? '#3fb950'
@@ -1988,6 +2061,8 @@ def build_parser():
     p.add_argument('-S', '--sort',      dest='sort', default='name',
                    choices=['name', 'flapping', 'uptime', 'rtt'],
                    help='Sort summary table: name | flapping | uptime | rtt  (default: name)')
+    p.add_argument('--source',         dest='source', action='append', default=[], metavar='SOURCE',
+                   help='Only analyse rows of this SOURCE ("local" or the jump host label, see log column SOURCE;\nrepeatable); uptime, RTT, changes and timeline cover only its periods')
     p.add_argument('--no-detail',      dest='no_detail', action='store_true',
                    help='Skip per-host detail, show summary only')
     p.add_argument('--no-changes',     dest='no_changes', action='store_true',
@@ -2048,6 +2123,34 @@ def main():
     except OSError as e:
         die(str(e))
 
+    # source filter: --source (repeatable), or a menu when the log holds several sources (interactive only)
+    source = [x.strip() for x in args.source if x.strip()]
+    srcs = list_sources(filename) if (source or (sys.stdin.isatty() and sys.stdout.isatty())) else []
+    if not source and len(srcs) > 1 and sys.stdin.isatty() and sys.stdout.isatty():
+        hr()
+        print('  Sources in this log:')
+        for i, sname in enumerate(srcs, 1):
+            print(f'  {i:>4}  {sname}')
+        hr()
+        while True:
+            choice = input('  Select source number(s), e.g. 1,2 (ENTER = all): ').strip()
+            if not choice:
+                break
+            try:
+                pick = sorted(set(int(x) for x in choice.replace(' ', ',').split(',') if x))
+            except ValueError:
+                pick = []
+            if pick and all(1 <= n <= len(srcs) for n in pick):
+                source = [srcs[n - 1] for n in pick]
+                break
+            print(f'  Invalid - enter numbers 1..{len(srcs)} separated by comma, or ENTER')
+    if source and srcs:
+        bad = [x for x in source if x not in srcs]
+        if bad:
+            die('unknown source "' + bad[0] + '" (available: ' + ', '.join(srcs) + ')')
+    if srcs and set(source) == set(srcs):
+        source = []                    # all sources selected = no filter
+
     # ── output paths (always auto-generated) ──
     base      = os.path.splitext(os.path.basename(filename))[0]
     html_path = args.html_out if args.html_out else base + '_report.html'
@@ -2061,6 +2164,8 @@ def main():
     print(f'  File : {filename}  ({fmt_bytes(file_size)})')
     if filter_hosts:
         print(f'  Hosts: {", ".join(sorted(filter_hosts))}')
+    if source:
+        print(f'  Source: {", ".join(source)}')
     if ts_start or ts_end:
         print(f'  Range: {ts_start or "start"} → {ts_end or "end"}')
     print()
@@ -2073,6 +2178,7 @@ def main():
         ts_start=ts_start,
         ts_end=ts_end,
         quiet=args.quiet,
+        source=source or None,
     )
     print(f'  {rows_read:,} rows processed  │  {len(hosts)} host(s) found\n')
 
@@ -2096,7 +2202,7 @@ def main():
         die('cannot write ' + txt_path + ': ' + str(e))
 
     # ── save HTML report ──
-    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments, infos)
+    report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments, infos, ', '.join(source))
     try:
         generate_html(report_data, html_path)
     except OSError as e:
