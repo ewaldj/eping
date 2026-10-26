@@ -1,4 +1,4 @@
-# eping.py 3.91
+# eping.py 3.99
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -186,6 +186,7 @@ DOWN. Columns: hostname/IP, state, RTT (ms), last-change timestamp, change count
 | `C` | clear all hosts and state |
 | `P` | address mode picker — 4 modes (see *Address modes*) |
 | `X` | ADV OPTIONS — live option editing (see *ADV OPTIONS*) |
+| `J` | JUMPHOST — run fping on a jump host via ssh (see *SSH source (JUMPHOST)*) |
 | `N` | ANALYSE NOW — run epinga.py against the active logfile in the background (see *GENERATE REPORT*) |
 | `G` | GET NAMES — reverse-DNS raw IPs, one-shot, background |
 | `R` | redraw screen |
@@ -365,6 +366,8 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | POST | `/api/command` | `{"cmd":"...","value":"..."}` | control (see cmd list below) |
 | POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection (same format as `adv_filter`) |
 | POST | `/api/upload` | host list, text | add hosts |
+| POST | `/api/log_sources` | `{"names":[...]}` | SOURCE values of the named logfiles (empty = active logfile), for SELECT JUMPHOST |
+| POST | `/api/jumphost` | `{"action":"info|test|trust|connect|local","host":...,"port":...,"user":...,"secret":...,"hostkey":"ask|accept-new|off","key":...}` | JUMPHOST window (see *SSH source (JUMPHOST)*) |
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
 `adv_filter`, `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
@@ -375,7 +378,7 @@ value: `key=value`. `reset_log` value: logging off - optional custom file name (
 auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
 custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
 JSON body field `values`: `[...]` to merge and analyse multiple `.csv` files as one
-(max 25). `save_hosts_file` value: optional target file name (blank
+(max 25); optional body field `sources`: `[...]` restricts the analysis to these SOURCE values. `save_hosts_file` value: optional target file name (blank
 = active `-f` hostfile, or `eping-hosts.txt` if none).
 
 `-wv` answers `403` to `POST /api/command`/`/api/upload`; `-wvc`/`-web` allow both. No
@@ -430,6 +433,9 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-ipo` | — | off | start with IP ONLY |
 | `-gn` | — | off | GET NAMES once at startup |
 | `-ncs` | — | off | skip `--check-source` |
+| `-ssh` | `[USER@]HOST[:PORT]` | off | run fping on a jump host via ssh (see *SSH source (JUMPHOST)*) |
+| `-sshkey` | file | agent | private key file for `-ssh` |
+| `-sshhk` | ask/accept-new/off | ask | host key check for `-ssh` |
 | `-ncf` | — | off | CSV: do not ping the CSV IP of a name without DNS record |
 | `-up` | — | 0 | learning phase: after N rounds keep only hosts seen UP |
 | `-setref` | — | off | with `-up`: hosts seen UP become new reference list |
@@ -457,11 +463,11 @@ Hard-enforced at startup and live via ADV OPTIONS (`-web` only), same bounds.
 Unless `-dl`, every round appends to `eping-log_YYYY-MM-DD_HH:MM:SS.csv` (or `-o FILE`):
 
 ```
-TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTAMP,TBD,IP,INV_HOSTNAME,SERIAL_NUMBER,MODEL,LOCATION,SYSLOCATION,TYPE,INV_COMMENT
+TIMESTAMP,HOSTNAME,PREVIOUS_STATE,CURRENT_STATE,RTT,NO_OF_CHANGES,CHANGE_TIMESTAMP,TBD,IP,INV_HOSTNAME,SERIAL_NUMBER,MODEL,LOCATION,SYSLOCATION,TYPE,INV_COMMENT,SOURCE
 ```
 
 `INV_HOSTNAME` … `INV_COMMENT`: the inventory values of a host added from an inventory CSV (see
-*Inventory CSV import*), empty for all other hosts. Logs without these columns (older
+*Inventory CSV import*), empty for all other hosts. `SOURCE`: `local` or the ssh jump host that produced the row. Logs without these columns (older
 versions) stay readable by epinga.py.
 
 `TBD`: suppressed DOWN observations (`-cf`). `IP`: address actually pinged (empty for
@@ -486,6 +492,29 @@ these rows automatically.
   that already exists is rejected, nothing is created. `ESC`/`ENTER` cancels.
 - Logging off: same dialog, no clear option - `START LOGGING` starts a fresh file
   right away, same optional custom name.
+
+## SSH source (JUMPHOST)
+
+Run fping on a jump host instead of locally (system `ssh` only). Any Linux host with a working `fping`
+(e.g. a caretaker) will do; it resolves the names itself. Start: `-ssh [USER@]HOST[:PORT]` (+ `-sshkey FILE`, `-sshhk MODE`);
+the password or key passphrase is asked on the terminal at startup. At runtime: `J` in the CLI,
+JUMPHOST button in the web GUI (after ADV OPTIONS).
+
+![JUMPHOST window](docs/img/jumphost.png)
+
+- Window: HOST, PORT, USER, PASSWORD (key passphrase), HOST KEY, KEY FILE. TEST checks ssh, login and
+  fping on the jump host, CONNECT switches the scan source, USE LOCAL switches back. A missing local
+  `ssh` is shown in the window.
+- HOST KEY: `ask` (default) - an unknown key is shown with its fingerprint and must be accepted with
+  TRUST KEY; `accept-new` - hosts seen for the first time are trusted automatically, a changed key is
+  still refused; `off` - no check at all (insecure).
+- The switch is applied at the start of the next round; hosts, states and counters are kept.
+- Connection loss: results of the round are discarded, hosts keep their state, a banner is shown and
+  eping reconnects. Logged as `#COMMENT#` rows (`JUMPHOST ... OFFLINE: <reason>`, `JUMPHOST ... ONLINE
+  again`, `SOURCE SWITCH <old> -> <new>`), shown in the report's comment timeline.
+- Log column `SOURCE`: `local` or the jump host of each row.
+- Limits: GET NAMES and the CSV-IP fallback are not available over ssh; at most 4 ssh processes
+  (2 on Windows); the web password transfer is plain HTTP - use `-bind 127.0.0.1` or a trusted network.
 
 ## Web GUI header
 
@@ -528,11 +557,17 @@ logging is off or the logfile is empty/missing.
 ## GENERATE REPORT (web gui) / ANALYSE NOW (CLI `N`)
 
 Runs epinga.py against one or more logfiles in the background while eping.py keeps
-running - not just at exit. Web: GENERATE REPORT dropdown, two entries - `ACTIVE
+running - not just at exit. Web: GENERATE REPORT dropdown, three entries - `ACTIVE
 LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
 closes and a footer error is shown), `CHOOSE LOGFILE` picks one or more `.csv` files in
 the working dir - table (name/size/date), "select all" checkbox, nothing preselected;
-up to 25 files per report, checking a 26th is refused.
+up to 25 files per report, checking a 26th is refused. `SELECT JUMPHOST` lists the
+sources (`local` and jump hosts, log column `SOURCE`) found in the active logfile - all checked,
+ENTER = GENERATE; only the periods of the checked sources are calculated (see *Source filter* in the
+epinga.py section). Shown only if the log holds more than one source.
+
+![SELECT JUMPHOST](docs/img/select-jumphost.png)
+
 More than one selected file is merged chronologically (by mtime) into one temporary
 CSV, analysed as a single logfile, then the temp file is removed. Result opens in a new
 tab; if a selected file was invalid or has meanwhile been removed (e.g. by log rotation
@@ -643,7 +678,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.35
+# epinga.py 2.37
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
@@ -668,12 +703,24 @@ Output: `<base>_report.txt` and `<base>_report.html` (`--html FILE` overrides).
 | `-s`, `--start YYYY-MM-DD HH:MM:SS` | rows from this timestamp on |
 | `-e`, `--end YYYY-MM-DD HH:MM:SS` | rows up to this timestamp |
 | `-S`, `--sort {name,flapping,uptime,rtt}` | summary sort order (default `name`) |
+| `--source SOURCE` | only rows of this source - `local` or the jump host label from the log column `SOURCE` (repeatable; see *Source filter*) |
 | `--no-detail` | summary only |
 | `--no-changes` | omit state-change list |
 | `--html FILE` | custom HTML filename |
 | `--open` | open HTML report automatically |
 | `-q`, `--quiet` | suppress progress bar |
 | `--no-version-check` | skip online update check |
+
+## Source filter
+
+Logs written while eping.py ran on a jump host carry a `SOURCE` column. With `--source` (or the
+selection shown on a terminal when the log holds several sources; numbers like `1,3`, ENTER = all)
+only the periods of the selected sources are calculated: uptime, up/down time, RTT, changes and the
+timeline. Periods of other sources are excluded and shown as a gap in the timeline; a state change that
+happened during such a gap is not counted. Without `--source` everything is combined (as before).
+Logs without a `SOURCE` column are treated as `local`.
+
+![epinga report, source local](docs/img/report-source.png)
 
 ## Called from eping.py
 
