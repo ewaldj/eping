@@ -1,4 +1,4 @@
-# eping.py 4.07
+# eping.py 4.08
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -32,7 +32,7 @@ Details: [Windows_Version](https://github.com/ewaldj/eping/tree/main/Windows_Ver
   and start `eping.exe`.
 - `eping.exe` is a small launcher window (web port, Start / Stop / Restart, open web GUI, console log, Disable autostart / logging / file (`-dl`, `-df`), CLI options field, Check updates).
   The browser opens as soon as eping answers (default `http://127.0.0.1:8080`). The port is read from the
-  hosts file (`opt: -port 9000`); a port already in use is reported and can be changed in the window.
+  hosts file (`opt: -port 9000`); a port already in use (also by an instance bound to 127.0.0.1) is reported and can be changed in the window.
 - Update: `eping.exe` checks `eversions` at start and every 6 hours; an Update button replaces `eping.py` /
   `epinga.py`, or the whole package if the `eping-windows` line in `eversions` is newer.
 - No `-wv`/`-wvc` on Windows; log file names use `-` instead of `:`.
@@ -168,7 +168,7 @@ addresses); `ap-lobby-01` has no IP and is ignored.
 
 ## CLI mode
 
-Sorted table (IPv4 numerically, then hostnames), 64-column blocks. Green = UP, red =
+Sorted table (IPv4 numerically, then hostnames case-insensitively), 64-column blocks. Green = UP, red =
 DOWN. Columns: hostname/IP, state, RTT (ms), last-change timestamp, change count.
 
 | Key | Action |
