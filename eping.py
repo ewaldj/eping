@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.05'
+VERSION = '4.06'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -956,7 +956,7 @@ def ssh_apply_pending():
         return
     old = SOURCE_LABEL
     ssh_activate(p if p is not False else None)
-    _source_events.append('SOURCE SWITCH %s -> %s' % (old, SOURCE_LABEL))
+    _source_events.append((get_date_time(), 'SOURCE SWITCH %s -> %s' % (old, SOURCE_LABEL)))
 
 def ssh_init(target, key, hostkey='accept-new', resolve=True):
     """-ssh at startup: ask for the secret, trust the host key (ssh's own prompt), verify
@@ -1065,8 +1065,8 @@ def source_set(down, reason=''):
     if down != _source_down:
         _source_down = down
         # logged as a comment row (shown in epinga.py's comment timeline)
-        _source_events.append(('JUMPHOST %s OFFLINE: %s' % (SOURCE_LABEL, reason)) if down
-                              else ('JUMPHOST %s ONLINE again' % SOURCE_LABEL))
+        _source_events.append((get_date_time(), ('JUMPHOST %s OFFLINE: %s' % (SOURCE_LABEL, reason)) if down
+                              else ('JUMPHOST %s ONLINE again' % SOURCE_LABEL)))
 
 _fping_caps = None
 def fping_capabilities():
@@ -2624,7 +2624,7 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
     now_str = get_date_time()
     while _source_events:
         _ev = _source_events.pop(0)
-        write_log_comment(logging_enabled, logfile_file_name, _ev, tz_offset)   # shown in the report's comment timeline
+        write_log_comment(logging_enabled, logfile_file_name, _ev[1], tz_offset, now_str=_ev[0])   # time of the event, not of the write   # shown in the report's comment timeline
     if down_streak is None:
         down_streak = {}
     # process in real chronological order (not the IP/hostname sort order the caller
@@ -2730,7 +2730,7 @@ def neutralize_csv_formula(text):
         return "'" + text
     return text
 
-def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offset=0):
+def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offset=0, now_str=None):
     """Append a free-text, timestamped comment row to the CSV log (if logging is on).
 
     Uses the sentinel HOSTNAME '#COMMENT#' so epinga.py can split these rows out
@@ -2742,7 +2742,7 @@ def write_log_comment(logging_enabled, logfile_file_name, comment_text, tz_offse
     """
     if not logging_enabled or not comment_text:
         return False
-    now_str = get_date_time()
+    now_str = now_str or get_date_time()
     ts = datetime.datetime.strptime(now_str, "%d/%m/%Y %H:%M:%S")
     if tz_offset:
         ts = ts + datetime.timedelta(hours=tz_offset)
