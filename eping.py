@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.08'
+VERSION = '4.10'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -5757,8 +5757,8 @@ function tipLoad(name, pin){
     .catch(function(){});
 }
 function tipRowName(e){
-  var tr = e.target && e.target.closest ? e.target.closest('#grid tbody tr') : null;
-  var td = tr ? tr.querySelector('td.host') : null;
+  // only the hostname cell triggers the popup, not the rest of the row
+  var td = e.target && e.target.closest ? e.target.closest('#grid tbody td.host') : null;
   return td ? td.textContent : '';
 }
 document.addEventListener('mousemove', function(e){
@@ -8135,7 +8135,28 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
 
 
 # MAIN MAIN MAIN
+def _early_interrupt_hook(tp, val, tb):
+    """Ctrl+C before the normal SIGINT handler is installed (startup, ssh setup, ...): leave quietly
+    instead of printing a traceback; restore the terminal if curses is already active."""
+    if issubclass(tp, KeyboardInterrupt):
+        try:
+            curses.endwin()
+        except Exception:
+            pass
+        try:
+            ssh_shutdown()
+        except Exception:
+            pass
+        try:
+            sys.stdout.flush()
+        except Exception:
+            pass
+        os._exit(130)
+    sys.__excepthook__(tp, val, tb)
+
 if __name__=='__main__':
+
+    sys.excepthook = _early_interrupt_hook
 
     if os.name == 'nt':
         # portable Windows folder: fping.exe + cygwin1.dll next to this script
