@@ -24,6 +24,8 @@ The browser opens as soon as eping answers; the window title shows the launcher 
 
 Hosts files, logs and reports are stored in the eping folder.
 
+If the web port is in use, the launcher tries the next ports (up to 32) and shows a message with the port actually used.
+
 ## Window
 
 Below the buttons: checkboxes *Disable autostart* and *Disable logging* (`-dl`), *Disable file* (`-df`, no hosts file), a *CLI options* field (stored in `eping-args.txt`) and a *Check updates* button. Settings apply at Start / Restart.
