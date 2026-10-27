@@ -24,7 +24,7 @@ The browser opens as soon as eping answers; the window title shows the launcher 
 
 Hosts files, logs and reports are stored in the eping folder.
 
-If the web port is in use, the launcher tries the next ports (up to 32) and shows a message with the port actually used.
+If the web port is in use, the launcher tries the next ports (up to 32) and shows the port actually used (orange note in the status line, port field updated).
 
 ## Window
 
