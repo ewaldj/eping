@@ -1,4 +1,4 @@
-# eping.py 4.08
+# eping.py 4.10
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -272,12 +272,12 @@ Single self-contained page, no external resources.
   values are attached. Works with `-wvc` too.
 - Files can also be dropped anywhere on the page (max 16MB, see *Host file format*).
 - Commands acknowledge immediately; a click aborts the running round.
-- **Host popup**: hovering a host row (after ~350 ms) shows everything known about it:
+- **Host popup**: hovering a hostname (after ~350 ms; only the hostname cell, not the rest of the row) shows everything known about it:
   state, previous state, RTT, last check, changes, time in the current state, resolved/CSV
   IP, inventory values (Model, Location, sysLocation, Type, Comment, serial) and its
   history (last up to 50 state changes, newest first, merged with the log `COMMENT`s
   by time). The data is fetched per host on demand (`GET /api/host`), the polled status
-  stays small. A click on the row pins the popup: the text can be selected, `COPY` copies
+  stays small. A click on the hostname pins the popup: the text can be selected, `COPY` copies
   all of it, `DELETE` removes the host immediately (no confirmation; not shown in `-wv`),
   `×`/ESC/click elsewhere closes it. The history lives in memory only; it is cleared by
   ZERO CHANGES and CLEAR ALL.
