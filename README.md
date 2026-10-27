@@ -30,7 +30,7 @@ Details: [Windows_Version](https://github.com/ewaldj/eping/tree/main/Windows_Ver
   downloads the package and installs it (current user or all users, Start menu / desktop shortcut, uninstaller).
 - Portable: unpack [`eping-windows.zip`](https://github.com/ewaldj/eping/raw/main/Windows_Version/eping-windows.zip)
   and start `eping.exe`.
-- `eping.exe` is a small launcher window (web port, Start / Stop / Restart, open web GUI, console log, Disable autostart / logging / file (`-dl`, `-df`), CLI options field, Check updates). If the web port is in use, the next free one is used (up to 32 tries) and the status line names it.
+- `eping.exe` is a small launcher window (web port, Start / Stop / Restart, open web GUI, console log, Disable autostart / logging / file (`-dl`, `-df`), CLI options field, Check updates). If the web port is in use, the next free one is used (up to 32 tries) and the status line names it (orange note, port field updated); the web GUI address in the status line is a clickable link.
   The browser opens as soon as eping answers (default `http://127.0.0.1:8080`). The port is read from the
   hosts file (`opt: -port 9000`); a port already in use (also by an instance bound to 127.0.0.1) is reported and can be changed in the window.
 - Update: `eping.exe` checks `eversions` at start and every 6 hours; an Update button replaces `eping.py` /
