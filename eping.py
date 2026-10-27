@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.06'
+VERSION = '4.07'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -7009,7 +7009,20 @@ class EpingWebServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         pass
 
 
+def _port_in_use(bind_addr, port):
+    """True if a listener already answers on the address we are about to bind. BSD/macOS lets a
+    wildcard socket and a specific one share a port (SO_REUSEADDR), so bind() alone does not
+    detect another instance bound to 127.0.0.1."""
+    host = {'': '127.0.0.1', '0.0.0.0': '127.0.0.1', '::': '::1'}.get(bind_addr, bind_addr)
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
 def start_web_server(bind_addr, port):
+    if _port_in_use(bind_addr, port):
+        error_handler('ERROR: unable to bind web gui to ' + str(bind_addr) + ':' + str(port) + ' - address already in use')
     try:
         httpd = EpingWebServer((bind_addr, port), EpingWebHandler)
     except OSError as e:
