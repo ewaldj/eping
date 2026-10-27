@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.07'
+VERSION = '4.08'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1723,7 +1723,7 @@ def sort_fping_result_data(fping_result_data):
         else:
             fqdn_rows.append(row)
     ip_rows.sort(key=lambda r: _ip_sort_key(r[0]))
-    fqdn_rows.sort(key=lambda r: r[0])
+    fqdn_rows.sort(key=lambda r: (r[0].lower(), r[0]))      # case-insensitive, exact name as tie-break
     return ip_rows + fqdn_rows
 
 def now_local(tz_offset):
