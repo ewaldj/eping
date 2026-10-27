@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.04'
+VERSION = '4.05'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1682,8 +1682,10 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
         elif ssh_target and line.strip():
             stray.append(line.strip())
     ping.wait()
-    if ssh_target and (ping.returncode == 255 or (not fping_result_data and ping.returncode not in (0, 1, 2)
-                                                  and not _abort_scan)):
+    # a scan cut short by a command (scan_abort) ends the ssh client with exit 255 ("Killed
+    # by signal 15"): that is not a lost jump host
+    if ssh_target and not _abort_scan and (ping.returncode == 255 or (
+            not fping_result_data and ping.returncode not in (0, 1, 2))):
         _source_fail_reason = (' / '.join(stray) or ('ssh/fping exit ' + str(ping.returncode)))[:200]
     with _procs_lock:
         try:
