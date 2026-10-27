@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.02'
+VERSION = '4.04'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -545,13 +545,26 @@ _source_events = []       # pending comment texts (JUMPHOST OFFLINE / ONLINE, SO
 _ssh_pending  = None      # None = no change, False = switch to local, SshCfg = switch to it
 _ssh_lock     = threading.Lock()
 _ssh_cfgs     = []        # every SshCfg that owns a temp dir (cleaned at exit)
-_jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'accept-new'}   # form values of the last try (never the secret)
+_jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'accept-new', 'resolve': True}   # form values of the last try (never the secret)
 _jump_hostkeys = {}       # (host, port) -> hashed known_hosts lines offered by TRUST KEY
+
+# Name resolution on the jump host: with a working resolver tool there (getent, dig,
+# nslookup or host - found and probed by ssh_check) the DNS lookups that eping does
+# itself (GET NAMES, PREFER HOSTNAME / IP ADDRESS, IP ONLY) run there, over the same ssh
+# connection, instead of on this computer. Results are cached per source.
+JR_TOOLS = ('getent', 'dig', 'nslookup', 'host')   # in order of preference
+JR_CHUNK = 400                                      # names per ssh call
+_jr_fwd = {}                  # name -> (ips, expires_at)
+_jr_rev = {}                  # ip -> (name or None, expires_at)
+_jr_cache_lock = threading.Lock()
+_jr_run_lock   = threading.Lock()      # one remote lookup batch at a time
 
 class SshCfg(object):
     """One jump host: where, how to log in, and its private temp dir (ControlPath + askpass)."""
-    def __init__(self, host, user=None, port=None, key=None, secret='', hostkey='accept-new'):
+    def __init__(self, host, user=None, port=None, key=None, secret='', hostkey='accept-new', resolve=True):
         self.host, self.user, self.port = host, (user or None), (port or None)
+        self.resolve = bool(resolve)     # wish: resolve names on the jump host
+        self.resolver = ''               # tool that works there ('' = none / not checked)
         self.hostkey = hostkey if hostkey in SSH_HOSTKEY_MODES else 'accept-new'
         self.key = os.path.expanduser(key) if key else None
         self.secret = secret or ''
@@ -668,23 +681,160 @@ def ssh_wrap(argv, c=None):
         SSH_REMOTE_PATH, ' '.join(shlex.quote(a) for a in argv))
     return ssh_base(c) + [c.target, 'sh -c ' + shlex.quote(inner)]
 
-def ssh_exec(c, script, timeout=SSH_TEST_TIMEOUT):
-    """Run a /bin/sh script on jump host c. Returns (returncode, output)."""
+def ssh_exec(c, script, timeout=SSH_TEST_TIMEOUT, stdin_text=None):
+    """Run a /bin/sh script on jump host c (optionally feeding stdin_text). Returns (returncode, output)."""
     inner = 'PATH="$PATH:%s"; export PATH\n%s' % (SSH_REMOTE_PATH, script)
+    kw = {'input': stdin_text} if stdin_text is not None else {'stdin': subprocess.DEVNULL}
     try:
         p = subprocess.run(ssh_base(c) + [c.target, 'sh -c ' + shlex.quote(inner)],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                           encoding='utf-8', errors='replace', timeout=timeout, env=ssh_env(c))
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           encoding='utf-8', errors='replace', timeout=timeout, env=ssh_env(c), **kw)
         return p.returncode, p.stdout or ''
     except FileNotFoundError:
         return 255, 'ssh command not found'
     except subprocess.TimeoutExpired:
         return 255, 'ssh timeout'
 
-_SSH_CHECK = r'''command -v fping >/dev/null 2>&1 || { echo EPING_NOFPING; exit 0; }
+_SSH_CHECK = r'''RES=""; for t in getent dig nslookup host; do command -v $t >/dev/null 2>&1 && { RES=$t; break; }; done
+echo "EPING_RESOLVER=$RES"
+command -v fping >/dev/null 2>&1 || { echo EPING_NOFPING; exit 0; }
 echo "EPING_VERSION=$(fping -v 2>&1 | head -1)"
 out=$(fping -4 -c1 -t500 127.0.0.1 2>&1); echo "EPING_RC=$?"; echo "EPING_OUT=$out"
 echo EPING_HELP_BEGIN; fping -h 2>&1; echo EPING_HELP_END'''
+
+# One lookup per input line, up to 16 in parallel (xargs -P). The body must not contain
+# single quotes: it is wrapped into sh -c '...'. Result line: "<input> <answers...>".
+_JR_FWD = {
+    'getent':   r'r=$(getent ahosts "$0" 2>/dev/null | awk "{print \$1}" | sort -u | tr "\n" " ")',
+    'dig':      r'r=$( (dig +short +time=3 +tries=1 A "$0"; dig +short +time=3 +tries=1 AAAA "$0") 2>/dev/null | grep -E "^[0-9a-fA-F:.]+\$" | sort -u | tr "\n" " ")',
+    'nslookup': r'r=$(nslookup -timeout=3 "$0" 2>/dev/null | awk "/^Name:/{f=1} f&&/^Address/{print \$NF}" | sort -u | tr "\n" " ")',
+    'host':     r'r=$(host -W 3 "$0" 2>/dev/null | awk "/has address|has IPv6 address/{print \$NF}" | sort -u | tr "\n" " ")',
+}
+_JR_REV = {
+    'getent':   r'r=$(getent hosts "$0" 2>/dev/null | awk "NR==1{print \$2}")',
+    'dig':      r'r=$(dig +short +time=3 +tries=1 -x "$0" 2>/dev/null | head -1)',
+    'nslookup': r'r=$(nslookup -timeout=3 "$0" 2>/dev/null | awk "/name = /{print \$NF; exit}")',
+    'host':     r'r=$(host -W 3 "$0" 2>/dev/null | awk "/domain name pointer/{print \$NF; exit}")',
+}
+
+def _jr_run(mode, items, c):
+    """Look up items ('fwd': names -> addresses, 'rev': addresses -> name) on jump host c
+    with its resolver tool. Returns {item: [answer tokens]}; items of a failed batch are
+    missing. Input is validated (no shell metacharacters) and goes in via stdin."""
+    body = (_JR_FWD if mode == 'fwd' else _JR_REV)[c.resolver]
+    script = ('XP=-P16; echo x | xargs -P16 -n1 true >/dev/null 2>&1 || XP=""\n'
+              "xargs -n1 $XP sh -c '" + body + '; echo "$0 $r"' + "'")
+    out = {}
+    items = [i for i in items if re.match(r'^[A-Za-z0-9._:-]{1,253}$', i)]
+    for k in range(0, len(items), JR_CHUNK):
+        chunk = items[k:k + JR_CHUNK]
+        rc, text = ssh_exec(c, script, timeout=30 + len(chunk) // 5, stdin_text='\n'.join(chunk) + '\n')
+        if rc != 0:
+            continue
+        for line in text.splitlines():
+            parts = line.split()
+            if parts and parts[0] in chunk:
+                out[parts[0]] = parts[1:]
+    return out
+
+def jr_active():
+    """True if lookups go to the jump host (ssh source, enabled, working resolver)."""
+    c = ssh_cfg
+    return bool(c is not None and c.resolve and c.resolver)
+
+def _jr_ttl():
+    try:
+        return max(30.0, float(getattr(globals().get('args'), 'dns_ttl', 300)))
+    except Exception:
+        return 300.0
+
+def jr_forward(names):
+    """{name: [addresses]} resolved on the jump host (cached, one ssh call for all
+    uncached names). A name whose batch failed is missing in the result."""
+    c = ssh_cfg
+    if not jr_active():
+        return {}
+    now = time.time()
+    res, todo = {}, []
+    with _jr_cache_lock:
+        for n in set(names):
+            e = _jr_fwd.get(n)
+            if e and e[1] > now:
+                res[n] = e[0]
+            else:
+                todo.append(n)
+    if todo:
+        with _jr_run_lock:
+            got = _jr_run('fwd', todo, c)
+        now, ttl = time.time(), _jr_ttl()
+        with _jr_cache_lock:
+            for n in todo:
+                if n not in got:
+                    res[n] = []
+                    _jr_fwd[n] = ([], now + DNS_FAIL_TTL)    # failed batch / bad name: retry later
+                    continue
+                ips = []
+                for a in got[n]:
+                    try:
+                        ipaddress.ip_address(a)
+                        ips.append(a)
+                    except ValueError:
+                        pass
+                _jr_fwd[n] = (ips, now + (ttl if ips else min(ttl, DNS_FAIL_TTL)))
+                res[n] = ips
+    return res
+
+def jr_reverse(ips):
+    """{ip: hostname or None} (PTR) looked up on the jump host, cached."""
+    c = ssh_cfg
+    if not jr_active():
+        return {}
+    now = time.time()
+    res, todo = {}, []
+    with _jr_cache_lock:
+        for i in set(ips):
+            e = _jr_rev.get(i)
+            if e and e[1] > now:
+                res[i] = e[0]
+            else:
+                todo.append(i)
+    if todo:
+        with _jr_run_lock:
+            got = _jr_run('rev', todo, c)
+        now, ttl = time.time(), _jr_ttl()
+        with _jr_cache_lock:
+            for i in todo:
+                if i in got:
+                    nm = got[i][0].rstrip('.') if got[i] else None
+                    _jr_rev[i] = (nm or None, now + (ttl if nm else min(ttl, DNS_FAIL_TTL)))
+                    res[i] = nm or None
+                else:
+                    res[i] = None
+                    _jr_rev[i] = (None, now + DNS_FAIL_TTL)
+    return res
+
+_ssh_fam6 = set()     # hostnames tried with fping -6 on the jump host (no resolver there, see below)
+
+def ssh_name_family(name):
+    """Address family ('4'/'6') used for the fping run of a hostname on the jump host.
+    With a resolver there the names are looked up first (A preferred, AAAA if there is
+    no A record - same rule as locally), so an IPv6-only name is pinged with -6.
+    Without one, -4 is used and a name that fping reports as NO-DNS is tried with -6
+    in the next round (and back to -4 if that fails too), see run_ping_round()."""
+    if dns_family in ('4', '6'):
+        return dns_family
+    if jr_active():
+        ips = resolve_all_ips(name)
+        if ips:
+            return ip_version_str(ips[0]) or '4'
+        return '4'
+    return '6' if name in _ssh_fam6 else '4'
+
+def jr_prefetch(hosts):
+    """Resolve all hostnames of 'hosts' on the jump host in one go (fills the cache, so
+    the per-name lookups of the callers below do not each need an ssh call)."""
+    if jr_active():
+        jr_forward([h for h in hosts if not is_ip_host(h)])
 
 def ssh_scan_hostkeys(c):
     """Fetch the jump host's keys (hashed known_hosts lines) and their fingerprints."""
@@ -758,6 +908,15 @@ def ssh_check(c):
     m = re.search(r'EPING_HELP_BEGIN\n(.*)EPING_HELP_END', out, re.S)
     r.update(ok=True, code='ok', help=(m.group(1) if m else ''))
     c.help, c.version = r['help'], r['version']
+    # resolver on the jump host: tool found by the check script, then a real lookup
+    c.resolver = ''
+    tool = (re.search(r'EPING_RESOLVER=(\w*)', out) or [None, ''])[1]
+    if tool in JR_TOOLS:
+        c.resolver = tool
+        got = _jr_run('fwd', ['localhost'], c)
+        if not any(a in ('127.0.0.1', '::1') for a in got.get('localhost', [])):
+            c.resolver = ''
+    r['resolver'] = c.resolver
     return r
 
 def ssh_activate(c):
@@ -770,6 +929,13 @@ def ssh_activate(c):
     _fping_caps = None
     _source_down = False
     _source_alert = ''
+    with _jr_cache_lock:
+        _jr_fwd.clear()
+        _jr_rev.clear()
+    _ssh_fam6.clear()
+    with _dns_lock:                      # lookups made for the old source do not apply
+        _dns_cache.clear()
+        _addr_redundancy_cache.clear()
     if old is not None and old is not c:
         old.close()
 
@@ -792,7 +958,7 @@ def ssh_apply_pending():
     ssh_activate(p if p is not False else None)
     _source_events.append('SOURCE SWITCH %s -> %s' % (old, SOURCE_LABEL))
 
-def ssh_init(target, key, hostkey='accept-new'):
+def ssh_init(target, key, hostkey='accept-new', resolve=True):
     """-ssh at startup: ask for the secret, trust the host key (ssh's own prompt), verify
     that fping works on the jump host. Exits with a clear message on any problem."""
     parsed = ssh_parse_target(target)
@@ -811,7 +977,7 @@ def ssh_init(target, key, hostkey='accept-new'):
                                      % ((user + '@' if user else '') + host))
         except (EOFError, KeyboardInterrupt):
             error_handler("ERROR: -ssh: aborted")
-    c = SshCfg(host, user, port, key, secret, hostkey)
+    c = SshCfg(host, user, port, key, secret, hostkey, resolve)
     print('SSH source %s: connecting ...' % c.label)
     sys.stdout.flush()
     r = ssh_check(c)
@@ -831,6 +997,9 @@ def ssh_init(target, key, hostkey='accept-new'):
         error_handler("ERROR: -ssh: " + r['error'])
     ssh_activate(c)
     print('SSH source %s: OK (%s)' % (c.label, r['version']))
+    print('Name resolution: ' + (('on the jump host (%s)' % c.resolver) if (c.resolve and c.resolver)
+          else ('local (disabled by -sshnr)' if not c.resolve
+                else 'local (no working getent/dig/nslookup/host on the jump host)')))
     sys.stdout.flush()
 
 def jump_cfg_from(req):
@@ -851,11 +1020,13 @@ def jump_cfg_from(req):
     hk = str(req.get('hostkey', 'accept-new'))
     if hk not in SSH_HOSTKEY_MODES:
         hk = 'accept-new'
-    _jump_last.update(host=host, user=user, port=port, key=key, hostkey=hk)
-    return SshCfg(host, user, int(port) if port else None, key, secret, hk), ''
+    resolve = str(req.get('resolve', True)).strip().lower() not in ('0', 'false', 'off', 'no')
+    _jump_last.update(host=host, user=user, port=port, key=key, hostkey=hk, resolve=resolve)
+    return SshCfg(host, user, int(port) if port else None, key, secret, hk, resolve), ''
 
 def jump_info():
     return {'ssh': ssh_prereq(), 'active': SOURCE_LABEL if ssh_cfg else '', 'last': dict(_jump_last),
+            'resolver': (ssh_cfg.resolver if (ssh_cfg and ssh_cfg.resolve) else ''),
             'pending': ('local' if _ssh_pending is False else (_ssh_pending.label if _ssh_pending else ''))}
 
 def jump_handle(req):
@@ -873,11 +1044,18 @@ def jump_handle(req):
         e = ssh_trust_hostkeys(c.host, c.port)
         return dict(ok=not e, code='trust', error=e, message='' if e else 'host key trusted - press TEST')
     r = ssh_check(c)
+    note = ''
+    if r['ok']:
+        note = ('; names are resolved on the jump host (%s)' % c.resolver if (c.resolve and c.resolver)
+                else ('; names are resolved locally (option off)' if not c.resolve
+                      else '; names are resolved locally (no working getent/dig/nslookup/host there)'))
     if act == 'test' or not r['ok']:
         c.close()
+        if r['ok']:
+            r['message'] = 'OK - ' + (r['version'] or 'fping works') + note
         return r
     ssh_request(c)                               # connect
-    r['message'] = 'connected to %s - switching at the next round' % c.label
+    r['message'] = 'connected to %s - switching at the next round%s' % (c.label, note)
     return r
 
 def source_set(down, reason=''):
@@ -987,6 +1165,20 @@ def resolve_all_ips(name, family=None):
     Uncached and used only where all addresses matter (prefer-hostname redundancy
     check) or once per name resolution - not hot enough to need caching here."""
     fam = family if family is not None else dns_family
+    if jr_active():                       # the jump host's view of DNS
+        ips = jr_forward([name]).get(name) or []
+        v4, v6 = [], []
+        for a in ips:
+            ip = ipaddress.ip_address(a)
+            if ip.version == 4:
+                v4.append(a)
+            elif not ip.ipv4_mapped:
+                v6.append(a)
+        key = lambda a: int(ipaddress.ip_address(a))
+        for grp in ((v6, v4) if fam == '6' else (v4, v6)):
+            if grp:
+                return sorted(grp, key=key)
+        return []
     af_list = {'4': [socket.AF_INET, socket.AF_INET6],
               '6': [socket.AF_INET6, socket.AF_INET]}.get(
         fam, [socket.AF_INET, socket.AF_INET6])
@@ -1031,6 +1223,9 @@ def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS):
     this runs."""
     if not ip_list:
         return {}
+    if jr_active():                       # PTR lookups on the jump host
+        got = jr_reverse(list(ip_list))
+        return dict((ip, got.get(ip)) for ip in ip_list)
     old_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(timeout)
     results = {}
@@ -1108,6 +1303,8 @@ def _forward_confirms(name, ip):
     that resolves back to exactly this ip. Guards GET NAMES: a PTR record with no
     matching forward record must not be used to rename a host, or pinging it
     afterwards by name would fail (NO-DNS) or silently hit a different address."""
+    if jr_active():
+        return ip in (jr_forward([name]).get(name) or [])
     try:
         af = socket.AF_INET6 if ip_version_str(ip) == '6' else socket.AF_INET
         infos = socket.getaddrinfo(name, None, af, socket.SOCK_DGRAM)
@@ -1127,6 +1324,8 @@ def _get_names_lookup(candidates):
     ptr = get_names_for_ips(candidates)
     checkable = [ip for ip in candidates if ptr.get(ip) and match_re(ptr[ip], fqdn_re)]
     fwd_ok = {}
+    if checkable and jr_active():
+        jr_forward([ptr[ip] for ip in checkable])      # one ssh call for all forward checks
     if checkable:
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max(1, min(DNS_RESOLVERS, len(checkable)))) as pool:
@@ -1200,6 +1399,7 @@ def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
     only used at startup (-gn), before the CLI/web loop exists to stay responsive
     for. The interactive [G] key/cmd runs this in the background instead, see
     get_names_start()/get_names_finish()."""
+    jr_prefetch(original_hosts_list)
     covered_ips = set()
     for h in original_hosts_list:
         if not is_ip_host(h):
@@ -1223,8 +1423,9 @@ def get_names_start(original_hosts_list, dns_ttl):
     Returns (thread, result_holder, candidates); thread is None (nothing started)
     when there is nothing to look up. Poll thread.is_alive() and, once False, call
     get_names_finish() with result_holder."""
-    if ssh_target:                          # reverse DNS here would not match the jump host's view
+    if ssh_target and not jr_active():      # reverse DNS here would not match the jump host's view
         return None, None, []
+    jr_prefetch(original_hosts_list)
     covered_ips = set()
     for h in original_hosts_list:
         if not is_ip_host(h):
@@ -1847,6 +2048,7 @@ def apply_prefer_hostname(hosts_list, dns_ttl):
     hostname's resolved addresses are cached for this check - see _cached_all_ips()."""
     hostname_ips = set()
     names = [h for h in hosts_list if not is_ip_host(h)]
+    jr_prefetch(names)
     if len(names) > 1:     # resolve in parallel - serial lookups of unresolvable names are slow
         with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
             for ips in ex.map(lambda n: _cached_all_ips(n, dns_ttl), names):
@@ -1866,6 +2068,7 @@ def apply_prefer_ip(hosts_list, dns_ttl):
     raw_ips = set(h for h in hosts_list if is_ip_host(h))
     if not raw_ips:
         return list(hosts_list)
+    jr_prefetch(hosts_list)
     return [h for h in hosts_list
             if is_ip_host(h) or not raw_ips.intersection(_cached_all_ips(h, dns_ttl))]
 
@@ -1885,6 +2088,7 @@ def apply_ip_only_on(original_hosts_list, active_hosts_list, host_state, up_seen
     entries."""
     existing = set(h.lower() for h in original_hosts_list)
     ip_map, unresolved, dropped = {}, 0, 0
+    jr_prefetch(original_hosts_list)
     for h in list(original_hosts_list):
         if is_ip_host(h):
             continue
@@ -1939,6 +2143,7 @@ def apply_ip_only_on_web(original_hosts_list, active_hosts_list, host_state,
     uses apply_ip_only_on above and keeps the old drop-on-collision behaviour."""
     existing = set(h.lower() for h in original_hosts_list)
     ip_map, unresolved, skipped = {}, 0, 0
+    jr_prefetch(original_hosts_list)
     for h in list(original_hosts_list):
         if is_ip_host(h):
             continue
@@ -2739,12 +2944,14 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
     # group above is split again by address family. In the common single-family
     # case this yields exactly one subgroup per group, same as before IPv6 support.
     subgroups = []   # (targets, retries, label, family)
+    if ssh_target and jr_active():
+        jr_prefetch(targets)                 # one ssh call for all uncached names
     for grp_targets, grp_retries, grp_name in groups:
         by_fam = {'4': [], '6': []}
         for t in grp_targets:
             fam = ip_version_str(t)
             if not fam and ssh_target:             # name resolved on the jump host
-                fam = '6' if dns_family == '6' else '4'
+                fam = ssh_name_family(t)
             if fam:
                 by_fam[fam].append(t)
         for fam in ('4', '6'):
@@ -2842,6 +3049,13 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
             new_row[0] = display_name
             rows.append(new_row)
 
+    if ssh_target and not jr_active() and dns_family == 'auto':
+        for r in rows:                       # alternate -4 / -6 for names fping cannot resolve
+            if not is_ip_host(r[0]) and 'NO-DNS' in r[1]:
+                if r[0] in _ssh_fam6:
+                    _ssh_fam6.discard(r[0])
+                else:
+                    _ssh_fam6.add(r[0])
     # names that do not resolve never reach fping - report them like fping would
     if unresolved:
         now_str = get_date_time()
@@ -3306,6 +3520,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
           <option value="accept-new">accept new hosts automatically (a changed key is still refused)</option>
           <option value="ask">ask - confirm an unknown host key (TRUST KEY)</option>
           <option value="off">off - no host key check at all (insecure)</option></select></td></tr>
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">NAMES</td><td colspan="3"><label style="font-size:12px;cursor:pointer"><input type="checkbox" id="jumpResolve" checked> resolve names on the jump host (getent / dig / nslookup / host; for GET NAMES, PREFER HOSTNAME / IP ADDRESS, IP ONLY)</label></td></tr>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">KEY FILE</td><td colspan="3"><input type="text" id="jumpKey" style="width:100%;box-sizing:border-box" placeholder="optional, path on the computer running eping.py" autocomplete="off" spellcheck="false"></td></tr>
       </table>
       <div id="jumpWarn" style="display:none;font-size:11px;color:var(--flap,#d9a400);margin-top:6px">This page is not served from this computer (HTTP, no encryption): the password would cross the network in clear text. Prefer a key.</div>
@@ -4610,6 +4825,7 @@ function jumpFields(action){
   return {action: action, host: document.getElementById('jumpHost').value, port: document.getElementById('jumpPort').value,
           user: document.getElementById('jumpUser').value, key: document.getElementById('jumpKey').value,
           hostkey: document.getElementById('jumpHostKey').value,
+          resolve: document.getElementById('jumpResolve').checked,
           secret: document.getElementById('jumpSecret').value};
 }
 function jumpButtons(){
@@ -4647,13 +4863,15 @@ function openJump(){
       if(j.ssh && j.ssh.ok){
         pre.style.color = 'var(--dim)';
         pre.textContent = 'ssh client: ' + (j.ssh.version || 'found') + (j.ssh.keyscan ? '' : ' (ssh-keyscan missing: unknown host keys cannot be trusted here)') +
-          ' | source: ' + (j.active ? j.active : 'local') + (j.pending ? ' (switching to ' + j.pending + ')' : '');
+          ' | source: ' + (j.active ? j.active : 'local') + (j.pending ? ' (switching to ' + j.pending + ')' : '') +
+          (j.active ? ' | names: ' + (j.resolver ? 'jump host (' + j.resolver + ')' : 'local') : '');
       } else {
         pre.style.color = 'var(--down,#f85149)';
         pre.textContent = (j.ssh && j.ssh.hint) || 'OpenSSH client not found on this computer.';
       }
       if(j.last){
         if(j.last.hostkey) document.getElementById('jumpHostKey').value = j.last.hostkey;
+        if(typeof j.last.resolve === 'boolean') document.getElementById('jumpResolve').checked = j.last.resolve;
         ['host','port','user','key'].forEach(function(k){
           var el = document.getElementById('jump' + k.charAt(0).toUpperCase() + k.slice(1));
           if(el && !el.value) el.value = j.last[k] || '';
@@ -7189,6 +7407,8 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
             parts.append('-sshkey ' + args.ssh_key)
         if getattr(args, 'ssh_hostkey', 'accept-new') != 'accept-new':
             parts.append('-sshhk ' + args.ssh_hostkey)
+        if getattr(args, 'ssh_no_resolve', False):
+            parts.append('-sshnr')
     return ' '.join(parts)
 
 
@@ -7379,7 +7599,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     gn_thread, gn_result, gn_candidates = get_names_start(
                         original_hosts_list, int(args.dns_ttl))
                     if gn_thread is None:
-                        message = 'get names: no eligible IP host(s)'
+                        message = ('get names: not available - the jump host has no working resolver (or it is switched off)'
+                                   if (ssh_target and not jr_active()) else 'get names: no eligible IP host(s)')
                     else:
                         message = ('get names: running in background (%d host(s))'
                                   % len(gn_candidates))
@@ -7961,6 +8182,7 @@ if __name__=='__main__':
     parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries, range 0-" + str(FULL_SWEEP_MAX) + " (default: " + str(FULL_SWEEP_DEF) + ", 0 = disabled/never)")
     parser.add_argument('-ssh', '--ssh', dest='ssh', metavar='[USER@]HOST[:PORT]', default=None, help="run fping on this jump host via ssh instead of locally (system ssh; password or key passphrase is asked at startup; the jump host resolves the names and needs a working fping)")
     parser.add_argument('-sshkey', '--ssh_key', dest='ssh_key', metavar='FILE', default=None, help="private key file for -ssh (default: ssh agent / default keys)")
+    parser.add_argument('-sshnr', '--ssh_no_resolve', action="store_true", dest='ssh_no_resolve', help="with -ssh: do not resolve names on the jump host (default: GET NAMES, PREFER HOSTNAME / IP ADDRESS and IP ONLY use getent / dig / nslookup / host there when available; otherwise the local resolver is used)")
     parser.add_argument('-sshhk', '--ssh_hostkey', dest='ssh_hostkey', choices=SSH_HOSTKEY_MODES, default='accept-new', help="host key check for -ssh: accept-new = trust hosts seen for the first time, a changed key is refused (default); ask = confirm an unknown key; off = no check at all (insecure)")
     parser.add_argument('-ncf', '--no_csv_fallback', action="store_true", dest='no_csv_fallback', help="do not ping the CSV address of a host whose name does not resolve (default: it is pinged by the CSV IP and marked in the host popup)")
     parser.add_argument('-ncs', '--no_check_source', action="store_true", dest='no_check_source', help="do not pass --check-source to fping (only needed for hosts replying from a different address)")
@@ -8327,7 +8549,7 @@ if __name__=='__main__':
     # (CLI: [A]=ADD HOST, web gui: ADD HOST / UPLOAD FILE)
 
     if args.ssh:
-        ssh_init(args.ssh, args.ssh_key, args.ssh_hostkey)
+        ssh_init(args.ssh, args.ssh_key, args.ssh_hostkey, not args.ssh_no_resolve)
     elif args.ssh_key:
         error_handler("ERROR: -sshkey needs -ssh")
 
@@ -8575,13 +8797,15 @@ if __name__=='__main__':
         Same actions as the web gui window (jump_handle). Pinging keeps running meanwhile."""
         rows, cols = screen.getmaxyx()
         dw = min(76, max(40, cols - 4))
-        dh = 18
+        dh = 19
         dy = max(0, rows // 2 - dh // 2)
         dx = max(0, cols // 2 - dw // 2)
-        labels  = ['HOST', 'PORT', 'USER', 'PASSWORD', 'HOST KEY', 'KEY FILE']
-        keys    = ['host', 'port', 'user', 'secret', 'hostkey', 'key']
+        labels  = ['HOST', 'PORT', 'USER', 'PASSWORD', 'HOST KEY', 'NAMES', 'KEY FILE']
+        keys    = ['host', 'port', 'user', 'secret', 'hostkey', 'resolve', 'key']
         vals    = [_jump_last.get('host', ''), _jump_last.get('port', ''), _jump_last.get('user', ''),
-                   '', _jump_last.get('hostkey', 'accept-new'), _jump_last.get('key', '')]
+                   '', _jump_last.get('hostkey', 'accept-new'),
+                   'on' if _jump_last.get('resolve', True) else 'off', _jump_last.get('key', '')]
+        nm_text = {'on': 'resolve on the jump host', 'off': 'resolve locally'}
         hk_text = {'ask': 'ask (confirm unknown key)', 'accept-new': 'accept new hosts', 'off': 'OFF - no check (insecure)'}
         pre     = ssh_prereq()
         status  = ['']
@@ -8627,11 +8851,13 @@ if __name__=='__main__':
             screen_output(dy + 3, dx, '│' + (' ' + info)[:dw - 2].ljust(dw - 2) + '│', cls, 0)
             fw = dw - 16
             for i, lab in enumerate(labels):
-                shown = ('*' * len(vals[i])) if keys[i] == 'secret' else (hk_text[vals[i]] + '  [ENTER/SPACE=change]' if keys[i] == 'hostkey' else vals[i])
+                shown = ('*' * len(vals[i])) if keys[i] == 'secret' else (
+                    hk_text[vals[i]] + '  [ENTER/SPACE=change]' if keys[i] == 'hostkey' else
+                    nm_text[vals[i]] + '  [ENTER/SPACE=change]' if keys[i] == 'resolve' else vals[i])
                 shown = shown[-fw:] if len(shown) > fw else shown
                 line = ' ' + lab.ljust(10) + (shown + '_' * 0).ljust(fw) + ' '
                 screen_output(dy + 4 + i, dx, '│' + line[:dw - 2].ljust(dw - 2) + '│', 2 if focus == i else 1, 1 if focus == i else 0)
-            screen_output(dy + 10, dx, '│' + ' ' * (dw - 2) + '│', 1, 0)
+            screen_output(dy + 11, dx, '│' + ' ' * (dw - 2) + '│', 1, 0)
             lines = []
             for t in status:
                 lines.extend(wrap(t, dw - 4))
@@ -8639,18 +8865,18 @@ if __name__=='__main__':
                 lines.extend(wrap(f, dw - 4))
             for i in range(4):
                 txt = lines[i] if i < len(lines) else ''
-                screen_output(dy + 11 + i, dx, '│' + (' ' + txt)[:dw - 2].ljust(dw - 2) + '│', status_cls, 0)
+                screen_output(dy + 12 + i, dx, '│' + (' ' + txt)[:dw - 2].ljust(dw - 2) + '│', status_cls, 0)
             bl = buttons()
             col = dx + 2
-            screen_output(dy + 15, dx, '│' + ' ' * (dw - 2) + '│', 1, 0)
+            screen_output(dy + 16, dx, '│' + ' ' * (dw - 2) + '│', 1, 0)
             for i, (name, _a) in enumerate(bl):
                 lab = ' [' + name + '] '
                 hi = (focus == len(labels) + i)
-                screen_output(dy + 15, col, lab, 2 if hi else 1, 1 if hi else 0)
+                screen_output(dy + 16, col, lab, 2 if hi else 1, 1 if hi else 0)
                 col += len(lab) + 1
-            screen_output(dy + 16, dx, '│' + ' TAB/arrows=move  ENTER=select  ESC=close'.ljust(dw - 2) + '│', 1, 0)
-            screen_output(dy + 17, dx, '└' + '─' * (dw - 2) + '┘', 1, 1)
-            if focus < len(labels) and keys[focus] != 'hostkey' and not busy['t']:
+            screen_output(dy + 17, dx, '│' + ' TAB/arrows=move  ENTER=select  ESC=close'.ljust(dw - 2) + '│', 1, 0)
+            screen_output(dy + 18, dx, '└' + '─' * (dw - 2) + '┘', 1, 1)
+            if focus < len(labels) and keys[focus] not in ('hostkey', 'resolve') and not busy['t']:
                 curses.curs_set(1)
                 shown_len = min(len(vals[focus]), fw)
                 screen.move(dy + 4 + focus, dx + 12 + shown_len)
@@ -8722,6 +8948,8 @@ if __name__=='__main__':
                     focus = (focus - 1) % nfocus
                 elif ch in (10, 13, 32) and focus < len(labels) and keys[focus] == 'hostkey':
                     vals[focus] = SSH_HOSTKEY_MODES[(SSH_HOSTKEY_MODES.index(vals[focus]) + 1) % 3]
+                elif ch in (10, 13, 32) and focus < len(labels) and keys[focus] == 'resolve':
+                    vals[focus] = 'off' if vals[focus] == 'on' else 'on'
                 elif ch in (10, 13):
                     if focus < len(labels):
                         focus = (focus + 1) % nfocus
@@ -8733,7 +8961,7 @@ if __name__=='__main__':
                             status, status_cls = [pre['hint']], 3
                         else:
                             start(act)
-                elif focus < len(labels):
+                elif focus < len(labels) and keys[focus] not in ('hostkey', 'resolve'):
                     if ch in (curses.KEY_BACKSPACE, 127, 8):
                         vals[focus] = vals[focus][:-1]
                     elif 32 <= ch <= 126 and len(vals[focus]) < 255:
@@ -9529,7 +9757,8 @@ if __name__=='__main__':
                 gn_thread, gn_result, gn_candidates = get_names_start(
                     original_hosts_list, int(args.dns_ttl))
                 if gn_thread is None:
-                    notice('GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
+                    notice('GET NAMES: NOT AVAILABLE VIA JUMP HOST' if (ssh_target and not jr_active())
+                           else 'GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
                     message = 'get names: no eligible ip host(s)'
                 else:
                     notice('GET NAMES: RUNNING IN BACKGROUND (%d HOST(S))'
@@ -10307,7 +10536,8 @@ if __name__=='__main__':
                 gn_thread, gn_result, gn_candidates = get_names_start(
                     original_hosts_list, int(args.dns_ttl))
                 if gn_thread is None:
-                    notice('GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
+                    notice('GET NAMES: NOT AVAILABLE VIA JUMP HOST' if (ssh_target and not jr_active())
+                           else 'GET NAMES: NO ELIGIBLE IP HOST(S)', 2, 3)
                 else:
                     notice('GET NAMES: RUNNING IN BACKGROUND (%d HOST(S))'
                           % len(gn_candidates), 2)

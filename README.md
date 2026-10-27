@@ -1,4 +1,4 @@
-# eping.py 4.02
+# eping.py 4.04
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -438,6 +438,7 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-ssh` | `[USER@]HOST[:PORT]` | off | run fping on a jump host via ssh (see *SSH source (JUMPHOST)*) |
 | `-sshkey` | file | agent | private key file for `-ssh` |
 | `-sshhk` | accept-new/ask/off | accept-new | host key check for `-ssh` |
+| `-sshnr` | — | off | with `-ssh`: do not resolve names on the jump host (use the local resolver) |
 | `-ncf` | — | off | CSV: do not ping the CSV IP of a name without DNS record |
 | `-up` | — | 0 | learning phase: after N rounds show only hosts seen UP (view CURRENTLY-UP; all hosts are still pinged until SET REFERENCE) |
 | `-setref` | — | off | with `-up`: hosts seen UP become new reference list |
@@ -498,24 +499,31 @@ these rows automatically.
 ## SSH source (JUMPHOST)
 
 Run fping on a jump host instead of locally (system `ssh` only). Any Linux host with a working `fping`
-(e.g. a caretaker) will do; it resolves the names itself. Start: `-ssh [USER@]HOST[:PORT]` (+ `-sshkey FILE`, `-sshhk MODE`);
+(e.g. a caretaker) will do; it resolves the names itself. Start: `-ssh [USER@]HOST[:PORT]` (+ `-sshkey FILE`, `-sshhk MODE`, `-sshnr`);
 the password or key passphrase is asked on the terminal at startup. At runtime: `J` in the CLI,
 JUMPHOST button in the web GUI (after ADV OPTIONS).
 
 ![JUMPHOST window](docs/img/jumphost.png)
 
-- Window: HOST, PORT, USER, PASSWORD (key passphrase), HOST KEY, KEY FILE. TEST checks ssh, login and
+- Window: HOST, PORT, USER, PASSWORD (key passphrase), HOST KEY, NAMES, KEY FILE. TEST checks ssh, login and
   fping on the jump host, CONNECT switches the scan source, USE LOCAL switches back. A missing local
   `ssh` is shown in the window.
 - HOST KEY: `accept-new` (default) - hosts seen for the first time are trusted automatically, a changed
   key is still refused; `ask` - an unknown key is shown with its fingerprint and must be accepted with
   TRUST KEY; `off` - no check at all (insecure).
+- NAMES (default on): the DNS lookups eping does itself - GET NAMES, PREFER HOSTNAME / IP ADDRESS, IP ONLY -
+  run on the jump host over the same ssh connection (no second login), using `getent`, else `dig`,
+  `nslookup` or `host` there; TEST/CONNECT report which tool works. One batch per call, names are validated
+  and sent via stdin. Without a working tool, or with the option off (`-sshnr`), the local resolver is used
+  and GET NAMES is not available. The DNS caches are cleared on every source switch.
+  A name with only an AAAA record is pinged with `fping -6` there (A is preferred, as locally). Without a resolver on
+  the jump host, a name that fping reports as NO-DNS is tried with `-6` in the next round, alternating with `-4`; `-4` / `-6` force one family.
 - The switch is applied at the start of the next round; hosts, states and counters are kept.
 - Connection loss: results of the round are discarded, hosts keep their state, a banner is shown and
   eping reconnects. Logged as `#COMMENT#` rows (`JUMPHOST ... OFFLINE: <reason>`, `JUMPHOST ... ONLINE
   again`, `SOURCE SWITCH <old> -> <new>`), shown in the report's comment timeline.
 - Log column `SOURCE`: `local` or the jump host of each row.
-- Limits: GET NAMES and the CSV-IP fallback are not available over ssh; at most 4 ssh processes
+- Limits: the CSV-IP fallback is not available over ssh; at most 4 ssh processes
   (2 on Windows); the web password transfer is plain HTTP - use `-bind 127.0.0.1` or a trusted network.
 
 ## Web GUI header
