@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.10'
+VERSION = '4.11'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -180,6 +180,8 @@ except ImportError:         # Windows: no RLIMIT_NOFILE
     resource = None
 import http.server
 import socketserver
+import heapq
+import contextlib
 import urllib.parse
 import zipfile
 import gzip
@@ -5963,30 +5965,50 @@ _report_file_path = None          # last successfully generated report HTML, or 
 _report_running   = False         # guards against overlapping GENERATE REPORT runs
 
 def merge_logfiles(paths):
-    """Concatenate multiple CSV logfiles (same header) into one temp CSV, for
+    """Merge multiple CSV logfiles (same header) into one temp CSV, for
     GENERATE REPORT's multi-file selection - the merged file is analysed by
     epinga.py as a single logfile, then removed by the caller.
 
-    Rows are written in file-mtime order (oldest first) regardless of the
-    order paths were selected in, so a rotation chain always merges back into
-    chronological order. Only the first file's header row is kept.
+    The files are merged by the TIMESTAMP of their rows (streamed, constant memory),
+    not by file date: epinga.py needs every host's rows in time order, and file dates
+    are unreliable (copies, parallel runs). Each file is read in order; on equal
+    timestamps the older file (by mtime) comes first. Only the first header is kept.
     Returns the temp file path, or None on error.
     """
     ordered = sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
     fd, tmp_path = tempfile.mkstemp(prefix='eping-merged_', suffix='.csv', dir='.')
-    try:
-        with os.fdopen(fd, 'w', encoding='UTF8', newline='') as out:
-            writer = csv.writer(out)
-            header_written = False
-            for p in ordered:
-                with open(p, 'r', encoding='UTF-8', newline='') as f:
-                    rows = list(csv.reader(f))
-                if not rows:
+
+    def rows_of(f):
+        rd = csv.reader(f)
+        hdr = next(rd, None)
+        if hdr is None:
+            return None, iter(())
+        ti = hdr.index('TIMESTAMP') if 'TIMESTAMP' in hdr else 0
+        def gen():
+            last = ''                       # a row without a usable timestamp keeps the previous key
+            for r in rd:
+                if not r:
                     continue
-                if not header_written:
-                    writer.writerow(rows[0])
-                    header_written = True
-                writer.writerows(rows[1:])
+                if len(r) > ti and r[ti].strip():
+                    last = r[ti].strip()
+                yield last, r
+        return hdr, gen()
+
+    try:
+        with contextlib.ExitStack() as stack, os.fdopen(fd, 'w', encoding='UTF8', newline='') as out:
+            writer = csv.writer(out)
+            gens, header = [], None
+            for p in ordered:
+                f = stack.enter_context(open(p, 'r', encoding='UTF-8', newline=''))
+                hdr, g = rows_of(f)
+                if hdr is None:
+                    continue
+                if header is None:
+                    header = hdr
+                    writer.writerow(hdr)
+                gens.append(g)
+            for _key, row in heapq.merge(*gens, key=lambda kr: kr[0]):
+                writer.writerow(row)
     except OSError:
         try:
             os.remove(tmp_path)

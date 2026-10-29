@@ -1,4 +1,4 @@
-# eping.py 4.10
+# eping.py 4.11
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -578,7 +578,7 @@ epinga.py section). Shown only if the log holds more than one source.
 
 ![SELECT JUMPHOST](docs/img/select-jumphost.png)
 
-More than one selected file is merged chronologically (by mtime) into one temporary
+More than one selected file is merged chronologically (by the row timestamps, streamed) into one temporary
 CSV, analysed as a single logfile, then the temp file is removed. Result opens in a new
 tab; if a selected file was invalid or has meanwhile been removed (e.g. by log rotation
 pruning it between picking and clicking GENERATE), the tab closes and a footer error is
