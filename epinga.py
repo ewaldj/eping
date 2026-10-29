@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.37'
+VERSION = '2.38'
 version = VERSION   # legacy alias
 
 import re
@@ -252,7 +252,10 @@ class HostStats:
         span = self.total_span.total_seconds()
         if span <= 0:
             return 0.0
-        return round(self.time_up.total_seconds() * 100 / span, 2)
+        pct = round(self.time_up.total_seconds() * 100 / span, 2)
+        if pct > 99.99 and self.real_changes > 0:
+            pct = 99.99          # a host with state changes is never shown as 100 % (even if rounding says so)
+        return pct
 
     @property
     def real_changes(self):
@@ -476,7 +479,7 @@ def print_host(hostname, s, show_changes, comments=None):
     filled     = int(up_bar_len * up_pct / 100) if span_s > 0 else 0
     up_bar     = col('█' * filled, CGREEN) + col('░' * (up_bar_len - filled), CRED)
 
-    print(f'  Uptime  [{up_bar}] {col(f"{up_pct:.1f} %", pct_colour)}'
+    print(f'  Uptime  [{up_bar}] {col(f"{up_pct:.2f} %", pct_colour)}'
           f'  ↑ {fmt_td(s.time_up)}  ↓ {fmt_td(s.time_down + s.time_nodns)}'
           f'  span: {fmt_td(s.total_span)}')
 
@@ -573,7 +576,7 @@ def print_summary(hosts, host_order, sort_by='name'):
         noc_col    = CORANGE if s.real_changes > 0 else CDIM
 
         line = (f'  {h:<{col_h}} {state_col(s.current_state):^{col_st}}'
-                f' {col(f"{up_pct:6.1f} %", pct_colour)}'
+                f' {col(f"{up_pct:8.2f} %", pct_colour)}'
                 f'  {min_rtt:>{col_rt}}  {avg_rtt:>{col_rt}}  {max_rtt:>{col_rt}}'
                 f'  {col(noc.rjust(col_ch), noc_col)}')
         print(line)
@@ -1276,7 +1279,7 @@ function stateBadge(s, changes) {{
 
 function uptimeBar(pct, flapping) {{
   const cls = flapping ? 'pct-orange' : pct >= 99 ? 'pct-green' : pct >= 90 ? 'pct-orange' : 'pct-red';
-  return `<span class="${{cls}}">${{pct.toFixed(1)}} %</span>`;
+  return `<span class="${{cls}}">${{pct.toFixed(2)}} %</span>`;
 }}
 
 function rttCell(v) {{
