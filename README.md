@@ -688,7 +688,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.37
+# epinga.py 2.38
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
@@ -781,3 +781,4 @@ Each bucket: Download (`<base>-<up|down|flap|nodns>-hosts.txt`) + Copy (clipboar
 
 Row click expands: state-change history with timestamps, per-host stats (IP, uptime,
 downtime, span, first/last seen, RTT min/avg/max).
+Uptime % is shown with two decimals; a host with state changes never shows more than 99.99 % (also when rounding would give 100.00).
