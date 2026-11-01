@@ -15,14 +15,38 @@ The browser opens as soon as eping answers. Python 3.11 (for Apple Silicon and I
 
 ## First start (apps are not notarized)
 
-macOS blocks downloaded apps from unknown developers. Either right-click the app, choose Open
-(macOS 15: System Settings / Privacy & Security / Open Anyway), or run once in Terminal:
+The apps are not notarized by Apple, so macOS blocks them on first start. This is a one-time step per app:
+
+1. Unzip `eping-installer-mac.zip` and open `eping-installer.app`. macOS shows *Not Opened*. Press **Done** (not *Move to Trash*).
+
+   <img src="install-1-not-opened.png" width="300" alt="Not Opened">
+
+2. Open **System Settings / Privacy & Security**, scroll to *Security* and press **Open Anyway** next to the blocked app message.
+   The message is shown for about one hour after the failed start.
+
+   <img src="install-2-open-anyway.png" width="600" alt="Open Anyway">
+
+3. Confirm with **Open Anyway** again.
+
+   <img src="install-3-confirm.png" width="300" alt="Confirm">
+
+4. Authenticate with Touch ID or the administrator password (**Use Password...**).
+
+   <img src="install-4-password.png" width="300" alt="Authenticate">
+
+5. The installer starts. Press **Install** (see below).
+
+   <img src="install-5-installer.png" width="400" alt="Installer">
+
+The same applies to `eping.app` of the portable version.
+
+Alternative without dialogs: run once in Terminal
 
 ```sh
 xattr -dr com.apple.quarantine eping-installer.app   # or the eping-mac folder
 ```
 
-The installer removes the flag from the installed eping files itself.
+The installer removes the flag from the installed eping files itself, so `eping.app` starts without this procedure after an installation.
 
 ## Installer
 
