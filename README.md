@@ -1,4 +1,4 @@
-# eping.py 4.11
+# eping.py 4.12
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -365,6 +365,7 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | POST | `/api/upload_server_file?name=...` | raw file content | save `.txt`/`.csv` as-is; never overwrites |
 | POST | `/api/add_from_server` | `{"names":[...]}` | add hosts from listed `.txt` files |
 | GET | `/api/report` | — | last GENERATE REPORT HTML; `404` until done |
+| POST | `/api/reportupload?name=x.csv&first=1` | raw `.csv` content | UPLOAD FROM CLIENT: store one file (`first=1` starts a new set); then `run_report` with `"upload":true` |
 | POST | `/api/command` | `{"cmd":"...","value":"..."}` | control (see cmd list below) |
 | POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection (same format as `adv_filter`) |
 | POST | `/api/upload` | host list, text | add hosts |
@@ -567,7 +568,7 @@ logging is off or the logfile is empty/missing.
 ## GENERATE REPORT (web gui) / ANALYSE NOW (CLI `N`)
 
 Runs epinga.py against one or more logfiles in the background while eping.py keeps
-running - not just at exit. Web: GENERATE REPORT dropdown, three entries - `ACTIVE
+running - not just at exit. Web: GENERATE REPORT dropdown, four entries - `ACTIVE
 LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
 closes and a footer error is shown), `CHOOSE LOGFILE` picks one or more `.csv` files in
 the working dir - table (name/size/date), "select all" checkbox, nothing preselected;
@@ -575,6 +576,10 @@ up to 25 files per report, checking a 26th is refused. `SELECT JUMPHOST` lists t
 sources (`local` and jump hosts, log column `SOURCE`) found in the active logfile - all checked,
 ENTER = GENERATE; only the periods of the checked sources are calculated (see *Source filter* in the
 epinga.py section). Shown only if the log holds more than one source.
+
+`UPLOAD FROM CLIENT` picks one or more `.csv` logfiles on the computer running the browser (max 25, 1 GB each);
+they are uploaded to a server temp dir, merged like `CHOOSE LOGFILE` and analysed as one report. Temp files and
+report are removed when eping.py exits or on the next upload.
 
 ![SELECT JUMPHOST](docs/img/select-jumphost.png)
 

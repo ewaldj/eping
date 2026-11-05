@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.11'
+VERSION = '4.12'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -3575,6 +3575,20 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="uploadReportModal" class="modal-overlay" style="display:none">
+    <div class="modal-box wide">
+      <h3>UPLOAD FROM CLIENT</h3>
+      <p>Choose one or more *.csv log files from this computer - they are uploaded, merged by timestamp
+         and analysed with epinga.py as one report (max <span id="uploadReportMax"></span> files).</p>
+      <input type="file" id="uploadReportInput" accept=".csv,text/csv" multiple style="margin-bottom:10px;color:var(--fg)">
+      <div id="uploadReportList" style="max-height:180px;overflow-y:auto;margin-bottom:14px;font-size:12px;
+           border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 10px;box-sizing:border-box;color:var(--dim)">no files selected</div>
+      <div class="modal-buttons">
+        <button id="modalBtnUploadReportGo" disabled>GENERATE</button>
+        <button id="modalBtnUploadReportCancel">CANCEL</button>
+      </div>
+    </div>
+  </div>
   <div id="chooseReportModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide xwide">
       <h3>CHOOSE LOGFILE</h3>
@@ -3738,6 +3752,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="active">ACTIVE LOGFILE</option>
        <option value="choose">CHOOSE LOGFILE</option>
        <option value="sources">SELECT JUMPHOST</option>
+       <option value="upload">UPLOAD FROM CLIENT</option>
       </select>
     </span>
    </span>
@@ -5136,11 +5151,12 @@ function reportAbort(msg){
   reportWindow = null;
   note(msg, false);
 }
-function postReport(names, sources){
+function postReport(names, sources, upload){
   // post() only carries a single 'value' string - multi-file selection needs
   // its own 'values' array, so this bypasses post().
   var body = names.length ? {cmd: 'run_report', values: names} : {cmd: 'run_report', value: ''};
   if(sources) body.sources = sources;
+  if(upload) body.upload = true;   // use the files stored by api/reportupload
   fetch('api/command', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)})
     .then(function(r){ return r.json().then(function(j){ return {ok: r.ok && j.ok, err: j.error}; }); })
@@ -5205,7 +5221,78 @@ document.getElementById('selGenReport').onchange = function(){
   if(what === 'active'){ runReport(''); }
   else if(what === 'choose'){ openChooseReport(); }
   else if(what === 'sources'){ openReportSourcesPick(); }
+  else if(what === 'upload'){ openUploadReport(); }
 };
+// UPLOAD FROM CLIENT - local *.csv files are POSTed one by one to
+// api/reportupload (server temp dir), then run_report{upload:true} merges and
+// analyses them. A visible file input in a modal (Safari blocks click() from a
+// select change) and a GENERATE click, so window.open() stays user-initiated.
+var uploadReportModal = document.getElementById('uploadReportModal');
+var uploadReportInput = document.getElementById('uploadReportInput');
+var uploadReportFiles = [];
+function uploadReportOpen(){ return uploadReportModal.style.display === 'flex'; }
+function uploadReportRender(){
+  var box = document.getElementById('uploadReportList');
+  box.textContent = '';
+  if(!uploadReportFiles.length){ box.textContent = 'no files selected'; }
+  uploadReportFiles.forEach(function(f){
+    var d = document.createElement('div');
+    d.textContent = f.name + '  (' + humanBytes(f.size) + ')';
+    d.style.color = 'var(--fg)';
+    box.appendChild(d);
+  });
+  document.getElementById('modalBtnUploadReportGo').disabled = !uploadReportFiles.length;
+}
+function openUploadReport(){
+  uploadReportFiles = [];
+  uploadReportInput.value = '';
+  document.getElementById('uploadReportMax').textContent = REPORT_MAX_FILES;
+  uploadReportRender();
+  uploadReportModal.style.display = 'flex';
+}
+function closeUploadReport(){
+  uploadReportModal.style.display = 'none';
+  uploadReportInput.value = '';
+  uploadReportFiles = [];
+}
+uploadReportInput.onchange = function(){
+  var all = Array.prototype.slice.call(this.files || []).filter(function(f){
+    return f.name.split('.').pop().toLowerCase() === 'csv';
+  });
+  uploadReportFiles = all.slice(0, REPORT_MAX_FILES);
+  uploadReportRender();
+};
+document.getElementById('modalBtnUploadReportCancel').onclick = closeUploadReport;
+function runReportUpload(){
+  var files = uploadReportFiles.slice();
+  if(!files.length) return;
+  closeUploadReport();
+  reportWindow = window.open('', '_blank');
+  if(reportWindow){
+    reportWindow.document.write(REPORT_WAIT_HTML);
+    reportWindow.document.close();
+  }
+  var i = 0;
+  function next(){
+    if(i >= files.length){
+      note(PENDING.run_report, true);
+      postReport([], null, true);
+      return;
+    }
+    note('uploading ' + (i + 1) + '/' + files.length + ' ...', true);
+    fetch('api/reportupload?first=' + (i === 0 ? 1 : 0) + '&name=' + encodeURIComponent(files[i].name),
+          {method: 'POST', body: files[i]})
+      .then(function(r){ return r.json().then(function(j){ return {ok: r.ok && j.ok, err: j.error}; }); })
+      .then(function(res){
+        if(!res.ok){ reportAbort('upload failed: ' + (res.err || 'request rejected')); return; }
+        i++;
+        next();
+      })
+      .catch(function(){ reportAbort('upload failed: request error'); });
+  }
+  next();
+}
+document.getElementById('modalBtnUploadReportGo').onclick = runReportUpload;
 var chooseReportFiles = [];
 var chooseReportSort  = {key: 'mtime', dir: 'desc'};
 var chooseReportModal = document.getElementById('chooseReportModal');
@@ -5420,6 +5507,10 @@ document.addEventListener('keydown', function(e){
     }
     var sk = e.key.toLowerCase();
     if(sk === 'y' || e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
+    return;
+  }
+  if(uploadReportOpen()){
+    if(e.key === 'Escape'){ closeUploadReport(); e.preventDefault(); }
     return;
   }
   if(reportSrcOpen()){
@@ -5964,6 +6055,68 @@ _report_lock = threading.Lock()   # guards _report_file_path (separate from web_
 _report_file_path = None          # last successfully generated report HTML, or None
 _report_running   = False         # guards against overlapping GENERATE REPORT runs
 
+REPORT_UPLOAD_MAX   = 1024 * 1024 * 1024   # max size of one uploaded report logfile
+_report_upload_lock  = threading.Lock()
+_report_upload_dir   = None                 # temp dir holding UPLOAD FROM CLIENT files
+_report_upload_files = []                   # paths of the files stored there
+
+
+def report_upload_cleanup():
+    """Remove the UPLOAD FROM CLIENT temp dir (uploads, reports) - at exit or on a new upload."""
+    global _report_upload_dir, _report_upload_files
+    with _report_upload_lock:
+        d, _report_upload_dir, _report_upload_files = _report_upload_dir, None, []
+    if d:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+atexit.register(report_upload_cleanup)
+
+
+def report_upload_store(rfile, length, name, first):
+    """Store one uploaded *.csv (streamed, constant memory) for GENERATE REPORT >
+    UPLOAD FROM CLIENT. first=True starts a new set (old files and report are
+    dropped). Returns an error string or None."""
+    global _report_upload_dir
+    base = os.path.basename(str(name).replace('\\', '/'))
+    base = re.sub(r'[^\w. -]', '_', base).strip(' .')[:200]
+    if not base.lower().endswith('.csv') or len(base) <= 4:
+        return 'only *.csv files'
+    if length <= 0:
+        return 'empty file'
+    if length > REPORT_UPLOAD_MAX:
+        return 'file too large'
+    with web_lock:
+        if _report_running:
+            return 'report already running'
+    if first:
+        report_upload_cleanup()
+    with _report_upload_lock:
+        if _report_upload_dir is None:
+            _report_upload_dir = tempfile.mkdtemp(prefix='eping-upload_')
+        if len(_report_upload_files) >= REPORT_MAX_FILES:
+            return 'too many files'
+        path, n = os.path.join(_report_upload_dir, base), 1
+        while os.path.exists(path):
+            path = os.path.join(_report_upload_dir, str(n) + '_' + base)
+            n += 1
+        _report_upload_files.append(path)
+    remaining = length
+    try:
+        with open(path, 'wb') as out:
+            while remaining > 0:
+                chunk = rfile.read(min(1048576, remaining))
+                if not chunk:
+                    break
+                out.write(chunk)
+                remaining -= len(chunk)
+    except OSError as e:
+        return 'write failed: ' + str(e)
+    if remaining:
+        return 'upload incomplete'
+    return None
+
+
 def merge_logfiles(paths):
     """Merge multiple CSV logfiles (same header) into one temp CSV, for
     GENERATE REPORT's multi-file selection - the merged file is analysed by
@@ -5976,7 +6129,8 @@ def merge_logfiles(paths):
     Returns the temp file path, or None on error.
     """
     ordered = sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
-    fd, tmp_path = tempfile.mkstemp(prefix='eping-merged_', suffix='.csv', dir='.')
+    fd, tmp_path = tempfile.mkstemp(prefix='eping-merged_', suffix='.csv',
+                                    dir=os.path.dirname(paths[0]) or '.')
 
     def rows_of(f):
         rd = csv.reader(f)
@@ -6122,7 +6276,7 @@ def log_sources(paths):
     return sorted(out, key=lambda x: (x != 'local', x))
 
 
-def generate_epinga_report(logpaths, sources=None):
+def generate_epinga_report(logpaths, sources=None, workdir=None):
     """Run epinga.py against one or more logfiles and produce an HTML report -
     core logic shared by the web gui's GENERATE REPORT (run_epinga_report, below)
     and the curses [N] ANALYSE NOW key. logpaths is a single path (str) or a
@@ -6132,6 +6286,8 @@ def generate_epinga_report(logpaths, sources=None):
     skips a network call. stdin=DEVNULL makes epinga.py's end-of-run "open in
     browser?" prompt fail fast with EOFError instead of blocking - harmless, the
     report is already written to disk by that point.
+    workdir: run epinga.py there (it writes its *_report.txt into the working
+    directory) - used for uploaded files, keeps the server's cwd clean.
     Returns (report_path, None) on success, (None, error_message) on failure.
     """
     if isinstance(logpaths, str):
@@ -6142,6 +6298,7 @@ def generate_epinga_report(logpaths, sources=None):
     epinga_path = find_epinga_path()
     if not epinga_path:
         return None, 'epinga.py not found next to eping.py or in PATH'
+    epinga_path = os.path.abspath(epinga_path)
     merged_tmp = None
     if len(logpaths) > 1:
         merged_tmp = merge_logfiles(logpaths)
@@ -6165,7 +6322,7 @@ def generate_epinga_report(logpaths, sources=None):
         proc = subprocess.run([sys.executable, epinga_path, '-f', analyse_path, '-q',
                                '--html', report_path, '--no-version-check', '--no-open'] + src_args,
                               env=dict(os.environ, PYTHONIOENCODING='utf-8'),
-                              stdin=subprocess.DEVNULL,
+                              stdin=subprocess.DEVNULL, cwd=workdir,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               encoding='utf-8', errors='replace')
     except Exception as e:
@@ -6183,7 +6340,7 @@ def generate_epinga_report(logpaths, sources=None):
     return report_path, None
 
 
-def run_epinga_report(target_paths=None, sources=None):
+def run_epinga_report(target_paths=None, sources=None, uploaded=False):
     """GENERATE REPORT (web gui): analyse one or more logfiles with epinga.py
     and make the resulting HTML available at /api/report. target_paths picks
     one or more arbitrary *.csv files (DOWNLOAD... CHOOSE LOGFILE picker -
@@ -6199,7 +6356,14 @@ def run_epinga_report(target_paths=None, sources=None):
     else:
         with web_lock:
             logpaths = web_state.get('logfile') or ''
-    report_path, err = generate_epinga_report(logpaths, sources)
+    report_path, err = generate_epinga_report(
+        logpaths, sources, os.path.dirname(os.path.abspath(logpaths[0])) if uploaded else None)
+    if uploaded:
+        for _p in logpaths:             # the report stays in the temp dir, the uploaded csv are not needed anymore
+            try:
+                os.remove(_p)
+            except OSError:
+                pass
     if report_path:
         with _report_lock:
             _report_file_path = report_path
@@ -6761,6 +6925,27 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                           json.dumps({'ok': True, 'values': adv_values(hosts, sel)}))
             return
 
+        # --- GENERATE REPORT > UPLOAD FROM CLIENT: one raw *.csv body per request ---
+        if path in ('/api/reportupload', 'api/reportupload'):
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                length = 0
+            err = None
+            if length > REPORT_UPLOAD_MAX:
+                self.close_connection = True
+                err = 'file too large'
+            else:
+                err = report_upload_store(self.rfile, length, (q.get('name') or [''])[0],
+                                         (q.get('first') or ['0'])[0] == '1')
+            if err:
+                self.close_connection = True   # body may be unread - do not reuse the connection
+                self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False, 'error': err}))
+            else:
+                self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
+            return
+
         # --- host file upload (plain text body) ---
         if path in ('/api/upload', 'api/upload'):
             raw = self._read_body(WEB_MAX_UPLOAD)
@@ -6983,7 +7168,15 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             raw_src = payload.get('sources')
             report_sources = [str(x)[:256] for x in raw_src[:64]] if isinstance(raw_src, list) and raw_src else None
             target_paths = None
-            if names:
+            use_upload = bool(payload.get('upload'))
+            if use_upload:
+                with _report_upload_lock:
+                    target_paths = [p for p in _report_upload_files if os.path.isfile(p)]
+                if not target_paths:
+                    self._respond(404, 'application/json; charset=utf-8',
+                                  json.dumps({'ok': False, 'error': 'no uploaded files'}))
+                    return
+            elif names:
                 target_paths = []
                 for name in names:
                     if not safe_cwd_filename(name, ('.csv',)):
@@ -7001,7 +7194,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     _report_running = True
                     web_state['report'] = {'status': 'running', 'error': ''}
             if not already_running:
-                threading.Thread(target=run_epinga_report, args=(target_paths, report_sources), daemon=True).start()
+                threading.Thread(target=run_epinga_report, args=(target_paths, report_sources, use_upload), daemon=True).start()
             self._respond(200, 'application/json; charset=utf-8', json.dumps({'ok': True}))
             return
         if not self._queue_command((cmd, value)):
