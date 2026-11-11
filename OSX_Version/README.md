@@ -60,7 +60,7 @@ macOS 10.13+. Nothing else has to be installed: the `python-aarch64` / `python-x
 
 ## Window
 
-Below the buttons: checkboxes *Disable autostart* and *Disable logging* (`-dl`), *Disable file* (`-df`, no hosts file), a *CLI options* field (stored in `eping-args.txt`) and a *Check updates* button. Settings (`eping-launcher.cfg`) apply at Start / Restart.
+Below the buttons: checkboxes *Disable autostart* and *Disable logging* (`-dl`), *Disable file* (`-df`, no hosts file), a *CLI options* field (stored in `eping-args.txt` in the working folder) and a *Check updates* button. Settings (`eping-launcher.cfg`) apply at Start / Restart.
 
 ## Update
 
@@ -69,6 +69,7 @@ newer, the Update button replaces them; if `eping-mac` is newer, the whole packa
 
 ## Notes
 
-- The web GUI listens on 127.0.0.1 only; add `-bind 0.0.0.0` to `eping-args.txt` to reach it from the network.
+- The web GUI listens on 127.0.0.1 only; add `-bind 0.0.0.0` to the CLI options field (`eping-args.txt`) to reach it from the network.
 - Terminal (curses) mode: run `eping.py` directly in Terminal.
 - Details: <https://www.jeitler.cc>
+- Working folder: `<home>/eping` - hosts file, logs, reports, `eping-console.log`, `eping-args.txt` and `eping-launcher.cfg` live there, so the program folder needs no write access. Change it with the *Working dir* field (paste a path, Enter confirms) or the *Change...* button (folder dialog); applied with Start / Restart, or with `-wd DIR` in the CLI options field (wins over the button) (hosts file, logs, reports and console log then use DIR). An `eping-args.txt` / `eping-launcher.cfg` found next to the program (older versions) is read until the first save; copy an existing `eping-hosts.txt` to the working folder once.

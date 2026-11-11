@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.12'
+VERSION = '4.29'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -46,8 +46,9 @@ WAITTIME_MAX       = 600      # -w upper bound (seconds)
 DOWN_SLICES_MAX    = 20
 FULL_SWEEP_MAX     = 50       # 0 = disabled (never sweep)
 DNS_TTL_MAX        = 3600
-DOWNLOAD_FILE_EXTS = ('.csv', '.txt', '.html')  # CHOOSE FILE picker - listed types
-VIEW_FILE_EXTS     = ('.csv', '.txt')           # VIEW FILE FROM SERVER - listed types
+DOWNLOAD_FILE_EXTS = ('.csv', '.zip', '.txt', '.html')  # CHOOSE FILE picker - listed types
+VIEW_FILE_EXTS     = ('.csv', '.zip', '.txt')               # VIEW FILE FROM SERVER - listed types
+LOG_EXTS           = ('.csv', '.zip')           # logfiles: a zip (rotation, download) is handled like a plain csv
 VIEW_FILE_MAX_BYTES = 200 * 1024 * 1024  # rendered inline in one response - must fit in memory
 RUNTIME_UNAVAILABLE = 'n/a'  # shown instead of a stale/misleading RUNTIME value - see
                              # run_background_pings(): background rounds during a dialog
@@ -131,7 +132,7 @@ VIEW_PICKER_ORDER = [0, 1, 3, 2, 4, 5, 6, 7, 8]
 # toggles into one mutually-exclusive dropdown (see the 'addr_mode' web command).
 # 0/1/2 are non-destructive display filters (recomputed from original_hosts_list
 # each time); 3 renames hosts to their address in place (apply_ip_only_on/off).
-ADDR_MODE_LABELS = ['hostname & ip', 'prefer hostname', 'prefer ip address', 'ip only']
+ADDR_MODE_LABELS = ['keep all', 'dedup: keep hostname', 'dedup: keep ip', 'resolve all to ip']
 
 # [O] cycles through these orders. A flapping host is also UP or DOWN right now, so the
 # FLAP group takes precedence over its current state; NO-DNS counts as DOWN. Inside the
@@ -465,6 +466,27 @@ def split_hostfile_list(value):
     """Split a -f value into individual file paths - comma and/or whitespace
     separated (e.g. 'a.txt,b.txt', 'a.txt b.txt' or a mix), empty parts dropped."""
     return [p for p in re.split(r'[,\s]+', (value or '').strip()) if p]
+
+def apply_workdir(ns):
+    """-wd/--workdir: create DIR if needed and chdir into it - hosts file, logs and
+    reports live there. Relative -f / -sshkey paths are meant relative to the
+    invocation directory, so they are made absolute first. Returns the argv entries
+    that carry these absolute paths (appended by the caller; the last flag wins)."""
+    extra = []
+    if ns.hostfile != 'eping-hosts.txt' and not ns.disable_hostfile:
+        files = [os.path.abspath(os.path.expanduser(h)) for h in split_hostfile_list(ns.hostfile)]
+        if files:
+            extra += ['-f', ','.join(files)]
+    if ns.ssh_key:
+        extra += ['-sshkey', os.path.abspath(os.path.expanduser(ns.ssh_key))]
+    wd = os.path.abspath(os.path.expanduser(ns.workdir))
+    try:
+        os.makedirs(wd, exist_ok=True)
+        os.chdir(wd)
+    except OSError as e:
+        error_handler("ERROR: -wd " + ns.workdir + ": " + str(e))
+    return extra
+
 
 SAMPLE_CSV_INFO = ('INFO: File eping-hosts-sample.csv created - a template for an inventory .csv\n'
                    '      (same hosts, invented Model/Location/sysLocation/Type/Comment values).\n'
@@ -831,6 +853,19 @@ def ssh_name_family(name):
             return ip_version_str(ips[0]) or '4'
         return '4'
     return '6' if name in _ssh_fam6 else '4'
+
+def fill_jump_ips(rows):
+    """Jump host with a working resolver: fping there is given the hostnames and reports
+    the name again, so slot 4 (the IP column of the log) would hold the name. Put the
+    address the jump host resolves it to there instead - cached lookups, same pick as
+    ssh_name_family(). Names without an answer and NO-DNS rows stay as they are."""
+    if not (ssh_target and jr_active()):
+        return
+    for r in rows:
+        if r[4] == r[0] and not is_ip_host(r[0]) and 'NO-DNS' not in r[1]:
+            ips = resolve_all_ips(r[0])
+            if ips:
+                r[4] = ips[0]
 
 def jr_prefetch(hosts):
     """Resolve all hostnames of 'hosts' on the jump host in one go (fills the cache, so
@@ -2856,6 +2891,8 @@ def validate_custom_logfile_name(name):
         return None
     return name
 
+LOG_ZIP_ROTATED = True    # rotated (finished) logfiles are zipped to <name>.zip, -lnz disables
+
 def prune_old_logfiles(max_files):
     """Delete the oldest eping-log_*.csv files (by mtime) beyond max_files.
 
@@ -2865,7 +2902,7 @@ def prune_old_logfiles(max_files):
     if max_files <= 0:
         return
     try:
-        files = [f for f in os.listdir('.') if f.startswith('eping-log_') and f.endswith('.csv')]
+        files = [f for f in os.listdir('.') if f.startswith('eping-log_') and f.endswith(LOG_EXTS)]
         files.sort(key=lambda f: os.path.getmtime(f))
         for old in files[:-max_files] if len(files) > max_files else []:
             try:
@@ -2893,6 +2930,8 @@ def rotate_log_if_needed(logfile_file_name, max_size_mb, max_files, tz_offset=0)
     new_name = rotated_logfile_name(logfile_file_name, tz_offset)
     if not reset_logfile(new_name):
         return logfile_file_name
+    if LOG_ZIP_ROTATED:      # compress the finished file in the background (can be GBs)
+        threading.Thread(target=zip_logfile, args=(logfile_file_name,), daemon=True).start()
     prune_old_logfiles(max_files)
     return new_name
 
@@ -3053,6 +3092,7 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
             new_row[0] = display_name
             rows.append(new_row)
 
+    fill_jump_ips(rows)
     if ssh_target and not jr_active() and dns_family == 'auto':
         for r in rows:                       # alternate -4 / -6 for names fping cannot resolve
             if not is_ip_host(r[0]) and 'NO-DNS' in r[1]:
@@ -3130,7 +3170,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iIzRhM2IzNCI+CiAgPGVsbGlwc2UgY3g9IjEyIiBjeT0iMTYuNSIgcng9IjUuNCIgcnk9IjQuMyIvPgogIDxlbGxpcHNlIGN4PSI1LjIiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjE4LjgiIGN5PSIxMC41IiByeD0iMi41IiByeT0iMy4xIi8+CiAgPGVsbGlwc2UgY3g9IjguOSIgY3k9IjUuNiIgcng9IjIuNCIgcnk9IjMuMSIvPgogIDxlbGxpcHNlIGN4PSIxNS4xIiBjeT0iNS42IiByeD0iMi40IiByeT0iMy4xIi8+Cjwvc3ZnPg==">
 <style>
   :root{
-    --bg:#0b0f0b; --fg:#c8d6c8; --dim:#5d6b5d; --line:#1e2a1e;
+    --bg:#0b0f0b; --fg:#dbe7db; --dim:#97a897; --line:#1e2a1e;
     --up:#3ddc60; --down:#ff4b4b; --acc:#7fd1ff; --panel:#101610;
     --fs:14px; --hostw:26ch;
     /* brighter than --line (structural dividers) so buttons/selects/inputs stand
@@ -3163,7 +3203,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .fsbox button{padding:4px 9px}
   input[type=text],input[type=password]{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
                    padding:4px 8px;font:inherit;border-radius:3px;min-width:200px}
-  select{background:var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235d6b5d' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center;
+  select{background:var(--panel) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2397a897' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 9px center;
          background-size:9px 5px;
          color:var(--fg);border:1px solid var(--ctrl-line);
          padding:4px 22px 4px 8px;font:inherit;border-radius:3px;
@@ -3209,7 +3249,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
                  display:flex;align-items:center;justify-content:center;z-index:50}
   #hostTip{position:fixed;z-index:60;display:none;pointer-events:none;max-width:420px;
     background:var(--panel);border:1px solid var(--ctrl-line);border-radius:5px;padding:7px 10px;
-    box-shadow:0 4px 14px rgba(0,0,0,.55);font-size:12px;line-height:1.45;max-height:calc(100vh - 12px);overflow:auto}
+    box-shadow:0 4px 14px rgba(0,0,0,.55);font-size:13px;line-height:1.45;max-height:calc(100vh - 12px);overflow:auto}
   #hostTip .h{font-weight:700;font-size:13px;margin-bottom:3px;word-break:break-all}
   #hostTip table{border-collapse:collapse}
   #hostTip td{padding:0 0 0 0;vertical-align:top}
@@ -3223,18 +3263,22 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   #hostTip.pin .hist .list{max-height:200px;overflow:auto;padding-right:6px}
   #hostTip .cm{color:var(--acc);word-break:break-word}
   #hostTip .cm .t{color:var(--dim)}
-  #hostTip .more{color:var(--dim);font-size:11px}
+  #hostTip .more{color:var(--dim);font-size:12px}
   #hostTip .top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
   #hostTip .bar{flex:0 0 auto;margin:-2px -4px 0 0;user-select:none;-webkit-user-select:none;white-space:nowrap}
   #hostTip .bar span{display:inline-block;margin-left:4px;padding:0 6px;border:1px solid var(--ctrl-line);
-    border-radius:3px;color:var(--fg);cursor:pointer;font-size:11px;line-height:16px}
+    border-radius:3px;color:var(--fg);cursor:pointer;font-size:12px;line-height:16px}
   #hostTip .bar span:hover{border-color:var(--acc);color:var(--acc)}
   #hostTip .bar span.dng{color:var(--down);border-color:var(--down)}
   #hostTip .bar span.dng:hover{background:var(--down);color:var(--bg)}
   .modal-box{background:var(--panel);border:1px solid var(--line);border-radius:5px;
              padding:16px 20px;min-width:280px;max-width:90vw;box-shadow:0 8px 30px rgba(0,0,0,.5)}
   .modal-box h3{margin:0 0 8px;font-size:14px;letter-spacing:.5px;color:var(--fg)}
-  .modal-box p{margin:0 0 14px;color:var(--dim);font-size:12px;line-height:1.5}
+  .modal-box p{margin:0 0 14px;color:#bccbbc;font-size:13px;line-height:1.55}
+  .modal-box input[type=file]{font-size:13px}
+  .modal-box input[type=file]::file-selector-button{background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);
+    border-radius:4px;padding:4px 10px;margin-right:10px;font:inherit;cursor:pointer}
+  .modal-box input[type=file]::file-selector-button:hover{border-color:var(--fg)}
   .modal-buttons{display:flex;gap:8px;flex-wrap:wrap}
   .modal-buttons button{flex:1 1 auto;white-space:nowrap}
   .modal-box.wide{width:640px;max-width:92vw;max-height:82vh;overflow-y:scroll;
@@ -3248,22 +3292,25 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .modal-box.wide::-webkit-scrollbar-track{background:var(--panel)}
   .modal-box.wide::-webkit-scrollbar-thumb{background:var(--ctrl-line);border-radius:6px}
   .modal-box.xwide{width:900px}
-  .optchk{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:12px;color:var(--fg);cursor:pointer}
-  #advFilterRows{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:0 0 14px}
+  .optchk{display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:13px;color:var(--fg);cursor:pointer}
+  /* each field block is as wide as its longest value needs (270px up to 2/3 of the screen, see
+     populateAdvFilter()); beyond that the list scrolls horizontally per block */
+  #advFilterModal .modal-box{width:auto;min-width:min(900px,92vw);max-width:96vw}
+  #advFilterRows{display:flex;flex-wrap:wrap;gap:12px;margin:0 0 14px}
   .advf-blk{display:flex;flex-direction:column;gap:6px;min-width:0}
-  .advf-head{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;font-weight:700}
-  .advf-cnt{color:var(--dim);font-weight:400;font-size:11px}
+  .advf-head{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;font-weight:700}
+  .advf-cnt{color:var(--dim);font-weight:400;font-size:12px}
   .advf-q{width:100%;box-sizing:border-box}
   .advf-bar{display:flex;gap:6px}
-  .advf-bar button{flex:1 1 auto;padding:3px 6px;font-size:11px;white-space:nowrap}
-  .advf-list{height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:3px;padding:3px 0}
-  .advf-item{display:flex;align-items:center;gap:6px;padding:1px 6px;font-size:12px;cursor:pointer;white-space:nowrap}
+  .advf-bar button{flex:1 1 auto;padding:3px 6px;font-size:12px;white-space:nowrap}
+  .advf-list{height:190px;overflow-y:auto;overflow-x:auto;border:1px solid var(--line);border-radius:3px;padding:3px 0}
+  .advf-item{display:flex;align-items:center;gap:6px;padding:1px 6px;font-size:13px;cursor:pointer;white-space:nowrap;width:max-content;min-width:100%;box-sizing:border-box}
   .advf-item:hover{background:var(--line)}
   .advf-item.zero{color:var(--dim)}
   .advf-item span{overflow:hidden;text-overflow:ellipsis}
-  .advf-more{padding:3px 6px;font-size:11px;color:var(--dim)}
+  .advf-more{padding:3px 6px;font-size:12px;color:var(--dim)}
   .adv-row{display:flex;flex-direction:column;gap:3px;margin:0 0 12px}
-  .adv-row label{font-size:11px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
+  .adv-row label{font-size:12px;color:var(--fg);font-weight:700;letter-spacing:.3px;cursor:help}
   .adv-row label .adv-desc{color:var(--dim);font-weight:400;letter-spacing:normal}
   .adv-row .adv-input-line{display:flex;align-items:center;gap:6px}
   .adv-row input[type=range]{flex:1 1 auto;width:100%;min-width:0}
@@ -3274,7 +3321,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
      value in play, '72000'/'25000', with a space either side. Extra left
      margin separates it from the + button instead of crowding it. */
   .adv-row input.advText{flex:0 0 auto;width:7ch;min-width:0;margin-left:6px;
-                         font-size:12px;padding:2px 4px;text-align:center}
+                         font-size:13px;padding:2px 4px;text-align:center}
   /* flashed briefly when the server rejects a value - see advCheckApplied() */
   .adv-row.adv-rejected input.advText{border-color:var(--down);color:var(--down);
                                       transition:border-color .1s,color .1s}
@@ -3307,7 +3354,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   .msg{color:var(--acc)}
   .msg.pending{color:var(--up)}
   .off{opacity:.45}
-  footer{border-top:1px solid var(--line);padding:4px 12px;color:var(--dim);font-size:12px;
+  footer{border-top:1px solid var(--line);padding:4px 12px;color:var(--dim);font-size:13px;
          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .layout{display:flex;flex-direction:column;height:100%}
   .body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
@@ -3318,46 +3365,41 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 <div class="layout">
   <div id="banner" class="banner" style="display:none"></div>
   <div id="resetLogModal" class="modal-overlay" style="display:none">
-    <div class="modal-box">
-      <h3>RESET LOGGING</h3>
+    <div class="modal-box" style="width:460px;max-width:92vw">
+      <h3 id="resetLogTitle">LOGGING</h3>
       <p id="resetLogText">Delete ALL entries in the current CSV log, or start a new file?<br>
          Keys also work: <b>Y</b>=clear, <b>N</b>=new file, <b>ESC</b>/<b>ENTER</b>=cancel.</p>
       <input type="text" id="resetLogNameInput" maxlength="255"
              placeholder="optional file name for the new file (blank = auto-generated)"
              style="width:100%;box-sizing:border-box;margin-bottom:12px">
-      <div class="modal-buttons">
+      <div class="modal-buttons" style="display:grid;grid-template-columns:1fr 1fr">
         <button id="modalBtnClearLog" class="danger">CLEAR LOGGING (Y)</button>
         <button id="modalBtnNewLog">NEW FILE (N)</button>
+        <button id="modalBtnStopLog" class="danger">STOP LOGGING (S)</button>
         <button id="modalBtnCancelLog">CANCEL (ESC)</button>
       </div>
     </div>
   </div>
   <div id="saveHostsModal" class="modal-overlay" style="display:none">
-    <div class="modal-box" style="width:420px">
-      <h3>SAVE HOSTS FILE ON SERVER</h3>
-      <p id="saveHostsText">Save the currently shown hosts to the server?</p>
-      <input type="text" id="saveHostsNameInput" maxlength="255"
-             placeholder="file name (blank = eping-hosts.txt), .txt added automatically"
-             style="width:100%;box-sizing:border-box;margin-bottom:12px" autocomplete="off">
-      <div id="saveHostsOptsRow" style="display:none">
-        <label class="optchk"><input type="checkbox" id="saveHostsOpts" checked> include options (opt: lines)</label>
-        <label class="optchk"><input type="checkbox" id="saveHostsTxt"> save as .txt (hosts only, no inventory)</label>
+    <div class="modal-box" style="width:460px">
+      <h3>SAVE HOSTS</h3>
+      <p class="compact">WHICH HOSTS</p>
+      <label class="optchk"><input type="radio" name="shScope" id="shAll" checked> ALL HOSTS (full reference list)</label>
+      <label class="optchk"><input type="radio" name="shScope" id="shShown"> SHOWN HOSTS (current view and filters)</label>
+      <p class="compact">WHERE</p>
+      <label class="optchk"><input type="radio" name="shDest" id="shServer"> ON SERVER (working directory of eping.py)</label>
+      <label class="optchk"><input type="radio" name="shDest" id="shLocal" checked> DOWNLOAD TO THIS COMPUTER</label>
+      <div id="shFmtBox">
+      <p class="compact">FORMAT</p>
+      <label class="optchk"><input type="radio" name="shFmt" id="shCsv" checked> CSV (inventory columns)</label>
+      <label class="optchk"><input type="radio" name="shFmt" id="shTxt"> TXT (one host per line)</label>
       </div>
+      <label class="optchk" style="margin-top:8px"><input type="checkbox" id="shOpts" checked> include options (opt: lines)</label>
+      <p id="saveHostsText" style="margin-top:8px"></p>
+      <input type="text" id="saveHostsNameInput" maxlength="255" style="width:100%;box-sizing:border-box;margin-bottom:12px" autocomplete="off">
       <div class="modal-buttons">
         <button id="modalBtnSaveHostsConfirm" class="danger">SAVE (Y)</button>
         <button id="modalBtnSaveHostsCancel">CANCEL (ESC)</button>
-      </div>
-    </div>
-  </div>
-  <div id="dlHostsModal" class="modal-overlay" style="display:none">
-    <div class="modal-box" style="width:420px">
-      <h3 id="dlHostsTitle">DOWNLOAD HOSTS</h3>
-      <p>The hosts carry inventory values (.csv).</p>
-      <label class="optchk"><input type="checkbox" id="dlHostsOpts" checked> include options (opt: lines)</label>
-      <label class="optchk"><input type="checkbox" id="dlHostsTxt"> save as .txt (hosts only, no inventory)</label>
-      <div class="modal-buttons">
-        <button id="modalBtnDlHostsOk">DOWNLOAD (Y)</button>
-        <button id="modalBtnDlHostsCancel">CANCEL (ESC)</button>
       </div>
     </div>
   </div>
@@ -3373,19 +3415,20 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   </div>
   <div id="chooseLogModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide xwide">
-      <h3>CHOOSE FILE</h3>
-      <p>Pick one or more files in this eping.py's working directory to download<br>
-        - selecting more than one bundles them into a single ZIP.</p>
+      <h3>SERVER OPERATIONS</h3>
+      <p>Files in this eping.py's working directory. Select one or more, then DOWNLOAD
+        (more than one = single ZIP), VIEW (read-only, own tab per .txt/.csv) or DELETE
+        (cannot be undone, active logfile excluded) - or UPLOAD a new file.</p>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
         <button type="button" class="chooseLogExtBtn on" data-ext="csv">.CSV</button>
         <button type="button" class="chooseLogExtBtn on" data-ext="txt">.TXT</button>
         <button type="button" class="chooseLogExtBtn on" data-ext="html">.HTML</button>
       </div>
       <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
-        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:13px;cursor:pointer">
           <input type="checkbox" id="chooseLogSelectAll"> select all
         </label>
-        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer"
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:13px;cursor:pointer"
                title="skip ZIP compression - faster for large files, no CPU cost on the server">
           <input type="checkbox" id="chooseLogNoZip"> no compression
         </label>
@@ -3395,7 +3438,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
            padding:6px 10px;box-sizing:border-box">
         <table style="width:100%;border-collapse:collapse">
           <thead>
-            <tr id="chooseLogHead" style="font-size:11px;color:var(--dim)">
+            <tr id="chooseLogHead" style="font-size:12px;color:var(--dim)">
               <th style="width:20px"></th>
               <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
               <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
@@ -3406,77 +3449,14 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         </table>
       </div>
       <div class="modal-buttons">
-        <button id="modalBtnChooseLogDownload">DOWNLOAD</button>
-        <button id="modalBtnChooseLogCancel">CANCEL</button>
-      </div>
-    </div>
-  </div>
-  <div id="viewFileModal" class="modal-overlay" style="display:none">
-    <div class="modal-box wide xwide">
-      <h3>VIEW FILE</h3>
-      <p>Pick one or more *.txt/*.csv files - each opens read-only in its own new tab
-         (raw content, with COPY and DOWNLOAD buttons).<br>
-         Files over <span id="viewFileMaxLabel"></span> can't be viewed inline - use DOWNLOAD instead.</p>
-      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
-        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
-          <input type="checkbox" id="viewFileSelectAll"> select all
-        </label>
-      </div>
-      <div style="width:100%;max-height:220px;overflow-y:auto;
-           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
-           padding:6px 10px;box-sizing:border-box">
-        <table style="width:100%;border-collapse:collapse">
-          <thead>
-            <tr id="viewFileHead" style="font-size:11px;color:var(--dim)">
-              <th style="width:20px"></th>
-              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
-              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
-              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
-            </tr>
-          </thead>
-          <tbody id="viewFileList"></tbody>
-        </table>
-      </div>
-      <div class="modal-buttons">
-        <button id="modalBtnViewFileOpen">VIEW</button>
-        <button id="modalBtnViewFileCancel">CANCEL</button>
-      </div>
-    </div>
-  </div>
-  <div id="deleteFilesModal" class="modal-overlay" style="display:none">
-    <div class="modal-box wide xwide">
-      <h3>DELETE FILES</h3>
-      <p>Pick one or more files in this eping.py's working directory to delete<br>
-        - this cannot be undone.</p>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
-        <button type="button" class="deleteFilesExtBtn on" data-ext="csv">.CSV</button>
-        <button type="button" class="deleteFilesExtBtn on" data-ext="txt">.TXT</button>
-        <button type="button" class="deleteFilesExtBtn on" data-ext="html">.HTML</button>
-      </div>
-      <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
-        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
-          <input type="checkbox" id="deleteFilesSelectAll"> select all
-        </label>
-      </div>
-      <div style="width:100%;max-height:220px;overflow-y:auto;
-           margin-bottom:14px;border:1px solid var(--ctrl-line);border-radius:4px;
-           padding:6px 10px;box-sizing:border-box">
-        <table style="width:100%;border-collapse:collapse">
-          <thead>
-            <tr id="deleteFilesHead" style="font-size:11px;color:var(--dim)">
-              <th style="width:20px"></th>
-              <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
-              <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
-              <th data-sort="mtime" style="text-align:center;cursor:pointer;user-select:none;padding:2px 0 4px 0">DATE<span class="sortArrow"></span></th>
-            </tr>
-          </thead>
-          <tbody id="deleteFilesList"></tbody>
-        </table>
-      </div>
-      <div class="modal-buttons">
+        <button id="modalBtnChooseLogDownload" disabled>DOWNLOAD</button>
+        <button id="modalBtnChooseLogView" disabled
+                title="open the selected .txt/.csv file(s) read-only in new tabs">VIEW</button>
         <button id="deleteFilesBtn" class="danger" disabled
                 title="delete the selected file(s) from the server - cannot be undone">DELETE</button>
-        <button id="modalBtnDeleteFilesCancel">CANCEL</button>
+        <button id="modalBtnChooseLogUpload"
+                title="upload a .txt/.csv/.zip file from this computer to the server's working directory">UPLOAD</button>
+        <button id="modalBtnChooseLogCancel">CANCEL</button>
       </div>
     </div>
   </div>
@@ -3485,7 +3465,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <h3>ADD FROM SERVER</h3>
       <p>Pick one or more `.txt` files or inventory `.csv` files in this eping.py's working directory to add their hosts.</p>
       <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
-        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:13px;cursor:pointer">
           <input type="checkbox" id="addFromServerSelectAll"> select all
         </label>
       </div>
@@ -3494,7 +3474,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
            padding:6px 10px;box-sizing:border-box">
         <table style="width:100%;border-collapse:collapse">
           <thead>
-            <tr id="addFromServerHead" style="font-size:11px;color:var(--dim)">
+            <tr id="addFromServerHead" style="font-size:12px;color:var(--dim)">
               <th style="width:20px"></th>
               <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
               <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
@@ -3514,8 +3494,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <div class="modal-box wide">
       <h3>JUMPHOST</h3>
       <p>Run fping on a jump host via ssh instead of on this computer (the jump host resolves the names and needs fping with ICMP permission). Hosts and states are kept.</p>
-      <div id="jumpPrereq" style="font-size:12px;margin-bottom:10px"></div>
-      <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <div id="jumpPrereq" style="font-size:13px;margin-bottom:10px"></div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">HOST</td><td><input type="text" id="jumpHost" style="width:100%;box-sizing:border-box" placeholder="jump.example.com or IP" autocomplete="off" spellcheck="false"></td>
             <td style="padding:3px 8px 3px 12px;white-space:nowrap">PORT</td><td><input type="text" id="jumpPort" style="width:64px;min-width:0" placeholder="22" autocomplete="off"></td></tr>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">USER</td><td colspan="3"><input type="text" id="jumpUser" style="width:100%;box-sizing:border-box" placeholder="login name" autocomplete="off" spellcheck="false"></td></tr>
@@ -3524,12 +3504,12 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
           <option value="accept-new">accept new hosts automatically (a changed key is still refused)</option>
           <option value="ask">ask - confirm an unknown host key (TRUST KEY)</option>
           <option value="off">off - no host key check at all (insecure)</option></select></td></tr>
-        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">NAMES</td><td colspan="3"><label style="font-size:12px;cursor:pointer"><input type="checkbox" id="jumpResolve" checked> resolve names on the jump host (getent / dig / nslookup / host; for GET NAMES, PREFER HOSTNAME / IP ADDRESS, IP ONLY)</label></td></tr>
+        <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">NAMES</td><td colspan="3"><label style="font-size:13px;cursor:pointer"><input type="checkbox" id="jumpResolve" checked> resolve names on the jump host (getent / dig / nslookup / host; for GET NAMES, PREFER HOSTNAME / IP ADDRESS, IP ONLY)</label></td></tr>
         <tr><td style="padding:3px 8px 3px 0;white-space:nowrap">KEY FILE</td><td colspan="3"><input type="text" id="jumpKey" style="width:100%;box-sizing:border-box" placeholder="optional, path on the computer running eping.py" autocomplete="off" spellcheck="false"></td></tr>
       </table>
-      <div id="jumpWarn" style="display:none;font-size:11px;color:var(--flap,#d9a400);margin-top:6px">This page is not served from this computer (HTTP, no encryption): the password would cross the network in clear text. Prefer a key.</div>
-      <div id="jumpFp" style="display:none;margin-top:8px;font-size:12px"></div>
-      <div id="jumpStatus" style="min-height:34px;margin:10px 0;font-size:12px;color:var(--dim);word-break:break-word">&nbsp;</div>
+      <div id="jumpWarn" style="display:none;font-size:12px;color:var(--flap,#d9a400);margin-top:6px">This page is not served from this computer (HTTP, no encryption): the password would cross the network in clear text. Prefer a key.</div>
+      <div id="jumpFp" style="display:none;margin-top:8px;font-size:13px"></div>
+      <div id="jumpStatus" style="min-height:34px;margin:10px 0;font-size:13px;color:var(--dim);word-break:break-word">&nbsp;</div>
       <div class="modal-buttons">
         <button id="jumpTestBtn">TEST</button>
         <button id="jumpConnectBtn">CONNECT</button>
@@ -3543,8 +3523,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <div class="modal-box wide">
       <h3>ADD / DELETE HOST LIST</h3>
       <p>Paste hosts: IPv4/IPv6, hostname, IPv4 CIDR - separated by new line, comma, semicolon or blank; `#` starts a comment.</p>
-      <textarea id="hostListText" rows="10" spellcheck="false" style="width:100%;box-sizing:border-box;margin-bottom:8px;background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 8px;font-family:inherit;font-size:12px;resize:vertical"></textarea>
-      <div id="hostListInfo" style="min-height:34px;margin-bottom:12px;font-size:12px;color:var(--dim)">&nbsp;</div>
+      <textarea id="hostListText" rows="10" spellcheck="false" style="width:100%;box-sizing:border-box;margin-bottom:8px;background:var(--panel);color:var(--fg);border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 8px;font-family:inherit;font-size:13px;resize:vertical"></textarea>
+      <div id="hostListInfo" style="min-height:34px;margin-bottom:12px;font-size:13px;color:var(--dim)">&nbsp;</div>
       <div class="modal-buttons">
         <button id="hostListAddBtn" disabled>ADD</button>
         <button id="hostListDelBtn" class="danger" disabled>DELETE</button>
@@ -3565,7 +3545,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   <div id="reportSrcModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>SELECT JUMPHOST</h3>
-      <p>Active logfile. Select the jump hosts (or local) to analyse - only their
+      <p id="reportSrcText">Active logfile. Select the jump hosts (or local) to analyse - only their
          periods are calculated. ENTER = GENERATE (default: all sources).</p>
       <div id="reportSrcList" style="max-height:220px;overflow-y:auto;margin-bottom:14px;
            border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 10px;box-sizing:border-box"></div>
@@ -3575,13 +3555,23 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  <div id="reportReadyModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <h3>REPORT READY</h3>
+      <p>The report is ready - the browser did not open a new tab by itself.</p>
+      <div class="modal-buttons">
+        <button id="modalBtnReportReadyOpen">OPEN REPORT</button>
+        <button id="modalBtnReportReadyClose">CLOSE</button>
+      </div>
+    </div>
+  </div>
   <div id="uploadReportModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
       <h3>UPLOAD FROM CLIENT</h3>
-      <p>Choose one or more *.csv log files from this computer - they are uploaded, merged by timestamp
+      <p>Choose one or more *.csv or *.zip log files from this computer - they are uploaded, merged by timestamp
          and analysed with epinga.py as one report (max <span id="uploadReportMax"></span> files).</p>
-      <input type="file" id="uploadReportInput" accept=".csv,text/csv" multiple style="margin-bottom:10px;color:var(--fg)">
-      <div id="uploadReportList" style="max-height:180px;overflow-y:auto;margin-bottom:14px;font-size:12px;
+      <input type="file" id="uploadReportInput" accept=".csv,.zip,text/csv" multiple style="margin-bottom:10px;color:var(--fg)">
+      <div id="uploadReportList" style="max-height:180px;overflow-y:auto;margin-bottom:14px;font-size:13px;
            border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 10px;box-sizing:border-box;color:var(--dim)">no files selected</div>
       <div class="modal-buttons">
         <button id="modalBtnUploadReportGo" disabled>GENERATE</button>
@@ -3595,7 +3585,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <p>Pick one or more *.csv log files to analyse with epinga.py as one combined report -
          max <span id="chooseReportMax"></span> files per report.</p>
       <div style="display:flex;align-items:center;gap:18px;margin-bottom:8px">
-        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:12px;cursor:pointer">
+        <label style="display:flex;align-items:center;gap:6px;color:var(--fg);font-size:13px;cursor:pointer">
           <input type="checkbox" id="chooseReportSelectAll"> select all
         </label>
       </div>
@@ -3604,7 +3594,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
            padding:6px 10px;box-sizing:border-box">
         <table style="width:100%;border-collapse:collapse">
           <thead>
-            <tr id="chooseReportHead" style="font-size:11px;color:var(--dim)">
+            <tr id="chooseReportHead" style="font-size:12px;color:var(--dim)">
               <th style="width:20px"></th>
               <th data-sort="name" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">NAME<span class="sortArrow"></span></th>
               <th data-sort="size" style="text-align:center;cursor:pointer;user-select:none;padding:2px 10px 4px 0">SIZE<span class="sortArrow"></span></th>
@@ -3694,30 +3684,24 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <button id="btnSetRef" title="use the hosts currently shown as the new reference list - all other hosts are removed and no longer pinged">SET REFERENCE</button>
       <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
       <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
-      <select id="selAddrMode" title="Deduplication when the same host is entered as both a hostname and its IP: hostname &amp; ip keeps both as given (no dedup) | prefer hostname: skip a raw IP already covered by a hostname | prefer ip address: skip a hostname already covered by a raw IP | ip only: resolve every hostname to its IP and ping/track it by address">
-        <option value="0">HOSTNAME & IP</option>
-        <option value="1">PREFER HOSTNAME</option>
-        <option value="2">PREFER IP ADDRESS</option>
-        <option value="3">SWITCH TO IP ONLY</option>
+      <select id="selAddrMode" title="What happens when the same target is in the list as hostname AND as IP | KEEP ALL (NO DEDUP): both are pinged and shown as entered | DEDUP: KEEP HOSTNAME: an IP entry is dropped when a hostname resolves to the same address | DEDUP: KEEP IP: a hostname entry is dropped when its address is already listed as IP | RESOLVE ALL TO IP: every hostname is renamed to its IP (history kept); duplicates and unresolvable names are hidden. Non-destructive - switching mode restores everything.">
+        <option value="0">KEEP ALL (NO DEDUP)</option>
+        <option value="1">DEDUP: KEEP HOSTNAME</option>
+        <option value="2">DEDUP: KEEP IP</option>
+        <option value="3">RESOLVE ALL TO IP</option>
       </select>
       <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
       <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
       <button id="btnJump" title="ping from a jump host via ssh instead of from this computer">JUMPHOST</button>
-      <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel">RESET LOG</button>
+      <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel">LOGGING</button>
       <select id="selDownload" title="add hosts from a file on the server or from your computer, download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
         <option value="add_from_server">ADD HOSTS FILE FROM SERVER</option>
         <option value="add_from_client">ADD HOSTS FILE FROM CLIENT</option>
-        <option value="save_hosts_file">SAVE HOSTS FILE ON SERVER</option>
-        <option value="hosts_all">DOWNLOAD ALL HOSTS</option>
-        <option value="hosts_shown">DOWNLOAD ACTIVE HOSTS</option>
-        <option value="logfile">DOWNLOAD ACTIVE LOGFILE</option>
-        <option value="choose_logfile">DOWNLOAD SELECTED FILES</option>
-        <option value="upload_file">UPLOAD FILE TO SERVER</option>
-        <option value="delete_files">DELETE FILES FROM SERVER</option>
-        <option value="view_file">VIEW FILE FROM SERVER</option>
+        <option value="save_hosts_file">SAVE HOSTS</option>
+        <option value="choose_logfile">SERVER OPERATIONS</option>
       </select>
-      <input type="file" id="uploadServerFileInput" accept=".txt,.csv,text/csv,text/plain" style="display:none">
+      <input type="file" id="uploadServerFileInput" accept=".txt,.csv,.zip,text/csv,text/plain" style="display:none">
       <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
      </span>
      <span class="fsbox">
@@ -3751,7 +3735,6 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="" selected disabled hidden>GENERATE REPORT</option>
        <option value="active">ACTIVE LOGFILE</option>
        <option value="choose">CHOOSE LOGFILE</option>
-       <option value="sources">SELECT JUMPHOST</option>
        <option value="upload">UPLOAD FROM CLIENT</option>
       </select>
     </span>
@@ -3823,7 +3806,7 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
    slider (cheapest to give up, rarely touched) shrinks first; buttons/selects
    only shrink too if that alone isn't enough. */
 var COMPACT_LABELS = [
-  {sel:'#selAddrMode option[value="0"]', full:'HOSTNAME & IP', short:'IP/NAME MODE'},
+  {sel:'#selAddrMode option[value="0"]', full:'KEEP ALL (NO DEDUP)', short:'KEEP ALL'},
   {sel:'#selGenReport option[value=""]', full:'GENERATE REPORT',  short:'REPORT'}
 ];
 // stage 3 only - the least-used labels, shortened further once stage 2 alone
@@ -3833,7 +3816,7 @@ var MICRO_LABELS = [
   {sel:'#btnZero',        full:'ZERO CHANGES',   short:'ZERO'},
   {sel:'#btnClear',       full:'CLEAR ALL',      short:'CLEAR'},
   {sel:'#btnAdvOptions',  full:'ADV OPTIONS',    short:'ADV'},
-  {sel:'#btnResetLog',    full:'RESET LOG',      short:'REST'}
+  {sel:'#btnResetLog',    full:'LOGGING',        short:'LOG'}
 ];
 function applyLabelSet(labels, compact){
   labels.forEach(function(l){
@@ -4011,6 +3994,12 @@ function wireFileSortHead(headEl, state, renderFn){
 }
 
 var chooseLogFiles = [];                          // raw list from the last /api/logfiles fetch
+// extension of a listed file; a zip (rotated / downloaded logfile) counts as csv
+function fileExt(name){
+  var e = name.toLowerCase().split('.').pop();
+  return e === 'zip' ? 'csv' : e;
+}
+function isLogName(name){ return /\.(csv|zip)$/i.test(name); }
 var chooseLogExts   = {csv: true, txt: true, html: true};   // filter toggle state
 var chooseLogSort    = {key: 'mtime', dir: 'desc'};          // matches /api/logfiles' own order
 function formatFileDate(ts){
@@ -4020,17 +4009,29 @@ function formatFileDate(ts){
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
        + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
+// must match VIEW_FILE_MAX_BYTES in eping.py - do_GET rejects larger files with 413
+var VIEW_FILE_MAX_BYTES = 200 * 1024 * 1024;
+function chooseLogSelected(){
+  var names = Array.prototype.map.call(document.querySelectorAll('.chooseLogCb:checked'), function(cb){ return cb.value; });
+  return chooseLogFiles.filter(function(f){ return names.indexOf(f.name) !== -1; });
+}
 function updateChooseLogControls(){
-  var count  = document.querySelectorAll('.chooseLogCb:checked').length;
+  var sel    = chooseLogSelected();
+  var count  = sel.length;
   var noZip  = document.getElementById('chooseLogNoZip');
   noZip.disabled = count > 1;
   if(noZip.disabled) noZip.checked = false;
+  document.getElementById('modalBtnChooseLogDownload').disabled = count === 0;
+  // VIEW: only .txt/.csv up to the inline size limit; DELETE: never the active logfile
+  document.getElementById('modalBtnChooseLogView').disabled = count === 0 || sel.some(function(f){
+    var e = fileExt(f.name); return !(e === 'csv' || e === 'txt') || f.size > VIEW_FILE_MAX_BYTES; });
+  document.getElementById('deleteFilesBtn').disabled = count === 0 || sel.some(function(f){ return f.active; });
 }
 function chooseLogRenderList(){
   var list = document.getElementById('chooseLogList');
   var all  = document.getElementById('chooseLogSelectAll');
   var visible = chooseLogFiles.filter(function(f){
-    var ext = f.name.split('.').pop().toLowerCase();
+    var ext = fileExt(f.name);
     return !!chooseLogExts[ext];
   });
   visible = sortFileList(visible, chooseLogSort);
@@ -4038,13 +4039,13 @@ function chooseLogRenderList(){
   all.checked = false;
   wireFileSortHead(document.getElementById('chooseLogHead'), chooseLogSort, chooseLogRenderList);
   if(!visible.length){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no matching files</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">no matching files</td></tr>';
     all.disabled = true;
     return;
   }
   visible.forEach(function(f){
     var tr = document.createElement('tr');
-    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    tr.style.cssText = 'cursor:pointer;font-size:13px';
     var tdCb = document.createElement('td');
     tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
     var cb = document.createElement('input');
@@ -4074,7 +4075,7 @@ function chooseLogRenderList(){
 function openChooseLog(){
   var list = document.getElementById('chooseLogList');
   var all  = document.getElementById('chooseLogSelectAll');
-  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">loading ...</td></tr>';
   all.checked  = false;
   all.disabled = true;
   chooseLogModal.style.display = 'flex';
@@ -4082,7 +4083,7 @@ function openChooseLog(){
     chooseLogFiles = j.files || [];
     chooseLogRenderList();
   }).catch(function(){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">failed to list files</td></tr>';
   });
 }
 Array.prototype.forEach.call(document.querySelectorAll('.chooseLogExtBtn'), function(btn){
@@ -4100,202 +4101,22 @@ document.getElementById('chooseLogSelectAll').onchange = function(){
 };
 document.getElementById('modalBtnChooseLogCancel').onclick = closeChooseLog;
 
-/* ---- VIEW FILE (FILE OPERATIONS > VIEW FILE FROM SERVER) - read-only, one
-   new tab per selected *.txt/*.csv file, raw content + COPY/DOWNLOAD ---- */
-// must match VIEW_FILE_MAX_BYTES in eping.py - do_GET rejects larger files with 413
-var VIEW_FILE_MAX_BYTES = 200 * 1024 * 1024;
-var viewFileFiles = [];
-var viewFileSort  = {key: 'mtime', dir: 'desc'};
-var viewFileModal = document.getElementById('viewFileModal');
-function viewFileOpen(){ return viewFileModal.style.display !== 'none'; }
-function closeViewFile(){ viewFileModal.style.display = 'none'; }
-function viewFileRenderList(){
-  var list = document.getElementById('viewFileList');
-  var all  = document.getElementById('viewFileSelectAll');
-  var visible = sortFileList(viewFileFiles, viewFileSort);
-  list.innerHTML = '';
-  all.checked = false;
-  wireFileSortHead(document.getElementById('viewFileHead'), viewFileSort, viewFileRenderList);
-  if(!visible.length){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no *.txt/*.csv files found</td></tr>';
-    all.disabled = true;
-    return;
-  }
-  visible.forEach(function(f){
-    var tooLarge = f.size > VIEW_FILE_MAX_BYTES;
-    var tr = document.createElement('tr');
-    tr.style.cssText = 'cursor:' + (tooLarge ? 'default' : 'pointer') + ';font-size:12px'
-                        + (tooLarge ? ';opacity:0.45' : '');
-    var tdCb = document.createElement('td');
-    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
-    var cb = document.createElement('input');
-    cb.type      = 'checkbox';
-    cb.className = 'viewFileCb';
-    cb.value     = f.name;
-    cb.disabled  = tooLarge;
-    tdCb.appendChild(cb);
-    var tdName = document.createElement('td');
-    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
-    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '') + (tooLarge ? '  - TOO LARGE' : '');
-    var tdSize = document.createElement('td');
-    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdSize.textContent = humanBytes(f.size);
-    var tdDate = document.createElement('td');
-    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdDate.textContent = formatFileDate(f.mtime);
-    tr.appendChild(tdCb);
-    tr.appendChild(tdName);
-    tr.appendChild(tdSize);
-    tr.appendChild(tdDate);
-    if(!tooLarge) tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } };
-    list.appendChild(tr);
-  });
-  all.disabled = false;
-}
-function openViewFile(){
-  var list = document.getElementById('viewFileList');
-  var all  = document.getElementById('viewFileSelectAll');
-  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
-  all.checked  = false;
-  all.disabled = true;
-  document.getElementById('viewFileMaxLabel').textContent = humanBytes(VIEW_FILE_MAX_BYTES);
-  viewFileModal.style.display = 'flex';
-  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
-    viewFileFiles = (j.files || []).filter(function(f){
-      var ext = f.name.split('.').pop().toLowerCase();
-      return ext === 'csv' || ext === 'txt';
-    });
-    viewFileRenderList();
-  }).catch(function(){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
-  });
-}
-document.getElementById('viewFileSelectAll').onchange = function(){
-  var checked = this.checked;
-  Array.prototype.forEach.call(document.querySelectorAll('.viewFileCb'), function(cb){
-    if(!cb.disabled) cb.checked = checked;
-  });
-};
-document.getElementById('modalBtnViewFileCancel').onclick = closeViewFile;
-
-// VIEW FILE FROM SERVER opens api/view_file?name=...&queue=...&queue=... - a
-// server-rendered page (see render_view_file_page() in eping.py), not a
-// client-built one. Only the FIRST file is opened from here (one genuine
-// click = one window.open(), always allowed); every file after that is
-// opened by the user clicking a plain <a target="_blank"> link INSIDE that
-// page, which every browser treats as ordinary navigation. Earlier attempts
-// used window.open() from a click inside the previous tab (Chrome/Firefox
-// block that - only Safari allowed it) and a window.opener callback back to
-// this window (same result: blocked everywhere but Safari) - a real anchor
-// is what actually works across browsers, so the whole client-side queue/
-// popup dance is gone.
-document.getElementById('modalBtnViewFileOpen').onclick = function(){
-  var boxes = document.querySelectorAll('.viewFileCb:checked');
-  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+// VIEW opens api/view_file?name=...&queue=...&queue=... - a server-rendered page
+// (see render_view_file_page() in eping.py). Only the FIRST file is opened from
+// here (one genuine click = one window.open(), always allowed); every further
+// file is opened by a plain <a target="_blank"> link INSIDE that page.
+document.getElementById('modalBtnChooseLogView').onclick = function(){
+  var names = chooseLogSelected().map(function(f){ return f.name; });
   if(!names.length) return;
-  closeViewFile();
+  closeChooseLog();
   var qs = 'name=' + encodeURIComponent(names[0]);
   for(var i = 1; i < names.length; i++) qs += '&queue=' + encodeURIComponent(names[i]);
   if(!window.open('/api/view_file?' + qs, '_blank')){
-    note('tab blocked by the browser’s popup blocker', false);
+    note('tab blocked by the browser\u2019s popup blocker', false);
   }
-};
-
-/* ---- DELETE FILES (FILE ACTIONS > DELETE FILES) - own modal, was CHOOSE
-   FILE's DELETE button up to v3.25 ---- */
-var deleteFilesFiles = [];
-var deleteFilesExts  = {csv: true, txt: true, html: true};
-var deleteFilesSort  = {key: 'mtime', dir: 'desc'};
-var deleteFilesModal = document.getElementById('deleteFilesModal');
-function deleteFilesOpen(){ return deleteFilesModal.style.display !== 'none'; }
-function closeDeleteFiles(){ deleteFilesModal.style.display = 'none'; }
-function updateDeleteFilesControls(){
-  var count = document.querySelectorAll('.deleteFilesCb:checked').length;
-  document.getElementById('deleteFilesBtn').disabled = count === 0;
-}
-function deleteFilesRenderList(){
-  var list = document.getElementById('deleteFilesList');
-  var all  = document.getElementById('deleteFilesSelectAll');
-  var visible = deleteFilesFiles.filter(function(f){
-    var ext = f.name.split('.').pop().toLowerCase();
-    return !!deleteFilesExts[ext];
-  });
-  visible = sortFileList(visible, deleteFilesSort);
-  list.innerHTML = '';
-  all.checked = false;
-  wireFileSortHead(document.getElementById('deleteFilesHead'), deleteFilesSort, deleteFilesRenderList);
-  if(!visible.length){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no matching files</td></tr>';
-    all.disabled = true;
-    updateDeleteFilesControls();
-    return;
-  }
-  visible.forEach(function(f){
-    var tr = document.createElement('tr');
-    tr.style.cssText = f.active
-      ? 'font-size:12px;opacity:.45;cursor:not-allowed'
-      : 'cursor:pointer;font-size:12px';
-    var tdCb = document.createElement('td');
-    tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
-    var cb = document.createElement('input');
-    cb.type      = 'checkbox';
-    cb.className = 'deleteFilesCb';
-    cb.value     = f.name;
-    if(f.active) cb.disabled = true;   // active logfile - server refuses deleting it, see /api/delete_logfile
-    tdCb.appendChild(cb);
-    var tdName = document.createElement('td');
-    tdName.style.cssText = 'padding:3px 10px 3px 0;white-space:nowrap';
-    tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
-    var tdSize = document.createElement('td');
-    tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdSize.textContent = humanBytes(f.size);
-    var tdDate = document.createElement('td');
-    tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdDate.textContent = formatFileDate(f.mtime);
-    tr.appendChild(tdCb);
-    tr.appendChild(tdName);
-    tr.appendChild(tdSize);
-    tr.appendChild(tdDate);
-    if(!f.active){
-      tr.onclick = function(e){ if(e.target !== cb){ cb.checked = !cb.checked; } updateDeleteFilesControls(); };
-    }
-    list.appendChild(tr);
-  });
-  all.disabled = false;
-  updateDeleteFilesControls();
-}
-function openDeleteFiles(){
-  var list = document.getElementById('deleteFilesList');
-  var all  = document.getElementById('deleteFilesSelectAll');
-  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
-  all.checked  = false;
-  all.disabled = true;
-  deleteFilesModal.style.display = 'flex';
-  fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
-    deleteFilesFiles = j.files || [];
-    deleteFilesRenderList();
-  }).catch(function(){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
-  });
-}
-Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesExtBtn'), function(btn){
-  btn.onclick = function(){
-    var ext = this.dataset.ext;
-    deleteFilesExts[ext] = !deleteFilesExts[ext];
-    this.classList.toggle('on', deleteFilesExts[ext]);
-    deleteFilesRenderList();
-  };
-});
-document.getElementById('deleteFilesSelectAll').onchange = function(){
-  var checked = this.checked;
-  Array.prototype.forEach.call(document.querySelectorAll('.deleteFilesCb'), function(cb){
-    if(!cb.disabled) cb.checked = checked;
-  });
-  updateDeleteFilesControls();
 };
 document.getElementById('deleteFilesBtn').onclick = function(){
-  var boxes = document.querySelectorAll('.deleteFilesCb:checked');
-  var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
+  var names = chooseLogSelected().filter(function(f){ return !f.active; }).map(function(f){ return f.name; });
   if(!names.length) return;
   if(!confirm('Delete ' + names.length + ' file(s)? This cannot be undone.')) return;
   fetch('api/delete_logfile', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -4304,8 +4125,8 @@ document.getElementById('deleteFilesBtn').onclick = function(){
     .then(function(j){
       var deleted = j.deleted || [];
       if(deleted.length){
-        deleteFilesFiles = deleteFilesFiles.filter(function(f){ return deleted.indexOf(f.name) === -1; });
-        deleteFilesRenderList();
+        chooseLogFiles = chooseLogFiles.filter(function(f){ return deleted.indexOf(f.name) === -1; });
+        chooseLogRenderList();
       }
       if(j.errors && j.errors.length){
         note(deleted.length + ' deleted, ' + j.errors.length + ' failed', false);
@@ -4315,7 +4136,10 @@ document.getElementById('deleteFilesBtn').onclick = function(){
     })
     .catch(function(){ note('delete failed', false); });
 };
-document.getElementById('modalBtnDeleteFilesCancel').onclick = closeDeleteFiles;
+document.getElementById('modalBtnChooseLogUpload').onclick = function(){
+  closeChooseLog();
+  uploadServerFileInput.click();
+};
 document.getElementById('modalBtnChooseLogDownload').onclick = function(){
   var boxes = document.querySelectorAll('.chooseLogCb:checked');
   var names = Array.prototype.map.call(boxes, function(cb){ return cb.value; });
@@ -4341,18 +4165,22 @@ function openResetLog(){
   // since there's nothing to clear yet, but still offers a custom file name
   var clearBtn = document.getElementById('modalBtnClearLog');
   var newBtn   = document.getElementById('modalBtnNewLog');
+  var stopBtn  = document.getElementById('modalBtnStopLog');
   var text     = document.getElementById('resetLogText');
   document.getElementById('resetLogNameInput').value = '';
   if(loggingOn){
     clearBtn.style.display = '';
+    stopBtn.style.display = '';
     newBtn.textContent = 'NEW FILE (N)';
-    text.innerHTML = 'Delete ALL entries in the current CSV log, or start a new file?<br>' +
+    text.innerHTML = 'Logging is ON. Clear all entries of the current CSV log, ' +
+      'start a new file (old one is kept), or stop logging (file is kept).<br>' +
       'Optional name for the new file below (blank = auto-generated).<br>' +
-      'Keys also work: <b>Y</b>=clear, <b>N</b>=new file, <b>ESC</b>/<b>ENTER</b>=cancel.';
+      'Keys: <b>Y</b>=clear, <b>N</b>=new file, <b>S</b>=stop, <b>ESC</b>/<b>ENTER</b>=cancel.';
   } else {
     clearBtn.style.display = 'none';
+    stopBtn.style.display = 'none';
     newBtn.textContent = 'START LOGGING (N)';
-    text.innerHTML = 'Start logging to a new CSV file.<br>' +
+    text.innerHTML = 'Logging is OFF. Start logging to a new CSV file.<br>' +
       'Optional name below (blank = auto-generated).<br>' +
       'Keys also work: <b>N</b>/<b>ENTER</b>=start, <b>ESC</b>=cancel.';
   }
@@ -4360,12 +4188,13 @@ function openResetLog(){
   document.getElementById('resetLogNameInput').focus();
 }
 function runResetLog(action){
-  // action: 'y' | 'new' - the optional custom name (if any) is appended to
+  // action: 'y' | 'new' | 'stop' - the optional custom name (if any) is appended to
   // 'new' as 'new=<name>'; OFF state sends the name alone (see the three
   // reset_log handlers server-side for this same encoding).
   var name = document.getElementById('resetLogNameInput').value.trim();
   closeResetLog();
   if(!loggingOn){ post('reset_log', name); return; }
+  if(action === 'stop'){ post('reset_log', 'stop'); return; }
   post('reset_log', action === 'new' && name ? 'new=' + name : action);
 }
 
@@ -4373,43 +4202,57 @@ function runResetLog(action){
 var saveHostsModal = document.getElementById('saveHostsModal');
 function saveHostsOpen(){ return saveHostsModal.style.display !== 'none'; }
 function closeSaveHosts(){ saveHostsModal.style.display = 'none'; }
-function openSaveHosts(){
-  var input = document.getElementById('saveHostsNameInput');
-  var text  = document.getElementById('saveHostsText');
-  input.value = '';
-  input.style.display = '';
-  var ext  = saveCsv ? '.csv' : '.txt';
-  // an inventory is saved as .csv - same rule as resolve_save_target() server-side
-  var tgt  = (saveCsv && !/\.csv$/i.test(hostfileName)) ? hostfileName.replace(/\.[^.\/\\]*$/, '') + '.csv' : hostfileName;
-  var kind = saveCsv ? ' (inventory .csv with the Model/Location/... columns)' : '';
+function shScopeShown(){ return document.getElementById('shShown').checked; }
+function shHasCsv(){ return shScopeShown() ? saveCsv : allCsv; }
+function shRefresh(){
+  // format default follows the data: CSV if the chosen list carries inventory values, else TXT
+  // (CSV stays selectable either way). Server target, name field and hint follow the destination.
+  var server = document.getElementById('shServer').checked;
+  var input  = document.getElementById('saveHostsNameInput');
+  var text   = document.getElementById('saveHostsText');
+  var csv    = shHasCsv() && document.getElementById('shCsv').checked;
+  var ext    = csv ? '.csv' : '.txt';
+  document.getElementById('shFmtBox').style.display = shHasCsv() ? '' : 'none';   // no inventory data: TXT only
+  var tgt    = (csv && !/\.csv$/i.test(hostfileName)) ? hostfileName.replace(/\.[^.\/\\]*$/, '') + '.csv' : hostfileName;
+  input.style.display = server ? '' : 'none';
+  if(!server){ text.textContent = 'The file is downloaded by the browser.'; return; }
   if(hostfileActive){
-    text.innerHTML = 'Overwrite <b>' + esc(tgt) + '</b> on the server with the '
-      + shownHostsCount + ' host(s) currently shown' + kind + ' - or type a new name below to '
-      + 'save as a different file instead:';
+    text.innerHTML = 'Blank name overwrites <b>' + esc(tgt) + '</b> on the server, a typed name saves as a different file:';
     input.placeholder = 'blank = overwrite ' + tgt + ', or new file name (' + ext + ' added automatically)';
   } else {
-    text.innerHTML = 'eping.py was started without a hosts file. Save the '
-      + shownHostsCount + ' host(s) currently shown' + kind + ' as a new file on the server:';
+    text.textContent = 'File name on the server:';
     input.placeholder = 'file name (blank = eping-hosts' + ext + '), ' + ext + ' added automatically';
   }
-  document.getElementById('saveHostsOpts').checked = true;       // default: with options
-  document.getElementById('saveHostsTxt').checked = false;       // default: inventory .csv
-  document.getElementById('saveHostsOptsRow').style.display = saveCsv ? '' : 'none';
+}
+function shDefaultFormat(){
+  document.getElementById(shHasCsv() ? 'shCsv' : 'shTxt').checked = true;   // CSV preselected if inventory data exists
+}
+function openSaveHosts(){
+  document.getElementById('shAll').checked = true;                 // default: all hosts
+  document.getElementById(hostfileActive ? 'shServer' : 'shLocal').checked = true;
+  document.getElementById('shOpts').checked = true;
+  document.getElementById('saveHostsNameInput').value = '';
+  shDefaultFormat();
+  shRefresh();
   saveHostsModal.style.display = 'flex';
-  input.focus();
 }
 function runSaveHostsFile(){
-  // a typed name always means "save as this (possibly new) file" server-side,
-  // even with a hostfile already active - blank means "overwrite the active
-  // hostfile" when one is active, or the default eping-hosts.txt otherwise
-  // (see sanitize_hostfile_save_name())
-  var name = document.getElementById('saveHostsNameInput').value.trim();
-  var withOpts = !saveCsv || document.getElementById('saveHostsOpts').checked;
-  var asTxt    = saveCsv && document.getElementById('saveHostsTxt').checked;
+  var shown   = shScopeShown();
+  var server  = document.getElementById('shServer').checked;
+  var csv     = shHasCsv() && document.getElementById('shCsv').checked;
+  var noopt   = !document.getElementById('shOpts').checked;
+  var name    = document.getElementById('saveHostsNameInput').value.trim();
   closeSaveHosts();
-  post(asTxt ? (withOpts ? 'save_hosts_txt' : 'save_hosts_txt_noopt')
-              : (withOpts ? 'save_hosts_file' : 'save_hosts_noopt'), name);
+  if(server){
+    // a typed name always means "save as this (possibly new) file" server-side;
+    // blank = overwrite the active hostfile, or eping-hosts.<ext> (see resolve_save_target())
+    post('save_hosts_' + (csv ? 'csv' : 'txt') + (noopt ? '_noopt' : '') + (shown ? '' : '_all'), name);
+    return;
+  }
+  runDownload(shown ? 'hosts_shown' : 'hosts_all', 'SAVE HOSTS', '?fmt=' + (csv ? 'csv' : 'txt') + (noopt ? '&opts=0' : ''));
 }
+['shAll','shShown'].forEach(function(id){ document.getElementById(id).onchange = function(){ shDefaultFormat(); shRefresh(); }; });
+['shServer','shLocal','shCsv','shTxt'].forEach(function(id){ document.getElementById(id).onchange = shRefresh; });
 document.getElementById('modalBtnSaveHostsConfirm').onclick = runSaveHostsFile;
 document.getElementById('modalBtnSaveHostsCancel').onclick  = closeSaveHosts;
 
@@ -4701,6 +4544,21 @@ function advChanged(changedKey){
       });
     }).catch(function(){});
 }
+var advMeasureCtx = null;
+function advBlockWidth(k){
+  // widest "value  (n)" label of the field -> block width: min 270px, max 2/3 of the window
+  // (longer values scroll horizontally inside the list)
+  var max = 0;
+  try{
+    if(!advMeasureCtx) advMeasureCtx = document.createElement('canvas').getContext('2d');
+    advMeasureCtx.font = '13px ' + (getComputedStyle(document.body).fontFamily || 'monospace');
+    advEntries(k).slice(0, ADV_MAXROWS).forEach(function(e){
+      var w = advMeasureCtx.measureText(e[1] + '  (' + e[2] + ')').width;
+      if(w > max) max = w;
+    });
+  }catch(err){}
+  return Math.max(270, Math.min(Math.ceil(max) + 64, Math.floor(window.innerWidth * 2 / 3)));
+}
 function populateAdvFilter(){
   var c = document.getElementById('advFilterRows');
   c.innerHTML = '';
@@ -4714,6 +4572,7 @@ function populateAdvFilter(){
     advView[k] = lastAdv.values[k];
     var blk = document.createElement('div');
     blk.className = 'advf-blk';
+    blk.style.width = advBlockWidth(k) + 'px';
     var h = document.createElement('div');
     h.className = 'advf-head';
     h.innerHTML = '<b></b><span id="advc_' + k + '" class="advf-cnt"></span>';
@@ -4791,6 +4650,7 @@ document.getElementById('btnResetLog').onclick = openResetLog;   // both states 
                                                                    // modal now - OFF just skips CLEAR
 document.getElementById('modalBtnClearLog').onclick = function(){ runResetLog('y'); };
 document.getElementById('modalBtnNewLog').onclick   = function(){ runResetLog('new'); };
+document.getElementById('modalBtnStopLog').onclick  = function(){ runResetLog('stop'); };
 document.getElementById('modalBtnCancelLog').onclick = function(){ closeResetLog(); };
 document.getElementById('btnExit').onclick = function(){
   if(confirm('Stop eping.py?')){ post('exit'); } };
@@ -5007,18 +4867,14 @@ var uploadServerFileInput = document.getElementById('uploadServerFileInput');
 uploadServerFileInput.addEventListener('change', function(){
   var f = uploadServerFileInput.files && uploadServerFileInput.files[0];
   if(!f) return;
-  var rd = new FileReader();
-  rd.onload = function(){
-    note('uploading ' + f.name + ' ...', true);
-    fetch('api/upload_server_file?name=' + encodeURIComponent(f.name),
-      {method: 'POST', headers: {'Content-Type': 'text/plain; charset=utf-8'},
-       body: rd.result}).then(function(r){ return r.json(); }).then(function(j){
-        if(j.ok){ note('uploaded as ' + j.name, false); }
-        else { note('upload failed: ' + (j.error || ''), false); }
-      }).catch(function(){ note('upload failed', false); });
-    uploadServerFileInput.value = '';
-  };
-  rd.readAsText(f);
+  note('uploading ' + f.name + ' ...', true);
+  fetch('api/upload_server_file?name=' + encodeURIComponent(f.name),    // raw bytes (zip safe)
+    {method: 'POST', headers: {'Content-Type': 'application/octet-stream'},
+     body: f}).then(function(r){ return r.json(); }).then(function(j){
+      if(j.ok){ note('uploaded as ' + j.name, false); }
+      else { note('upload failed: ' + (j.error || ''), false); }
+    }).catch(function(){ note('upload failed', false); });
+  uploadServerFileInput.value = '';
 });
 
 /* ---- add hosts from a .txt file already on the server ---- */
@@ -5038,14 +4894,14 @@ function addFromServerRenderList(){
   all.checked = false;
   wireFileSortHead(document.getElementById('addFromServerHead'), addFromServerSort, addFromServerRenderList);
   if(!visible.length){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no .txt/.csv files found</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">no .txt/.csv files found</td></tr>';
     all.disabled = true;
     addFromServerUpdateControls();
     return;
   }
   visible.forEach(function(f){
     var tr = document.createElement('tr');
-    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    tr.style.cssText = 'cursor:pointer;font-size:13px';
     var tdCb = document.createElement('td');
     tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
     var cb = document.createElement('input');
@@ -5075,7 +4931,7 @@ function addFromServerRenderList(){
 function openAddFromServer(){
   var list = document.getElementById('addFromServerList');
   var all  = document.getElementById('addFromServerSelectAll');
-  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">loading ...</td></tr>';
   all.checked  = false;
   all.disabled = true;
   addFromServerModal.style.display = 'flex';
@@ -5086,7 +4942,7 @@ function openAddFromServer(){
     });
     addFromServerRenderList();
   }).catch(function(){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">failed to list files</td></tr>';
   });
 }
 document.getElementById('addFromServerSelectAll').onchange = function(){
@@ -5124,31 +4980,83 @@ var REPORT_WAIT_HTML = '<!doctype html><html><head><meta charset="UTF-8">'
   + 'body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;'
   + 'background:#0b0f0b;color:#c8d6c8;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'
   + '"DejaVu Sans Mono",monospace;font-size:15px}'
-  + '.wrap{text-align:center;animation:pulse 1.4s ease-in-out infinite}'
+  + '.wrap{text-align:center}.pulse{animation:pulse 1.4s ease-in-out infinite}'
   + '@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}'
-  + '</style></head><body><div class="wrap">'
+  + '.bar{width:380px;max-width:80vw;height:10px;margin:16px auto 0;border:1px solid #3a4a3a;border-radius:5px;overflow:hidden}'
+  + '#rpbar{height:100%;width:0;background:#3fb950;transition:width .4s}'
+  + '</style></head><body><div class="wrap"><div class="pulse">'
   + 'Generating report with epinga.py &hellip;<br>'
-  + '<small style="color:#5d6b5d">please wait - this tab will update automatically</small>'
+  + '<small style="color:#97a897">please wait - this tab will update automatically</small></div>'
+  + '<div class="bar"><div id="rpbar"></div></div>'
+  + '<div id="rptxt" style="margin-top:8px;font-size:13px;color:#97a897;min-height:1.4em"></div>'
   + '</div></body></html>';
+function fmtEta(sec){
+  if(sec < 60) return sec + ' s';
+  if(sec < 3600) return Math.floor(sec / 60) + ' min ' + (sec % 60) + ' s';
+  return Math.floor(sec / 3600) + ' h ' + Math.floor(sec % 3600 / 60) + ' min';
+}
+// GENERATE REPORT progress: bar + text in the waiting tab (and the footer note if there is no tab)
+function reportProgress(rep){
+  var pct = (typeof rep.pct === 'number') ? rep.pct : null;
+  var txt = (rep.phase || 'working')
+          + (pct !== null ? ' - ' + Math.floor(pct) + '%' : '')
+          + ((typeof rep.eta === 'number') ? ' - about ' + fmtEta(rep.eta) + ' remaining' : '');
+  if(reportWindow && !reportWindow.closed){
+    try{
+      var d = reportWindow.document, b = d.getElementById('rpbar'), t = d.getElementById('rptxt');
+      if(b) b.style.width = (pct || 0) + '%';
+      if(t) t.textContent = txt;
+    }catch(e){}
+  }
+  note('report: ' + txt, true);
+}
 // must match REPORT_MAX_FILES in eping.py - do_POST silently truncates beyond
 // this, so the picker below enforces the same cap instead of letting the user
 // select more and lose files without any indication.
 var REPORT_MAX_FILES = 25;
-function runReport(values, sources){
-  // window.open() must happen synchronously in the click handler or browsers
-  // treat it as a popup and block it - open a blank tab now, fill it in once
-  // poll() sees the report become ready (or close it again on error).
+var reportExpect = false;   // a report was requested - poll() shows it when ready
+function openReportTab(){
+  // window.open() works inside a click handler (or shortly after one) - open a
+  // blank tab, fill it in once poll() sees the report become ready (or close it
+  // again on error). If the browser blocks it, poll() offers an OPEN REPORT button.
   reportWindow = window.open('', '_blank');
   if(reportWindow){
     reportWindow.document.write(REPORT_WAIT_HTML);
     reportWindow.document.close();
   }
-  note(PENDING.run_report, true);
-  postReport(Array.isArray(values) ? values : (values ? [values] : []), sources || null);
+}
+function runReport(values, sources, upload){
+  var names = Array.isArray(values) ? values : (values ? [values] : []);
+  if(sources !== undefined){            // sources already decided (SELECT JUMPHOST)
+    openReportTab();                    // still inside the click handler
+    note(PENDING.run_report, true);
+    postReport(names, sources || null, upload);
+    return;
+  }
+  reportSrcAsk(names, upload);          // no tab yet - only after the jump host choice
+}
+// A log with more than one SOURCE (local / jump hosts) means the measuring host
+// changed during the run: ask which sources to analyse before generating.
+var reportSrcCtx = null;
+function reportSrcAsk(names, upload){
+  note('checking jump hosts ...', true);
+  function go(){ openReportTab(); note(PENDING.run_report, true); postReport(names, null, upload); }
+  fetch('api/log_sources', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({names: names, upload: !!upload})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(j && j.sources && j.sources.length > 1){
+        reportSrcCtx = {names: names, upload: upload};
+        note('', false);
+        openReportSources(j.sources, true);
+      } else { go(); }
+    })
+    .catch(go);
 }
 function reportAbort(msg){
   if(reportWindow && !reportWindow.closed) reportWindow.close();
   reportWindow = null;
+  reportExpect = false;
   note(msg, false);
 }
 function postReport(names, sources, upload){
@@ -5166,6 +5074,7 @@ function postReport(names, sources, upload){
       // web_state['report'] to 'error' server-side - without this, the blank
       // tab above would sit on "please wait" forever with no explanation.
       if(!res.ok) reportAbort('report failed: ' + (res.err || 'request rejected'));
+      else reportExpect = true;
     })
     .catch(function(){ reportAbort('report failed: request error'); });
 }
@@ -5182,12 +5091,17 @@ function openReportSourcesPick(){
     })
     .catch(function(){ note('failed to read the sources', false); });
 }
-function openReportSources(sources){
+function openReportSources(sources, auto){
+  document.getElementById('reportSrcText').textContent = auto
+    ? 'The logfile(s) hold more than one source - the measuring host changed (local / jump hosts). '
+      + 'Select the sources to analyse - all, one or several. ENTER = GENERATE.'
+    : 'Active logfile. Select the jump hosts (or local) to analyse - only their periods are calculated. '
+      + 'ENTER = GENERATE (default: all sources).';
   var list = document.getElementById('reportSrcList');
   list.innerHTML = '';
   sources.forEach(function(sname){
     var lab = document.createElement('label');
-    lab.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;color:var(--fg);font-size:12px;cursor:pointer';
+    lab.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;color:var(--fg);font-size:13px;cursor:pointer';
     var cb = document.createElement('input');
     cb.type = 'checkbox'; cb.className = 'reportSrcCb'; cb.value = sname; cb.checked = true;
     cb.onchange = function(){
@@ -5208,13 +5122,27 @@ function runReportSources(){
   var sel = document.querySelectorAll('.reportSrcCb:checked');
   if(!sel.length) return;
   closeReportSources();
-  runReport('', sel.length === all.length ? null
-    : Array.prototype.map.call(sel, function(cb){ return cb.value; }));
+  var chosen = sel.length === all.length ? null
+    : Array.prototype.map.call(sel, function(cb){ return cb.value; });
+  if(reportSrcCtx){                     // tab is already open (reportSrcAsk)
+    var ctx = reportSrcCtx;
+    reportSrcCtx = null;
+    openReportTab();                    // GENERATE click = user gesture
+    note(PENDING.run_report, true);
+    postReport(ctx.names, chosen, ctx.upload);
+    return;
+  }
+  runReport('', chosen);
+}
+function cancelReportSources(){
+  closeReportSources();
+  if(reportSrcCtx){                     // abort the report that waits for this choice
+    reportSrcCtx = null;
+    note('', false);
+  }
 }
 document.getElementById('modalBtnReportSrcGo').onclick = runReportSources;
-document.getElementById('modalBtnReportSrcCancel').onclick = function(){
-  closeReportSources();
-};
+document.getElementById('modalBtnReportSrcCancel').onclick = cancelReportSources;
 document.getElementById('selGenReport').onchange = function(){
   var what = this.value;
   this.value = '';                              // reset - a select, not a toggle
@@ -5227,6 +5155,12 @@ document.getElementById('selGenReport').onchange = function(){
 // api/reportupload (server temp dir), then run_report{upload:true} merges and
 // analyses them. A visible file input in a modal (Safari blocks click() from a
 // select change) and a GENERATE click, so window.open() stays user-initiated.
+var reportReadyModal = document.getElementById('reportReadyModal');
+document.getElementById('modalBtnReportReadyOpen').onclick = function(){
+  reportReadyModal.style.display = 'none';
+  window.open('api/report', '_blank');
+};
+document.getElementById('modalBtnReportReadyClose').onclick = function(){ reportReadyModal.style.display = 'none'; };
 var uploadReportModal = document.getElementById('uploadReportModal');
 var uploadReportInput = document.getElementById('uploadReportInput');
 var uploadReportFiles = [];
@@ -5257,7 +5191,7 @@ function closeUploadReport(){
 }
 uploadReportInput.onchange = function(){
   var all = Array.prototype.slice.call(this.files || []).filter(function(f){
-    return f.name.split('.').pop().toLowerCase() === 'csv';
+    return isLogName(f.name);
   });
   uploadReportFiles = all.slice(0, REPORT_MAX_FILES);
   uploadReportRender();
@@ -5267,16 +5201,10 @@ function runReportUpload(){
   var files = uploadReportFiles.slice();
   if(!files.length) return;
   closeUploadReport();
-  reportWindow = window.open('', '_blank');
-  if(reportWindow){
-    reportWindow.document.write(REPORT_WAIT_HTML);
-    reportWindow.document.close();
-  }
   var i = 0;
   function next(){
     if(i >= files.length){
-      note(PENDING.run_report, true);
-      postReport([], null, true);
+      reportSrcAsk([], true);
       return;
     }
     note('uploading ' + (i + 1) + '/' + files.length + ' ...', true);
@@ -5312,13 +5240,13 @@ function chooseReportRenderList(){
   all.checked = false;
   wireFileSortHead(document.getElementById('chooseReportHead'), chooseReportSort, chooseReportRenderList);
   if(!visible.length){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">no *.csv files found</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">no *.csv files found</td></tr>';
     all.disabled = true;
     return;
   }
   visible.forEach(function(f){
     var tr = document.createElement('tr');
-    tr.style.cssText = 'cursor:pointer;font-size:12px';
+    tr.style.cssText = 'cursor:pointer;font-size:13px';
     var tdCb = document.createElement('td');
     tdCb.style.cssText = 'width:20px;padding:3px 4px 3px 0';
     var cb = document.createElement('input');
@@ -5350,17 +5278,17 @@ function openChooseReport(){
   var list = document.getElementById('chooseReportList');
   var all  = document.getElementById('chooseReportSelectAll');
   document.getElementById('chooseReportMax').textContent = REPORT_MAX_FILES;
-  list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">loading ...</td></tr>';
+  list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">loading ...</td></tr>';
   all.checked  = false;
   all.disabled = true;
   chooseReportModal.style.display = 'flex';
   fetch('api/logfiles').then(function(r){ return r.json(); }).then(function(j){
     chooseReportFiles = (j.files || []).filter(function(f){
-      return f.name.split('.').pop().toLowerCase() === 'csv';
+      return isLogName(f.name);
     });
     chooseReportRenderList();
   }).catch(function(){
-    list.innerHTML = '<tr><td style="color:var(--dim);font-size:12px;padding:3px 0">failed to list files</td></tr>';
+    list.innerHTML = '<tr><td style="color:var(--dim);font-size:13px;padding:3px 0">failed to list files</td></tr>';
   });
 }
 document.getElementById('chooseReportSelectAll').onchange = function(){
@@ -5389,9 +5317,6 @@ document.getElementById('selDownload').onchange = function(){
   if(what === 'add_from_server'){ openAddFromServer(); return; }
   if(what === 'add_from_client'){ addFromClientModal.style.display = 'flex'; return; }   // visible input: Safari blocks click() from select change
   if(what === 'choose_logfile'){ openChooseLog(); return; }
-  if(what === 'delete_files'){ openDeleteFiles(); return; }
-  if(what === 'view_file'){ openViewFile(); return; }
-  if(what === 'upload_file'){ uploadServerFileInput.click(); return; }
   if(what === 'save_hosts_file'){ openSaveHosts(); return; }
   if(what === 'logfile'){
     // hidden iframe, not fetch+blob and not a real <a> click - the log can be
@@ -5407,31 +5332,8 @@ document.getElementById('selDownload').onchange = function(){
     startIframeDownload('api/download/logfile', label);
     return;
   }
-  if((what === 'hosts_all' && allCsv) || (what === 'hosts_shown' && saveCsv)){
-    openDlHosts(what, label); return;       // .csv: ask whether the options go in
-  }
   runDownload(what, label, '');
 };
-var dlHostsModal = document.getElementById('dlHostsModal'), dlHostsWhat = '', dlHostsLabel = '';
-function dlHostsOpen(){ return dlHostsModal.style.display !== 'none'; }
-function closeDlHosts(){ dlHostsModal.style.display = 'none'; }
-function openDlHosts(what, label){
-  dlHostsWhat = what; dlHostsLabel = label;
-  document.getElementById('dlHostsTitle').textContent = label;
-  document.getElementById('dlHostsOpts').checked = true;          // default: with options
-  document.getElementById('dlHostsTxt').checked = false;          // default: inventory .csv
-  dlHostsModal.style.display = 'flex';
-}
-function runDlHosts(){
-  var qa = [];
-  if(!document.getElementById('dlHostsOpts').checked) qa.push('opts=0');
-  if(document.getElementById('dlHostsTxt').checked) qa.push('txt=1');
-  var q = qa.length ? '?' + qa.join('&') : '';
-  closeDlHosts();
-  runDownload(dlHostsWhat, dlHostsLabel, q);
-}
-document.getElementById('modalBtnDlHostsOk').onclick     = runDlHosts;
-document.getElementById('modalBtnDlHostsCancel').onclick = closeDlHosts;
 function runDownload(what, label, query){
   note('downloading ' + label + ' ...', true);
   fetch('api/download/' + what + query).then(function(r){
@@ -5487,17 +5389,13 @@ document.addEventListener('keydown', function(e){
     }
     var rk = e.key.toLowerCase();
     if(loggingOn && rk === 'y'){ runResetLog('y'); e.preventDefault(); }
+    else if(loggingOn && rk === 's'){ runResetLog('stop'); e.preventDefault(); }
     else if(rk === 'n'){ runResetLog('new'); e.preventDefault(); }
     else if(e.key === 'Enter'){
       if(!loggingOn){ runResetLog('new'); } else { closeResetLog(); }
       e.preventDefault();
     }
     return;   // any other key is ignored, the modal stays open
-  }
-  if(dlHostsOpen()){
-    if(e.key === 'Escape'){ closeDlHosts(); e.preventDefault(); return; }
-    if(e.key.toLowerCase() === 'y' || e.key === 'Enter'){ runDlHosts(); e.preventDefault(); }
-    return;
   }
   if(saveHostsOpen()){
     if(e.key === 'Escape'){ closeSaveHosts(); e.preventDefault(); return; }
@@ -5509,12 +5407,17 @@ document.addEventListener('keydown', function(e){
     if(sk === 'y' || e.key === 'Enter'){ runSaveHostsFile(); e.preventDefault(); }
     return;
   }
+  if(reportReadyModal.style.display === 'flex'){
+    if(e.key === 'Escape'){ reportReadyModal.style.display = 'none'; e.preventDefault(); }
+    else if(e.key === 'Enter'){ reportReadyModal.style.display = 'none'; window.open('api/report', '_blank'); e.preventDefault(); }
+    return;
+  }
   if(uploadReportOpen()){
     if(e.key === 'Escape'){ closeUploadReport(); e.preventDefault(); }
     return;
   }
   if(reportSrcOpen()){
-    if(e.key === 'Escape'){ closeReportSources(); e.preventDefault(); }
+    if(e.key === 'Escape'){ cancelReportSources(); e.preventDefault(); }
     else if(e.key === 'Enter'){ runReportSources(); e.preventDefault(); }
     return;
   }
@@ -5532,14 +5435,6 @@ document.addEventListener('keydown', function(e){
   }
   if(chooseLogOpen()){
     if(e.key === 'Escape'){ closeChooseLog(); e.preventDefault(); }
-    return;
-  }
-  if(viewFileOpen()){
-    if(e.key === 'Escape'){ closeViewFile(); e.preventDefault(); }
-    return;
-  }
-  if(deleteFilesOpen()){
-    if(e.key === 'Escape'){ closeDeleteFiles(); e.preventDefault(); }
     return;
   }
   if(advFilterOpen()){
@@ -5933,13 +5828,21 @@ function poll(){
     lastOptions = s.options || {};
     advPollCheck();
     var rep = s.report || {};
-    if(rep.status === 'ready' && reportWindow){
+    if(rep.status === 'running' && (reportWindow || reportExpect)){
+      reportProgress(rep);
+    } else if(rep.status === 'ready' && reportWindow){
       if(!reportWindow.closed) reportWindow.location = 'api/report';
       reportWindow = null;
+      reportExpect = false;
       note('report ready', false);
-    } else if(rep.status === 'error' && reportWindow){
-      if(!reportWindow.closed) reportWindow.close();
+    } else if(rep.status === 'ready' && reportExpect){   // no tab (blocked by the browser)
+      reportExpect = false;
+      reportReadyModal.style.display = 'flex';
+      note('report ready', false);
+    } else if(rep.status === 'error' && (reportWindow || reportExpect)){
+      if(reportWindow && !reportWindow.closed) reportWindow.close();
       reportWindow = null;
+      reportExpect = false;
       note('report failed: ' + (rep.error || ''), false);
     }
     document.getElementById('sLog').innerHTML = s.logging
@@ -5951,9 +5854,9 @@ function poll(){
     hostfileName   = s.hostfile_name || '';
     shownHostsCount = s.hosts_shown || 0;
     var brl = document.getElementById('btnResetLog');
-    brl.textContent = loggingOn ? 'RESET LOG' : 'START LOG';
+    brl.textContent = 'LOGGING';
     brl.title = loggingOn
-      ? 'Y=clear this file, N=start a fresh file (old kept), ESC/ENTER=cancel'
+      ? 'Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel'
       : 'start logging right away, no confirmation needed';
     var sf = document.getElementById('selFilter');
     if(document.activeElement !== sf){
@@ -6080,8 +5983,8 @@ def report_upload_store(rfile, length, name, first):
     global _report_upload_dir
     base = os.path.basename(str(name).replace('\\', '/'))
     base = re.sub(r'[^\w. -]', '_', base).strip(' .')[:200]
-    if not base.lower().endswith('.csv') or len(base) <= 4:
-        return 'only *.csv files'
+    if not base.lower().endswith(LOG_EXTS) or len(base) <= 4:
+        return 'only *.csv / *.zip files'
     if length <= 0:
         return 'empty file'
     if length > REPORT_UPLOAD_MAX:
@@ -6115,6 +6018,88 @@ def report_upload_store(rfile, length, name, first):
     if remaining:
         return 'upload incomplete'
     return None
+
+
+def is_zip_log(path):
+    return str(path).lower().endswith('.zip')
+
+
+def log_base(path):
+    """File name without .csv / .csv.zip / .zip - basis of report names."""
+    b = str(path)
+    for ext in ('.csv.zip', '.csv', '.zip'):
+        if b.lower().endswith(ext):
+            return b[:-len(ext)]
+    return os.path.splitext(b)[0]
+
+
+class _ZipText(io.TextIOWrapper):
+    """Text stream of the csv inside a zipped logfile; closing it closes the zip too."""
+    def close(self):
+        try:
+            super().close()
+        finally:
+            self._zf.close()
+
+
+def zip_log_member(zf):
+    """Name of the csv inside a zipped logfile (first *.csv member), or None."""
+    for zi in zf.infolist():
+        if not zi.filename.endswith('/') and zi.filename.lower().endswith('.csv'):
+            return zi.filename
+    return None
+
+
+def log_streams(path):
+    """Open text streams of a logfile: one for a plain csv, one per *.csv member (sorted by
+    name) of a zip - a downloaded multi-file zip is read completely. Raises OSError."""
+    if not is_zip_log(path):
+        return [open_log_text(path)]
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = sorted(zi.filename for zi in zf.infolist()
+                           if not zi.filename.endswith('/') and zi.filename.lower().endswith('.csv'))
+    except zipfile.BadZipFile as e:
+        raise OSError(str(e))
+    if not names:
+        raise OSError('no csv file inside ' + os.path.basename(path))
+    return [open_log_text(path, member=n) for n in names]
+
+
+def open_log_text(path, newline='', member=None):
+    """Open a plain or zipped (*.csv.zip) logfile as utf-8 text - the single entry
+    point, so a zipped log behaves exactly like a plain one. Raises OSError."""
+    if not is_zip_log(path):
+        return open(path, 'r', encoding='utf-8', errors='replace', newline=newline)
+    try:
+        zf = zipfile.ZipFile(path)
+        name = member or zip_log_member(zf)
+        if name is None:
+            zf.close()
+            raise OSError('no csv file inside ' + os.path.basename(path))
+        t = _ZipText(zf.open(name), encoding='utf-8', errors='replace', newline=newline)
+    except zipfile.BadZipFile as e:
+        raise OSError(str(e))
+    t._zf = zf
+    return t
+
+
+def zip_logfile(path):
+    """Compress a rotated logfile to <path>.zip (one csv member, mtime kept) and remove
+    the csv - only after the zip is complete, so an interrupted run loses nothing."""
+    tmp = path + '.zip.part'
+    try:
+        st = os.stat(path)
+        with zipfile.ZipFile(tmp, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.write(path, os.path.basename(path))
+        os.replace(tmp, path + '.zip')
+        os.utime(path + '.zip', (st.st_atime, st.st_mtime))
+        os.remove(path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def merge_logfiles(paths):
@@ -6153,14 +6138,15 @@ def merge_logfiles(paths):
             writer = csv.writer(out)
             gens, header = [], None
             for p in ordered:
-                f = stack.enter_context(open(p, 'r', encoding='UTF-8', newline=''))
-                hdr, g = rows_of(f)
-                if hdr is None:
-                    continue
-                if header is None:
-                    header = hdr
-                    writer.writerow(hdr)
-                gens.append(g)
+                for _s in log_streams(p):          # a zip may hold several csv
+                    f = stack.enter_context(_s)
+                    hdr, g = rows_of(f)
+                    if hdr is None:
+                        continue
+                    if header is None:
+                        header = hdr
+                        writer.writerow(hdr)
+                    gens.append(g)
             for _key, row in heapq.merge(*gens, key=lambda kr: kr[0]):
                 writer.writerow(row)
     except OSError:
@@ -6218,7 +6204,7 @@ def render_view_file_page(name, content, queue_names):
         '.nextWrap{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:2}'
         '.nextBox{display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px 20px;'
         'background:#141914;color:#c8d6c8;border:1px solid #2e3a2e;border-radius:6px;'
-        'box-shadow:0 4px 24px rgba(0,0,0,.5);font-size:12px;text-align:center}'
+        'box-shadow:0 4px 24px rgba(0,0,0,.5);font-size:13px;text-align:center}'
         '.next{background:#1c231c;border:1px solid #3a5a3a;color:#9fe89f;border-radius:4px;'
         'padding:5px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-block}'
         '.next:hover{background:#263026}'
@@ -6262,19 +6248,33 @@ def log_sources(paths):
     out = set()
     for p in paths:
         try:
-            with open(p, 'r', encoding='utf-8', errors='replace', newline='') as f:
-                rd = csv.reader(f)
-                hdr = next(rd, None)
-                if not hdr or 'SOURCE' not in hdr or 'HOSTNAME' not in hdr:
-                    continue
-                i, h = hdr.index('SOURCE'), hdr.index('HOSTNAME')
-                for r in rd:
-                    if len(r) > i and len(r) > h and r[h] not in ('#COMMENT#', '#INFO#'):
-                        out.add(r[i].strip() or 'local')
+            for _s in log_streams(p):
+                with _s as f:
+                    rd = csv.reader(f)
+                    hdr = next(rd, None)
+                    if not hdr or 'SOURCE' not in hdr or 'HOSTNAME' not in hdr:
+                        continue
+                    i, h = hdr.index('SOURCE'), hdr.index('HOSTNAME')
+                    for r in rd:
+                        if len(r) > i and len(r) > h and r[h] not in ('#COMMENT#', '#INFO#'):
+                            out.add(r[i].strip() or 'local')
         except OSError:
             pass
     return sorted(out, key=lambda x: (x != 'local', x))
 
+
+_report_phase     = ''    # GENERATE REPORT: step before epinga.py reports its own progress
+_report_prog_path = ''    # epinga.py --progress-file of the running report
+
+def report_progress():
+    """{pct, eta, phase} of the running report for the browser: what epinga.py wrote to its
+    progress file, else just the current step (merging files / starting analysis)."""
+    try:
+        with open(_report_prog_path, 'r', encoding='utf-8') as fh:
+            d = json.load(fh)
+        return {'pct': d.get('pct'), 'eta': d.get('eta'), 'phase': d.get('phase') or ''}
+    except (OSError, ValueError, TypeError):
+        return {'pct': None, 'eta': None, 'phase': _report_phase}
 
 def generate_epinga_report(logpaths, sources=None, workdir=None):
     """Run epinga.py against one or more logfiles and produce an HTML report -
@@ -6300,15 +6300,23 @@ def generate_epinga_report(logpaths, sources=None, workdir=None):
         return None, 'epinga.py not found next to eping.py or in PATH'
     epinga_path = os.path.abspath(epinga_path)
     merged_tmp = None
-    if len(logpaths) > 1:
+    global _report_phase, _report_prog_path
+    prog_path = os.path.join(tempfile.gettempdir(), 'eping-progress-%d-%d.json' % (os.getpid(), int(time.time() * 1000)))
+    _report_prog_path = prog_path
+    _report_phase = 'starting'
+    if len(logpaths) > 1 or is_zip_log(logpaths[0]):   # zipped logs are unpacked into a temp csv
+        _report_phase = 'merging files'
         merged_tmp = merge_logfiles(logpaths)
         if not merged_tmp:
-            return None, 'failed to merge selected logfiles'
+            return None, 'failed to read / merge the selected logfiles'
         analyse_path = merged_tmp
-        report_base  = os.path.splitext(min(logpaths, key=os.path.getmtime))[0] + '_merged'
+        if len(logpaths) > 1:
+            report_base = log_base(min(logpaths, key=os.path.getmtime)) + '_merged'
+        else:
+            report_base = log_base(logpaths[0])
     else:
         analyse_path = logpaths[0]
-        report_base  = os.path.splitext(analyse_path)[0]
+        report_base  = log_base(analyse_path)
     # never overwrite a previous report for this logfile - suffix -1, -2, ...
     report_path = report_base + '_report.html'
     suffix = 1
@@ -6319,8 +6327,10 @@ def generate_epinga_report(logpaths, sources=None, workdir=None):
         src_args = []
         for _s in (sources or []):
             src_args += ['--source', _s]
+        _report_phase = 'starting analysis'
         proc = subprocess.run([sys.executable, epinga_path, '-f', analyse_path, '-q',
-                               '--html', report_path, '--no-version-check', '--no-open'] + src_args,
+                               '--html', report_path, '--no-version-check', '--no-open',
+                               '--progress-file', prog_path] + src_args,
                               env=dict(os.environ, PYTHONIOENCODING='utf-8'),
                               stdin=subprocess.DEVNULL, cwd=workdir,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -6328,11 +6338,14 @@ def generate_epinga_report(logpaths, sources=None, workdir=None):
     except Exception as e:
         return None, str(e)
     finally:
-        if merged_tmp:
-            try:
-                os.remove(merged_tmp)
-            except OSError:
-                pass
+        for _tmp in (merged_tmp, prog_path, prog_path + '.tmp'):
+            if _tmp:
+                try:
+                    os.remove(_tmp)
+                except OSError:
+                    pass
+        _report_prog_path = ''
+        _report_phase = ''
     if not os.path.exists(report_path) or os.path.getsize(report_path) == 0:
         err = (proc.stderr or '').strip().splitlines()
         return None, ('epinga.py did not produce a report'
@@ -6442,13 +6455,13 @@ def sanitize_hostfile_save_name(name, as_csv=False):
     return name if safe_cwd_filename(name, ('.txt', '.csv')) else None
 
 
-def resolve_save_target(args, typed, shown_hosts, force_txt=False):
+def resolve_save_target(args, typed, shown_hosts, force_txt=False, force_csv=False):
     """(target path or None, as_csv) for SAVE HOSTS FILE ON SERVER. A typed name
     always saves as that (possibly new) file, even with a hostfile already active;
     blank overwrites the active hostfile, or falls back to the default name if none
     is active. as_csv: the shown hosts carry inventory values - written as .csv, unless
     force_txt (hosts only, no inventory: a .csv name becomes .txt)."""
-    as_csv = hosts_have_inventory(shown_hosts) and not force_txt
+    as_csv = force_csv or (hosts_have_inventory(shown_hosts) and not force_txt)
     typed  = (typed or '').strip()
     if typed:
         target = sanitize_hostfile_save_name(typed, as_csv)
@@ -6567,8 +6580,11 @@ def save_hosts_file(path, hosts, opt_text=''):
         return False
 
 
-# SAVE HOSTS FILE variants: '_noopt' = without the opt: lines, '_txt' = hosts only (.txt)
-SAVE_HOSTS_CMDS = ('save_hosts_file', 'save_hosts_noopt', 'save_hosts_txt', 'save_hosts_txt_noopt')
+# SAVE HOSTS variants: '_noopt' = without the opt: lines, '_txt'/'_csv' = forced format, '_all' = all hosts
+SAVE_HOSTS_CMDS = tuple(b + n + a for b in ('save_hosts', 'save_hosts_file', 'save_hosts_csv', 'save_hosts_txt')
+                        for n in ('', '_noopt') for a in ('', '_all'))
+# '_csv'/'_txt' force the format (bare/'_file': .csv only if the hosts carry inventory values),
+# '_all' = the full reference list instead of the shown hosts
 WEB_COMMANDS_MAX = 1000   # queued browser commands before the server answers 429
 REPORT_MAX_FILES = 25     # GENERATE REPORT: max *.csv files mergeable into one report
 
@@ -6641,7 +6657,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                                  compression=ctype, compresslevel=6 if compress else None) as zf:
                 for path, arcname in files:
                     zi = zipfile.ZipInfo(arcname, date_time=time.localtime()[:6])
-                    zi.compress_type = ctype
+                    zi.compress_type = zipfile.ZIP_STORED if is_zip_log(path) else ctype
                     with zf.open(zi, mode='w') as zdst, open(path, 'rb') as src:
                         while True:
                             chunk = src.read(1024 * 1024)
@@ -6714,6 +6730,9 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             # re-rendered every second (that kept the browser busy for seconds per
             # poll and delayed every click: sorting, view switch, ...)
             snapshot['rows_seq'] = rows_seq
+            _rep = snapshot.get('report')
+            if isinstance(_rep, dict) and _rep.get('status') == 'running':
+                snapshot['report'] = dict(_rep, **report_progress())    # progress bar / remaining time
             if client_rows_seq == rows_seq:
                 snapshot.pop('rows', None)
             # host_list_shown/host_list_all are two full copies of every host name,
@@ -6774,7 +6793,8 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             _q = urllib.parse.parse_qs(self.path.partition('?')[2])
             _noopt = _q.get('opts', ['1'])[0] == '0'      # opts=0: no opt: lines
             _txt   = _q.get('txt', ['0'])[0] == '1'       # txt=1: hosts only, no inventory
-            body, is_csv = hosts_file_text(hosts, False if _txt else None,
+            _fmt   = _q.get('fmt', [''])[0]                # fmt=csv|txt forces the format
+            body, is_csv = hosts_file_text(hosts, False if (_txt or _fmt == 'txt') else (True if _fmt == 'csv' else None),
                                            '' if _noopt else opt_lines_text(_OPT_ARGS, _o, _am, _lg))
             tag   = 'shown' if key == 'host_list_shown' else 'all'
             fname = ('eping-hosts_' + tag + '_'
@@ -6821,7 +6841,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                     self._respond(404, 'text/plain; charset=utf-8', 'file not readable: ' + name)
                     return
                 files.append((name, name))
-            if nozip and len(files) == 1:
+            if len(files) == 1 and (nozip or is_zip_log(files[0][0])):   # an already zipped log is not zipped again
                 self._stream_file(files[0][0])
                 return
             if len(files) == 1:
@@ -6846,14 +6866,20 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 self._respond(404, 'text/plain; charset=utf-8', 'file not found: ' + name)
                 return
             try:
-                if os.path.getsize(name) > VIEW_FILE_MAX_BYTES:
+                if is_zip_log(name):
+                    with zipfile.ZipFile(name) as _zf:
+                        _m = zip_log_member(_zf)
+                        _size = _zf.getinfo(_m).file_size if _m else 0
+                else:
+                    _size = os.path.getsize(name)
+                if _size > VIEW_FILE_MAX_BYTES:
                     self._respond(413, 'text/plain; charset=utf-8',
                                   'file too large to view inline (max '
                                   + str(VIEW_FILE_MAX_BYTES // (1024 * 1024)) + ' MB) - use DOWNLOAD instead')
                     return
-                with open(name, 'r', encoding='utf-8', errors='replace') as f:
+                with (open_log_text(name, newline=None) if is_zip_log(name) else open(name, 'r', encoding='utf-8', errors='replace')) as f:
                     content = f.read()
-            except OSError as e:
+            except (OSError, zipfile.BadZipFile) as e:
                 self._respond(404, 'text/plain; charset=utf-8', 'file not readable: ' + str(e))
                 return
             self._respond(200, 'text/html; charset=utf-8', render_view_file_page(name, content, queue))
@@ -7021,9 +7047,9 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             qs      = urllib.parse.urlsplit(self.path).query
             qparams = urllib.parse.parse_qs(qs)
             name    = (qparams.get('name') or [''])[0]
-            if not safe_cwd_filename(name, ('.txt', '.csv')):
+            if not safe_cwd_filename(name, ('.txt', '.csv', '.zip')):
                 self._respond(400, 'application/json; charset=utf-8',
-                              json.dumps({'ok': False, 'error': 'invalid filename - must be *.txt or *.csv'}))
+                              json.dumps({'ok': False, 'error': 'invalid filename - must be *.txt, *.csv or *.zip'}))
                 return
             raw = self._read_body(WEB_MAX_UPLOAD)
             if raw is None:
@@ -7093,12 +7119,15 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             names = [str(n)[:256] for n in names[:REPORT_MAX_FILES]] if isinstance(names, list) else []
             paths = []
             for n in names:
-                if not safe_cwd_filename(n, ('.csv',)) or not os.path.isfile(n):
+                if not safe_cwd_filename(n, LOG_EXTS) or not os.path.isfile(n):
                     self._respond(400, 'application/json; charset=utf-8',
                                   json.dumps({'ok': False, 'error': 'invalid filename'}))
                     return
                 paths.append(n)
-            if not paths:
+            if not paths and isinstance(data, dict) and data.get('upload'):
+                with _report_upload_lock:
+                    paths = [p for p in _report_upload_files if os.path.isfile(p)]
+            elif not paths:
                 with web_lock:
                     act = web_state.get('logfile') or ''
                 paths = [act] if act and os.path.isfile(act) else []
@@ -7179,7 +7208,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             elif names:
                 target_paths = []
                 for name in names:
-                    if not safe_cwd_filename(name, ('.csv',)):
+                    if not safe_cwd_filename(name, LOG_EXTS):
                         self._respond(400, 'application/json; charset=utf-8',
                                       json.dumps({'ok': False, 'error': 'invalid filename'}))
                         return
@@ -8028,7 +8057,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     else:
                         message = 'failed to start logging'
                 else:
-                    if action == 'y':
+                    if action == 'stop':
+                        args.disable_logging = False   # False means 'logging disabled' (see -dl)
+                        message = 'logging stopped: ' + logfile_file_name
+                    elif action == 'y':
                         if reset_logfile(logfile_file_name):
                             message = 'logging reset - ' + logfile_file_name + ' cleared'
                             write_log_info(args.disable_logging, logfile_file_name,
@@ -8062,8 +8094,9 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # blank overwrites the active hostfile, or falls back to the
                 # default name if none is active (sanitize_hostfile_save_name())
                 with web_lock:
-                    shown_now = list(web_state.get('host_list_shown') or [])
-                target, _as_csv = resolve_save_target(args, value, shown_now, '_txt' in cmd)
+                    shown_now = list(web_state.get('host_list_all' if cmd.endswith('_all')
+                                                   else 'host_list_shown') or [])
+                target, _as_csv = resolve_save_target(args, value, shown_now, '_txt' in cmd, '_csv' in cmd)
                 if target is None:
                     message = 'invalid file name - hosts file not saved'
                 else:
@@ -8399,6 +8432,7 @@ if __name__=='__main__':
 
     # adding optional argument
     parser.add_argument('-f', '--hostfile', default=default_hostfile, dest='hostfile', help="hosts filename, one or more, comma and/or space separated, e.g. hosts1.txt,hosts2.txt or \"hosts1.txt hosts2.txt\"" )
+    parser.add_argument('-wd', '--workdir', default='', dest='workdir', metavar='DIR', help="working directory for hosts file, logs and reports (created if missing, ~ is expanded; default: current directory). Not read from 'opt:' lines")
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
@@ -8418,6 +8452,7 @@ if __name__=='__main__':
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
     parser.add_argument('-lms', '--log_max_size', default='0', dest='log_max_size', help="max CSV log file size in MB before rotating to a new file, range " + str(LOG_MAX_SIZE_MIN) + "-" + str(LOG_MAX_SIZE_MAX) + " (default: 0 = no limit)")
+    parser.add_argument('-lnz', '--log_no_zip', action="store_true", dest='log_no_zip', help="do not zip logfiles finished by size rotation (default: zipped to <name>.csv.zip in the background)")
     parser.add_argument('-lmf', '--log_max_files', default='0', dest='log_max_files', help="max number of eping-log_*.csv files to keep, oldest deleted first once exceeded, range 0-" + str(LOG_MAX_FILES_MAX) + " (default: 0 = unlimited)")
     family_group = parser.add_mutually_exclusive_group()
     family_group.add_argument('-4', '--force_ipv4', action="store_true", dest='force_ipv4', help="prefer IPv4 (A records); falls back to IPv6 if a name has no A record (default preference)")
@@ -8450,6 +8485,9 @@ if __name__=='__main__':
     # to argv, so real command-line flags still win on conflict (argparse keeps the
     # last occurrence of a flag). Only the initial -f load is scanned this way - [F]
     # ADD FILE and the web GUI upload only ever add hosts, never options.
+    _wd_pre, _ = parser.parse_known_args()
+    if _wd_pre.workdir:
+        sys.argv += apply_workdir(_wd_pre)
     try:
         _pre_args, _ = parser.parse_known_args()
         if not _pre_args.disable_hostfile:
@@ -8469,6 +8507,7 @@ if __name__=='__main__':
     _ARG_DEFAULTS = vars(parser.parse_args([]))
     args = parser.parse_args()
     _OPT_ARGS = args
+    LOG_ZIP_ROTATED = not args.log_no_zip
     if curses is None:
         if args.web_view or args.web_view_control:
             error_handler("ERROR: -wv/-wvc need curses (not available here) - use -web")
@@ -10089,6 +10128,10 @@ if __name__=='__main__':
                 else:
                     notice('FAILED TO START LOGGING', 3)
                     message = 'failed to start logging'
+            elif action == 'stop':
+                args.disable_logging = False   # False means 'logging disabled' (see -dl)
+                notice('LOGGING STOPPED: ' + logfile_file_name + ' KEPT', 2)
+                message = 'logging stopped: ' + logfile_file_name
             elif action == 'y':
                 if reset_logfile(logfile_file_name):
                     notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
@@ -10128,8 +10171,9 @@ if __name__=='__main__':
             # active hostfile, or falls back to the default name if none is
             # active (sanitize_hostfile_save_name())
             with web_lock:
-                shown_now = list(web_state.get('host_list_shown') or [])
-            target, _as_csv = resolve_save_target(args, bval, shown_now, '_txt' in bcmd)
+                shown_now = list(web_state.get('host_list_all' if bcmd.endswith('_all')
+                                               else 'host_list_shown') or [])
+            target, _as_csv = resolve_save_target(args, bval, shown_now, '_txt' in bcmd, '_csv' in bcmd)
             if target is None:
                 notice('INVALID FILE NAME - HOSTS FILE NOT SAVED', 3)
                 message = 'invalid file name - hosts file not saved'
@@ -10496,9 +10540,9 @@ if __name__=='__main__':
         sm = SORT_MODES[sort_mode]
         # order: U, M, A, D, F, O, T, S, Z, C, P, I, G, R, E - grouped by how often
         # each is used, rather than the historical add-order
-        l_full  = ' [L]=RESET LOGGING ' if args.disable_logging else ' [L]=START LOG '
-        l_short = ' [L]=RESET LOG '     if args.disable_logging else ' [L]=START LOG '
-        l_tiny  = ' [L]RSTLOG '         if args.disable_logging else ' [L]STARTLOG '
+        l_full  = ' [L]=LOGGING ' if args.disable_logging else ' [L]=START LOG '
+        l_short = ' [L]=LOGGING ' if args.disable_logging else ' [L]=START LOG '
+        l_tiny  = ' [L]LOG '      if args.disable_logging else ' [L]STARTLOG '
         keys_full  = [' [U]=' + fm[0] + ' ', ' [M]=DISPLAY FILTER ', ' [V]=ADV FILTER ', ' [A]=ADD ', ' [D]=DELETE ', ' [F]=ADD FILE ',
                       ' [O]=SORT ' + sm[0] + ' ', ' [T]=COMMENT ', ' [S]=SET REFERENCE ', ' [Z]=ZERO CHANGES ',
                       ' [C]=CLEAR ALL ', ' [P]=ADDR MODE ', ' [X]=ADV OPTIONS ', ' [J]=JUMPHOST ',
@@ -10926,10 +10970,14 @@ if __name__=='__main__':
                 else:
                     notice('FAILED TO START LOGGING', 3)
             else:
-                answer = key_confirm_dialog(' RESET LOGGING ',
+                answer = key_confirm_dialog(' LOGGING ',
                     ['[Y] clear this file   [N] start a fresh file (old kept)',
-                     '[ESC]/[ENTER] cancel'], ('y', 'n'))
-                if answer == 'y':
+                     '[S] stop logging (file kept)',
+                     '[ESC]/[ENTER] cancel'], ('y', 'n', 's'))
+                if answer == 's':
+                    args.disable_logging = False   # False means 'logging disabled' (see -dl)
+                    notice('LOGGING STOPPED: ' + logfile_file_name + ' KEPT', 2)
+                elif answer == 'y':
                     if reset_logfile(logfile_file_name):
                         notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
                         write_log_info(args.disable_logging, logfile_file_name,

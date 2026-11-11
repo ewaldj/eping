@@ -1,4 +1,4 @@
-# eping.py 4.12
+# eping.py 4.29
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -36,7 +36,7 @@ Details: [Windows_Version](https://github.com/ewaldj/eping/tree/main/Windows_Ver
 - Update: `eping.exe` checks `eversions` at start and every 6 hours; an Update button replaces `eping.py` /
   `epinga.py`, or the whole package if the `eping-windows` line in `eversions` is newer.
 - No `-wv`/`-wvc` on Windows; log file names use `-` instead of `:`.
-- Extra options: put them in `eping-args.txt` next to `eping.exe`. Details: `README-WINDOWS.txt` in the zip.
+- Extra options: CLI options field or `eping-args.txt` in the working folder. Working folder: `<home>/eping` (`%USERPROFILE%\eping` on Windows) - hosts file, logs, reports, `eping-console.log`, `eping-args.txt` and `eping-launcher.cfg` live there, so the program folder needs no write access. Change it with the *Working dir* field (paste a path, Enter confirms) or the *Change...* button (folder dialog); applied with Start / Restart, or with `-wd DIR` in the CLI options field (wins over the button) (hosts file, logs, reports and console log then use DIR). An `eping-args.txt` / `eping-launcher.cfg` found next to the program (older versions) is read until the first save; copy an existing `eping-hosts.txt` to the working folder once. Details: `README-WINDOWS.txt` in the zip.
 
 ## macOS
 
@@ -120,7 +120,7 @@ flag typed on the command line wins over the same flag from a file. Only applies
 the initial `-f` read at startup — `F`/ADD FILE (CLI) and ADD HOSTS FILE (web)
 never parse `opt:` lines, they're just text.
 
-`opt:` lines also work at the top of an inventory `.csv`. SAVE HOSTS FILE and DOWNLOAD ALL/ACTIVE HOSTS write every option that differs from the default there (start-up flags and live ADV OPTIONS changes; not `-f -df -n -r -o -up -setref -gn -cl`).
+`opt:` lines also work at the top of an inventory `.csv`. SAVE HOSTS writes every option that differs from the default there (start-up flags and live ADV OPTIONS changes; not `-f -df -n -r -o -up -setref -gn -cl`).
 
 The default `eping-hosts.txt`: sample hosts, this section, then every CLI option as a
 commented-out `opt:` line with its default (remove `# ` to activate).
@@ -148,8 +148,8 @@ named `*.txt` are never treated as CSV - they keep the plain host file format ab
   only kept there as information.
 - **Filters**: `M` matches the inventory values as text, `V` / ADV FILTER selects them
   (see *ADV FILTER*).
-- **Save**: if the displayed hosts carry inventory values, `SAVE HOSTS FILE` writes an
-  inventory `.csv` (see *Web GUI*); plain `.txt` hosts are saved as `.txt`.
+- **Save**: if the displayed hosts carry inventory values, `SAVE HOSTS` offers an
+  inventory `.csv` (default for such hosts, see *Web GUI*) or a plain `.txt`.
 
 Example (`;` delimited, extra columns are ignored):
 
@@ -232,7 +232,7 @@ Single self-contained page, no external resources.
 - Column headers sort the list (IPv4-aware).
 - Toolbar, two rows (wraps if narrow):
   - Row 1: view select (9 views), sort order select, SET REFERENCE, ZERO CHANGES,
-    CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, RESET LOG, FILE OPERATIONS
+    CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, LOGGING, FILE OPERATIONS
     select, EXIT, font size.
   - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), ADD/DEL LIST, comment
     field (COMMENT), GENERATE REPORT select.
@@ -245,19 +245,13 @@ Single self-contained page, no external resources.
   |---|---|
   | ADD HOSTS FILE FROM SERVER | picks one or more `.txt` files or inventory `.csv` files already on the server, adds their hosts; a `.csv` without the inventory header, e.g. an eping log, is refused |
   | ADD HOSTS FILE FROM CLIENT | dialog with a file picker (`.txt`/`.csv`; works in Safari), adds the hosts; a file can also be dropped anywhere on the page |
-  | SAVE HOSTS FILE ON SERVER | confirmation, then saves the currently displayed hosts; blank name overwrites the active `-f` hostfile (first one, if eping.py was started with one) or, with none active, the default `eping-hosts.txt`; a typed name always saves as that new file instead, `.txt` appended once, active hostfile left untouched. If the displayed hosts carry inventory values (CSV import) an inventory `.csv` is written instead (`;` delimited, columns as in *Inventory CSV import*); a `.txt` name or hostfile then becomes `.csv`, the default is `eping-hosts.csv`. The options that differ from the default are written first as `opt:` lines (see *Host file format*); for a `.csv` the checkboxes `include options (opt: lines)` (default on) and `save as .txt (hosts only, no inventory)` (default off) are offered |
-  | UPLOAD FILE TO SERVER | picks a local `.txt`/`.csv`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/... |
-  | DOWNLOAD ALL HOSTS | full reference list: inventory `.csv` if the hosts carry inventory values, else `.txt`; non-default options first as `opt:` lines (`.csv`: checkboxes `include options`, default on, and `save as .txt`, default off) |
-  | DOWNLOAD ACTIVE HOSTS | currently displayed hosts (view/address mode/filter applied), same format and options as DOWNLOAD ALL HOSTS |
-  | DOWNLOAD ACTIVE LOGFILE | active CSV log, zipped; disabled while logging off |
-  | DOWNLOAD SELECTED FILES | picker: every `.csv`/`.txt`/`.html` in the working dir, table (name/size/date), extension filter, "select all", "no compression" checkbox (single-file selection only); multi-select bundles into one ZIP |
-  | DELETE FILES FROM SERVER | same picker as DOWNLOAD SELECTED FILES, red DELETE button, confirms with file count; active logfile can't be deleted |
-  | VIEW FILE FROM SERVER | picker: every `.csv`/`.txt` in the working dir, table (name/size/date), "select all"; opens each picked file read-only, raw content, COPY/DOWNLOAD buttons - see *VIEW FILE FROM SERVER* below |
+  | SAVE HOSTS | one dialog: `ALL HOSTS` (default, full reference list) or `SHOWN HOSTS` (current view/address mode/filter); `ON SERVER` or `DOWNLOAD TO THIS COMPUTER`; format `CSV` (inventory `;` columns, preselected) or `TXT` (one host per line) is offered only if the list carries inventory values, otherwise `TXT` is used without asking; checkbox `include options (opt: lines)` (default on). On the server a blank name overwrites the active `-f` hostfile (first one; extension follows the format) or, with none active, writes `eping-hosts.csv`/`.txt`; a typed name saves as that new file, active hostfile untouched |
+  | SERVER OPERATIONS | one dialog with a file table (every `.csv`/`.txt`/`.html`/`.zip` in the working dir; name/size/date, sortable, extension filter, "select all") and the buttons `DOWNLOAD` (more than one file = one ZIP; "no compression" checkbox for a single file), `VIEW` (only `.txt`/`.csv`, read-only, raw content, COPY/DOWNLOAD buttons - see *VIEW (SERVER OPERATIONS)* below), `DELETE` (red, confirms with file count, never the active logfile) and `UPLOAD` (picks a local `.txt`/`.csv`/`.zip`, saves as-is server-side, no host parsing; never overwrites, appends `-1`/`-2`/...) |
 - Keyboard shortcuts (no modifier, only while no text field has focus; own quick
   variants, not the CLI's picker keys of the same letter): `U` cycles the original 3
   views (ALL HOSTS → CURRENTLY-UP → UP+FLAPPING → ALL HOSTS), the other 6 need the
-  dropdown; `O` cycles all 5 sort orders one at a time; `P`/`I` toggle PREFER HOSTNAME /
-  SWITCH TO IP ONLY directly, the address mode select reaches all 4 modes; `G`/`S`/`Z`/
+  dropdown; `O` cycles all 5 sort orders one at a time; `P`/`I` toggle DEDUP: KEEP HOSTNAME /
+  RESOLVE ALL TO IP directly, the address mode select reaches all 4 modes; `G`/`S`/`Z`/
   `C`/`L`/`E` click the matching button (`E`/`C`/`L` confirm); `A`/`D` focus host field;
   `M`/`T` focus their field; `V` opens ADV FILTER; `F` opens the ADD HOSTS FILE FROM CLIENT picker; `R` forces a status refresh;
   `+`/`−` font size (works while typing). No keyboard shortcut for `X`/ADV OPTIONS or
@@ -369,7 +363,7 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | POST | `/api/command` | `{"cmd":"...","value":"..."}` | control (see cmd list below) |
 | POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection (same format as `adv_filter`) |
 | POST | `/api/upload` | host list, text | add hosts |
-| POST | `/api/log_sources` | `{"names":[...]}` | SOURCE values of the named logfiles (empty = active logfile), for SELECT JUMPHOST |
+| POST | `/api/log_sources` | `{"names":[...],"upload":false}` | SOURCE values of the named logfiles (empty = active logfile; `upload:true` = files stored by `/api/reportupload`), for the jump host dialog of GENERATE REPORT |
 | POST | `/api/jumphost` | `{"action":"info|test|trust|connect|local","host":...,"port":...,"user":...,"secret":...,"hostkey":"ask|accept-new|off","key":...}` | JUMPHOST window (see *SSH source (JUMPHOST)*) |
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
@@ -381,8 +375,8 @@ value: `key=value`. `reset_log` value: logging off - optional custom file name (
 auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
 custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
 JSON body field `values`: `[...]` to merge and analyse multiple `.csv` files as one
-(max 25); optional body field `sources`: `[...]` restricts the analysis to these SOURCE values. `save_hosts_file` value: optional target file name (blank
-= active `-f` hostfile, or `eping-hosts.txt` if none).
+(max 25); optional body field `sources`: `[...]` restricts the analysis to these SOURCE values. `save_hosts_csv`/`save_hosts_txt` (+ `_noopt`, + `_all` for all hosts) value: optional target file name (blank
+= active `-f` hostfile, or `eping-hosts.csv`/`.txt` if none); `save_hosts_file` = auto format.
 
 `-wv` answers `403` to `POST /api/command`/`/api/upload`; `-wvc`/`-web` allow both. No
 authentication. Default bind `0.0.0.0` — use `-bind 127.0.0.1` outside trusted networks.
@@ -411,6 +405,11 @@ removes pacing (needs fping's install privileges), one hard burst.
 
 ## Options
 
+### Working directory
+`-wd DIR` · hosts file, logs and reports live in DIR (created if missing, `~` expanded; default: current directory).
+Relative `-f` / `-sshkey` paths stay relative to the invocation directory. Not read from `opt:` lines. The macOS / Windows
+launchers pass `-wd <home>/eping` by default; change it with `-wd DIR` in the launcher's CLI options field.
+
 ### Host selection
 `-f` hostfile(s) (comma/space separated) · `-df` disable hostfile · `-n` CIDR (comma
 separated) · `-r` IP range (comma separated, shortened end)
@@ -432,7 +431,7 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-fs` | 0 – 50 | 10 | every Nth round: full sweep (`0` = never) |
 | `-dns` | 0 – 3600 | 300 | hostname cache TTL (s, `0` off) |
 | `-4` / `-6` | — | auto | prefer IPv4/IPv6, mutually exclusive |
-| `-ph` | — | off | start with PREFER HOSTNAMES |
+| `-ph` | — | off | start with DEDUP: KEEP HOSTNAME |
 | `-ipo` | — | off | start with IP ONLY |
 | `-gn` | — | off | GET NAMES once at startup |
 | `-ncs` | — | off | skip `--check-source` |
@@ -457,6 +456,7 @@ Hard-enforced at startup and live via ADV OPTIONS (`-web` only), same bounds.
 | `-du` | — | — | disable online version check |
 | `-lms` | 0, 10 – 2500 | 0 | max CSV log size (MB) before rotating; `0` = no rotation |
 | `-lmf` | 0 – 500 | 0 | max `eping-log_*.csv` files kept, oldest deleted first; `0` = unlimited |
+| `-lnz` | — | off | do not zip logfiles finished by size rotation (default: zipped in the background) |
 | `-web` | — | off | web GUI instead of CLI |
 | `-wv` | — | off | CLI + read-only web view |
 | `-port` | — | 8080 | http port |
@@ -482,6 +482,12 @@ original timestamp with an incrementing `-1`/`-2`/... suffix
 (`eping-log_<original-timestamp>-N.csv`); starting a new file manually (`RESET
 LOGGING`/`L`) always gets the current time instead and begins a fresh chain.
 
+By default a finished (rotated) file is zipped in the background to `eping-log_<ts>-N.csv.zip` (one csv inside, original
+timestamp kept; the csv is removed only after the zip is complete); `-lnz` keeps plain csv. A `*.zip` (rotated file, or a
+download - also `name(1).zip`) is handled like a `*.csv` everywhere: CHOOSE FILE / VIEW FILE / DELETE lists, UPLOAD FILE TO
+SERVER / UPLOAD FROM CLIENT, GENERATE REPORT (a zip with several csv, e.g. a multi-file download, is read completely and
+merged), `-lmf` pruning and `epinga.py -f` (one csv per zip). Downloading a zip sends it as is.
+
 `ZERO CHANGES`/`Z`: resets `NO_OF_CHANGES`/`CHANGE_TIMESTAMP` for the running instance;
 log file keeps everything already written.
 
@@ -489,11 +495,12 @@ log file keeps everything already written.
 in `HOSTNAME`, text in `IP`. No-op with a notice if logging is off. epinga.py detects
 these rows automatically.
 
-`RESET LOGGING`/`L`:
+`LOGGING`/`L` (formerly RESET LOGGING):
 - Logging on: confirmation first (CLI keypress / web modal). `Y` clears all entries,
   restarts logging into the same file. `N` starts a fresh file, old file untouched -
   optional custom name (blank = auto-generated `eping-log_<timestamp>.csv`); a name
-  that already exists is rejected, nothing is created. `ESC`/`ENTER` cancels.
+  that already exists is rejected, nothing is created. `S` (STOP LOGGING) stops logging,
+  file kept; `L` then offers START LOGGING again. `ESC`/`ENTER` cancels.
 - Logging off: same dialog, no clear option - `START LOGGING` starts a fresh file
   right away, same optional custom name.
 
@@ -503,6 +510,9 @@ Run fping on a jump host instead of locally (system `ssh` only). Any Linux host 
 (e.g. a caretaker) will do; it resolves the names itself. Start: `-ssh [USER@]HOST[:PORT]` (+ `-sshkey FILE`, `-sshhk MODE`, `-sshnr`);
 the password or key passphrase is asked on the terminal at startup. At runtime: `J` in the CLI,
 JUMPHOST button in the web GUI (after ADV OPTIONS).
+
+With a working resolver on the jump host (default, see `-sshnr`) the `IP` column of the log holds the address the jump host
+resolved a hostname to - like a local run - so epinga shows `host | IP` for jump host rows as well. Without one it stays the hostname.
 
 ![JUMPHOST window](docs/img/jumphost.png)
 
@@ -572,10 +582,15 @@ running - not just at exit. Web: GENERATE REPORT dropdown, four entries - `ACTIV
 LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
 closes and a footer error is shown), `CHOOSE LOGFILE` picks one or more `.csv` files in
 the working dir - table (name/size/date), "select all" checkbox, nothing preselected;
-up to 25 files per report, checking a 26th is refused. `SELECT JUMPHOST` lists the
-sources (`local` and jump hosts, log column `SOURCE`) found in the active logfile - all checked,
-ENTER = GENERATE; only the periods of the checked sources are calculated (see *Source filter* in the
-epinga.py section). Shown only if the log holds more than one source.
+up to 25 files per report, checking a 26th is refused. If a log holds more than one source (`local` and jump hosts, log column `SOURCE`), a
+selection dialog follows automatically - all checked, ENTER = GENERATE; only the periods of the checked sources are calculated (see *Source filter* in the
+epinga.py section).
+
+All report entries (`ACTIVE LOGFILE`, `CHOOSE LOGFILE`, `UPLOAD FROM CLIENT`) check the selected log(s) first: if they hold more than one
+source (measuring host changed between local and jump hosts, or between jump hosts), a dialog offers to analyse all,
+one or several sources (all checked = default; CANCEL aborts the report). With one source the report starts directly.
+The report tab opens only after this choice; if the browser blocks it (e.g. after a long upload), a REPORT READY dialog with an OPEN REPORT button appears.
+While the report is generated the waiting tab shows a progress bar with the step (merging files / analysing / analysing source N of M / writing report), the percentage and an estimated remaining time (extrapolated from the elapsed time, shown after a few seconds); without a tab the same text is shown in the footer. The percentage covers all passes (the main analysis plus one per source, see *Source switch*).
 
 `UPLOAD FROM CLIENT` picks one or more `.csv` logfiles on the computer running the browser (max 25, 1 GB each);
 they are uploaded to a server temp dir, merged like `CHOOSE LOGFILE` and analysed as one report. Temp files and
@@ -592,10 +607,10 @@ logfile only (needs logging on, non-empty logfile, else a notice is shown); resu
 path/error shown once done. Only one run at a time either way. See *epinga.py* below for
 the report, and *Called from eping.py* under epinga.py for the invocation.
 
-## VIEW FILE FROM SERVER (web gui only)
+## VIEW (SERVER OPERATIONS, web gui only)
 
 Read-only viewer for one or more `.csv`/`.txt` files in the working dir - FILE
-OPERATIONS > VIEW FILE FROM SERVER, table picker (name/size/date), "select all". Each
+OPERATIONS > SERVER OPERATIONS > VIEW, table picker (name/size/date), "select all". Each
 selected file opens in its own tab: raw content, COPY (clipboard) and DOWNLOAD buttons,
 no editing. Selecting more than one file opens the first tab right away; that tab shows
 a centered "N more file(s) selected / OPEN NEXT FILE" box to open the next one, and so
@@ -604,26 +619,26 @@ Max 200MB per file - larger files are refused with a message pointing at DOWNLOA
 instead, and the picker greys those files out, labeled "TOO LARGE", with the current
 limit shown in the modal text.
 
-## Address modes (PREFER HOSTNAME / SWITCH TO IP ONLY / GET NAMES)
+## Address modes (DEDUP: KEEP HOSTNAME / RESOLVE ALL TO IP / GET NAMES)
 
-`PREFER HOSTNAME` (`-ph`): drops a raw-IP host from pinging when another entry resolves
-to the same address. Redundancy check cached `-dns` seconds. `PREFER IP ADDRESS`: the
+`DEDUP: KEEP HOSTNAME` (`-ph`): drops a raw-IP host from pinging when another entry resolves
+to the same address. Redundancy check cached `-dns` seconds. `DEDUP: KEEP IP`: the
 mirror - drops a hostname entry once its resolved address is already covered by a
 raw-IP entry. Both non-destructive, restored by switching to another mode. Starting
 with `-ph` resolves every hostname first (in parallel): the CLI shows a PLEASE WAIT
 box with an elapsed counter meanwhile, the web mode a line in the terminal.
 
-`SWITCH TO IP ONLY` (`-ipo`): resolves every hostname to its address (v4/v6 per
+`RESOLVE ALL TO IP` (`-ipo`): resolves every hostname to its address (v4/v6 per
 `-4`/`-6`, A preferred by default) and renames it in place (history/uptime carry over).
 CLI: a hostname whose address collides with another host is dropped and not restored.
 Web GUI: colliding/unresolvable hosts are hidden (not pinged) while active, restored
 automatically when switching away.
 
 CLI `P` and the web GUI's address mode select/`P` picker reach the same 4 exclusive
-modes: `HOSTNAME & IP` (default, no dedup), `PREFER HOSTNAME`, `PREFER IP ADDRESS`,
-`SWITCH TO IP ONLY`. The web GUI additionally has its own `P`/`I` keyboard shortcuts
-that toggle PREFER HOSTNAME / SWITCH TO IP ONLY directly (see *Web GUI*). Leaving
-`SWITCH TO IP ONLY` restores hostnames before applying the new mode.
+modes: `KEEP ALL (NO DEDUP)` (default), `DEDUP: KEEP HOSTNAME` (formerly PREFER HOSTNAME),
+`DEDUP: KEEP IP` (formerly PREFER IP ADDRESS), `RESOLVE ALL TO IP` (formerly SWITCH TO IP ONLY). The web GUI additionally has its own `P`/`I` keyboard shortcuts
+that toggle DEDUP: KEEP HOSTNAME / RESOLVE ALL TO IP directly (see *Web GUI*). Leaving
+`RESOLVE ALL TO IP` restores hostnames before applying the new mode.
 
 `GET NAMES`/`G` (`-gn`): reverse-DNS every raw IP with no hostname counterpart, renames
 on a PTR match (history/uptime carry over). Stays an IP if: no PTR record, name
@@ -666,7 +681,7 @@ dialog says so.
   No search in the CLI list.
 - **Banner**: while active the CLI banner shows e.g. `ADV Type not in (Firewall, Switch)`.
 - **Reset**: SET REFERENCE and CLEAR ALL turn the filter off. It is not saved
-  with `SAVE HOSTS FILE`.
+  with `SAVE HOSTS`.
 
 ## IPv6
 
@@ -693,7 +708,7 @@ phases: eping's own work (~0.12s on 4109 hosts).
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - `-dr 0` produces flapping hosts in practice — keep the default of 1.
 
-# epinga.py 2.38
+# epinga.py 2.44
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
@@ -705,6 +720,7 @@ always-UP/flapping/always-DOWN/no-DNS buckets.
 ./epinga.py                              # interactive menu - pick a *.csv
 ./epinga.py -f eping-log_2026-09-05.csv  # analyse a specific logfile
 ./epinga.py -f FILE --open               # analyse and open the report
+./epinga.py -f eping-log_...csv.zip      # a zipped logfile (one csv inside) is read directly
 ```
 
 Output: `<base>_report.txt` and `<base>_report.html` (`--html FILE` overrides).
@@ -719,6 +735,8 @@ Output: `<base>_report.txt` and `<base>_report.html` (`--html FILE` overrides).
 | `-e`, `--end YYYY-MM-DD HH:MM:SS` | rows up to this timestamp |
 | `-S`, `--sort {name,flapping,uptime,rtt}` | summary sort order (default `name`) |
 | `--source SOURCE` | only rows of this source - `local` or the jump host label from the log column `SOURCE` (repeatable; see *Source filter*) |
+| `--progress-file FILE` | write the progress (percent, remaining seconds, phase) as JSON to FILE - used by eping.py's GENERATE REPORT |
+| `--no-source-switch` | HTML report: do not embed one dataset per source (no source switch; faster on big multi-source logs) |
 | `--no-detail` | summary only |
 | `--no-changes` | omit state-change list |
 | `--html FILE` | custom HTML filename |
@@ -734,6 +752,14 @@ only the periods of the selected sources are calculated: uptime, up/down time, R
 timeline. Periods of other sources are excluded and shown as a gap in the timeline; a state change that
 happened during such a gap is not counted. Without `--source` everything is combined (as before).
 Logs without a `SOURCE` column are treated as `local`.
+
+**Source switch in the HTML report**: if the (selected) sources are two or more, epinga analyses every source on
+its own as well and embeds these datasets in the same HTML file. A drop-down in the toolbar (`All sources
+(combined)` / `<label>`) switches the whole report - cards, host table, timelines, filters - to that
+source; the choice is kept in the URL (`#src=<label>`), a reload keeps it, sort/filter state is reset on a switch.
+The text report and the terminal output stay combined. Cost: one extra pass over the log per source and a
+correspondingly larger HTML file; `--no-source-switch` turns it off. A saved copy of the report (Download) opens
+on `All sources`.
 
 ![epinga report, source local](docs/img/report-source.png)
 

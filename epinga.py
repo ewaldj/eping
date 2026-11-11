@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.38'
+VERSION = '2.44'
 version = VERSION   # legacy alias
 
 import re
@@ -14,6 +14,7 @@ import os
 import csv
 import sys
 import json
+import time
 import signal
 import argparse
 import datetime
@@ -21,6 +22,7 @@ import ipaddress
 import html as html_lib
 
 import io
+import zipfile
 import urllib.request
 
 # ── colour helpers ────────────────────────────────────────────────────────────
@@ -127,6 +129,34 @@ def fmt_bytes(n):
             return f'{n:.1f} {unit}'
         n /= 1024
     return f'{n:.1f} TB'
+
+# --progress-file: machine-readable progress for eping.py's GENERATE REPORT (web gui)
+_PROG = {'file': '', 'pass': 1, 'passes': 1, 't0': 0.0, 'last': 0.0, 'phase': 'analysing'}
+
+def prog_write(done=0, total=0, phase=None, force=False):
+    """Write {pct, eta, phase, pass, passes} as JSON (atomically, at most every 0.4 s). pct is
+    over all passes (the main analysis plus one per source for the report's source switch),
+    eta (seconds) is extrapolated from the elapsed time and only given once it is meaningful."""
+    f = _PROG['file']
+    if not f:
+        return
+    now = time.time()
+    if not force and now - _PROG['last'] < 0.4:
+        return
+    _PROG['last'] = now
+    if phase:
+        _PROG['phase'] = phase
+    frac    = min(1.0, done / total) if total > 0 else 0.0
+    overall = ((_PROG['pass'] - 1) + frac) / _PROG['passes']
+    el      = now - _PROG['t0']
+    eta     = int(round(el * (1 - overall) / overall)) if (overall >= 0.02 and el >= 2) else None
+    try:
+        with open(f + '.tmp', 'w', encoding='utf-8') as fh:
+            json.dump({'pct': round(overall * 100, 1), 'eta': eta, 'phase': _PROG['phase'],
+                       'pass': _PROG['pass'], 'passes': _PROG['passes']}, fh)
+        os.replace(f + '.tmp', f)
+    except OSError:
+        pass
 
 class Progress:
     def __init__(self, total_bytes, width=40):
@@ -271,12 +301,49 @@ META_LOG_COLS = (('inv_name', 'INV_HOSTNAME'), ('serial', 'SERIAL_NUMBER'), ('mo
                  ('location', 'LOCATION'), ('sysloc', 'SYSLOCATION'), ('type', 'TYPE'),
                  ('comment', 'INV_COMMENT'))
 
+# ── logfile access: plain *.csv or zipped *.csv.zip (one csv member) ──────────
+def is_zip_log(path):
+    return str(path).lower().endswith('.zip')
+
+
+def log_base(path):
+    """File name without .csv / .csv.zip - basis of the report names."""
+    b = os.path.basename(str(path))
+    for ext in ('.csv.zip', '.csv', '.zip'):
+        if b.lower().endswith(ext):
+            return b[:-len(ext)]
+    return os.path.splitext(b)[0]
+
+
+def open_log_bin(path):
+    """(binary stream, uncompressed size) of a plain or zipped logfile; OSError on problems."""
+    if not is_zip_log(path):
+        return open(path, 'rb'), os.path.getsize(path)
+    try:
+        zf = zipfile.ZipFile(path)
+        members = [zi for zi in zf.infolist()
+                   if not zi.filename.endswith('/') and zi.filename.lower().endswith('.csv')]
+        if len(members) > 1:
+            zf.close()
+            raise OSError(os.path.basename(path) + ' holds ' + str(len(members))
+                          + ' csv files - use eping.py GENERATE REPORT (merges them) or unpack it')
+        if members:
+            fh = zf.open(members[0])
+            fh._epinga_zip = zf              # keep the archive open while the member is read
+            return fh, members[0].file_size
+        zf.close()
+    except zipfile.BadZipFile as e:
+        raise OSError(str(e))
+    raise OSError('no csv file inside ' + os.path.basename(path))
+
+
 # ── stream-parse the CSV ──────────────────────────────────────────────────────
 def list_sources(filename):
     """Distinct SOURCE values of a logfile (empty = 'local'); [] if the column is absent."""
     out = set()
     try:
-        with open(filename, 'r', encoding='utf-8', errors='replace', newline='') as fh:
+        raw, _sz = open_log_bin(filename)
+        with raw, io.TextIOWrapper(raw, encoding='utf-8', errors='replace', newline='') as fh:
             rd = csv.reader(fh)
             hdr = next(rd, None)
             if not hdr or 'SOURCE' not in hdr:
@@ -293,10 +360,6 @@ def list_sources(filename):
 
 def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False, source=None):
     source = set(source) if source else None     # selected SOURCE values
-    try:
-        file_size = os.path.getsize(filename)
-    except OSError as e:
-        die(str(e))
 
     hosts      = {}   # hostname -> HostStats
     host_order = []   # insertion order
@@ -305,12 +368,12 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
     rows_read  = 0
     rows_skipped = 0  # malformed/truncated rows (no hostname, no timestamp, no state)
 
-    progress = Progress(file_size) if not quiet else None
-
     try:
-        fh = open(filename, 'rb')
+        fh, file_size = open_log_bin(filename)
     except OSError as e:
         die(str(e))
+
+    progress = Progress(file_size) if not quiet else None
 
     with fh:
         tracker = _ByteTracker(fh)
@@ -405,6 +468,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
 
             if progress and rows_read % 5000 == 0:
                 progress.update(tracker.bytes_read)
+            if _PROG['file'] and rows_read % 2000 == 0:
+                prog_write(tracker.bytes_read, file_size)
 
     if progress:
         progress.update(tracker.bytes_read)
@@ -451,7 +516,8 @@ def print_host(hostname, s, show_changes, comments=None):
             [('change', ts, frm, to) for ts, frm, to in s.changes]
             + [('comment', c['ts'], c['text'], None) for c in relevant_comments]
         )
-        timeline.sort(key=lambda e: e[1] or datetime.datetime.min)
+        # same second: comment first (eping logs its SOURCE SWITCH comments before the rows they cause)
+        timeline.sort(key=lambda e: (e[1] or datetime.datetime.min, 0 if e[0] == 'comment' else 1))
         for kind, ts, a, b in timeline:
             ts_str = ts.strftime(TS_FMT) if ts else '?'
             if kind == 'comment':
@@ -692,7 +758,11 @@ def count_duplicate_hosts(rows):
 
 
 def generate_html(data, out_path):
-    json_data = json.dumps(data, ensure_ascii=False).replace('</script', '<\\/script')
+    # per-source datasets (source switch in the report) are embedded separately from the main data
+    variants  = data.get('variants') or []
+    main_data = {k: v for k, v in data.items() if k != 'variants'}
+    json_data = json.dumps(main_data, ensure_ascii=False).replace('</script', '<\\/script')
+    variants_json = json.dumps(variants, ensure_ascii=False).replace('</script', '<\\/script')
     comments  = data.get('comments') or []
     if comments:
         comment_rows_html = '\n'.join(
@@ -973,10 +1043,10 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     </svg>epinga &nbsp;·&nbsp; Analysis Report<small class="ver">v{VERSION}</small></h1>
     <div class="meta">
       File: <strong>{filename_html}</strong> &nbsp;|&nbsp;
-      {('Source: <strong>' + html_lib.escape(str(data.get('source'))) + '</strong> &nbsp;|&nbsp; ') if data.get('source') else ''}
+      <span id="metaSrc">{('Source: <strong>' + html_lib.escape(str(data.get('source'))) + '</strong> &nbsp;|&nbsp; ') if data.get('source') else ''}</span>
       Generated: {data['generated']} &nbsp;|&nbsp;
-      {data['rows_read']:,} rows &nbsp;|&nbsp;
-      {n_total} hosts &nbsp;|&nbsp;
+      <span id="metaRows">{data['rows_read']:,}</span> rows &nbsp;|&nbsp;
+      <span id="metaHosts">{n_total}</span> hosts &nbsp;|&nbsp;
       <span id="shownHosts">{n_total} shown</span>
     </div>
   </div>
@@ -1072,6 +1142,8 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <option value="ip">Prefer IP address</option>
     <option value="name">Prefer hostname</option>
   </select>
+  <select id="srcSel" onchange="switchSource(this.value)" style="display:none"
+          title="Source of the measurement (local / jump host): every source is analysed on its own - uptime, RTT, changes and timeline"></select>
   <button id="btnResetFilters" onclick="resetFilters()" title="Clear the text filter, the Show selection and all inventory drop-downs">Reset</button>
   <span class="sep" id="sepDownload"></span>
   <button id="btnDownloadHtml" onclick="downloadHtml()" title="Save this report as a standalone .html file">Download</button>
@@ -1182,7 +1254,20 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
 </footer>
 
 <script>
-const RAW = {json_data};
+const MAIN = {json_data};
+const VARIANTS = {variants_json};   // one dataset per SOURCE (only if the log holds several)
+const SRC_SEL = (function() {{
+  const m = location.hash.match(/^#src=(.*)$/);
+  try {{ return m ? decodeURIComponent(m[1]) : ''; }} catch (e) {{ return ''; }}
+}})();
+const RAW = (function() {{
+  const v = VARIANTS.find(x => x.source === SRC_SEL);
+  return v ? Object.assign({{}}, MAIN, v) : MAIN;
+}})();
+function switchSource(v) {{
+  location.hash = v ? '#src=' + encodeURIComponent(v) : '';
+  location.reload();
+}}
 
 // IP-named hosts that are ALSO monitored under a hostname pointing at the same IP -
 // these are the duplicates hidden in 'Hostnames' dedup mode. A raw-IP host with no
@@ -1340,7 +1425,9 @@ function buildDetail(h) {{
   const timeline = [
     ...h.events.map(e => ({{ts: e.ts, kind: 'change', frm: e.frm, to: e.to}})),
     ...relevantComments.map(c => ({{ts: c.ts, kind: 'comment', text: c.text}})),
-  ].sort((a, b) => a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : 0));
+  ].sort((a, b) => a.ts < b.ts ? -1 : (a.ts > b.ts ? 1 : (a.kind === b.kind ? 0 : (a.kind === 'comment' ? -1 : 1))));
+  // same second: the comment first - eping writes SOURCE SWITCH / JUMPHOST comments before the
+  // result rows of the round they cause, so the cause must not be listed after its effect
 
   const eventsHtml = timeline.length === 0
     ? '<span style="color:var(--dim)">no state changes</span>'
@@ -1940,6 +2027,20 @@ const defaultSorted = [...RAW.hosts].sort((a, b) => {{
 // stay empty and the count shows 0 until the user first touches the filter
 CURRENT_FILTERED = defaultSorted;
 document.getElementById('hostlistCount').textContent = defaultSorted.length;
+// header line and source switch follow the selected dataset
+(function() {{
+  document.getElementById('metaSrc').innerHTML = RAW.source
+    ? 'Source: <strong>' + escHtml(RAW.source) + '</strong> &nbsp;|&nbsp; ' : '';
+  document.getElementById('metaRows').textContent  = RAW.rows_read.toLocaleString('en-US');
+  document.getElementById('metaHosts').textContent = RAW.hosts.length;
+  document.getElementById('shownHosts').textContent = defaultSorted.length + ' shown';
+  if (VARIANTS.length) {{
+    const sel = document.getElementById('srcSel');
+    sel.innerHTML = '<option value="">All sources (combined)</option>' + VARIANTS.map(v =>
+      '<option value="' + escHtml(v.source) + '"' + (v.source === SRC_SEL ? ' selected' : '') + '>' + escHtml(v.source) + '</option>').join('');
+    sel.style.display = '';
+  }}
+}})();
 renderTable(defaultSorted);
 initMetaFilters();
 if (META_FILTERS.some(f => document.getElementById('mf_' + f.key).value !== '')) applyFilter();
@@ -2066,6 +2167,10 @@ def build_parser():
                    help='Sort summary table: name | flapping | uptime | rtt  (default: name)')
     p.add_argument('--source',         dest='source', action='append', default=[], metavar='SOURCE',
                    help='Only analyse rows of this SOURCE ("local" or the jump host label, see log column SOURCE;\nrepeatable); uptime, RTT, changes and timeline cover only its periods')
+    p.add_argument('--no-source-switch', dest='no_source_switch', action='store_true',
+                   help='HTML report: do not embed one dataset per SOURCE (no source switch in the report;\nby default every source of a multi-source log is analysed on its own as well)')
+    p.add_argument('--progress-file',  dest='progress_file', default='', metavar='FILE',
+                   help='Write the progress (percent, remaining seconds, phase) as JSON to FILE - used by eping.py')
     p.add_argument('--no-detail',      dest='no_detail', action='store_true',
                    help='Skip per-host detail, show summary only')
     p.add_argument('--no-changes',     dest='no_changes', action='store_true',
@@ -2122,7 +2227,8 @@ def main():
         die('--start must not be later than --end')
 
     try:
-        file_size = os.path.getsize(filename)
+        _fh, file_size = open_log_bin(filename)
+        _fh.close()
     except OSError as e:
         die(str(e))
 
@@ -2154,8 +2260,15 @@ def main():
     if srcs and set(source) == set(srcs):
         source = []                    # all sources selected = no filter
 
+    # source switch in the HTML report: one extra dataset per effective source
+    sw_srcs = []
+    if not args.no_source_switch:
+        _eff = source if source else (srcs if srcs else list_sources(filename))
+        if len(_eff) > 1:
+            sw_srcs = list(_eff)
+
     # ── output paths (always auto-generated) ──
-    base      = os.path.splitext(os.path.basename(filename))[0]
+    base      = log_base(filename)
     html_path = args.html_out if args.html_out else base + '_report.html'
     txt_path  = base + '_report.txt'
 
@@ -2174,6 +2287,9 @@ def main():
     print()
 
     # ── stream & analyse ──
+    if args.progress_file:
+        _PROG.update(file=args.progress_file, passes=1 + len(sw_srcs), t0=time.time(),
+                     phase='analysing all sources' if sw_srcs else 'analysing')
     print('  Analysing…')
     hosts, host_order, rows_read, comments, infos = analyse(
         filename,
@@ -2206,6 +2322,20 @@ def main():
 
     # ── save HTML report ──
     report_data = build_report_data(hosts, host_order, filename, rows_read, base, comments, infos, ', '.join(source))
+    variants = []
+    for _k, _s in enumerate(sw_srcs):
+        print(f'  Analysing source {_s}…')
+        _PROG['pass'] = 2 + _k
+        _PROG['phase'] = f'analysing source {_s} ({_k + 1}/{len(sw_srcs)})'
+        _h, _o, _r, _c, _i = analyse(filename, filter_hosts=filter_hosts, ts_start=ts_start,
+                                     ts_end=ts_end, quiet=args.quiet, source=[_s])
+        if _h:
+            _d = build_report_data(_h, _o, filename, _r, base, None, None, _s)
+            variants.append({k: _d[k] for k in ('source', 'rows_read', 'global_start', 'global_end', 'hosts')})
+    if variants:
+        report_data['variants'] = variants
+    _PROG['pass'] = _PROG['passes']
+    prog_write(1, 1, 'writing report', force=True)
     try:
         generate_html(report_data, html_path)
     except OSError as e:
