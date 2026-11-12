@@ -5,6 +5,18 @@ reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
 
 Written by Ewald Jeitler — <https://www.jeitler.cc>
 
+## Screenshots
+
+Web GUI (`-web`) - 61 demo hosts, mouse-over shows the host details and its state history:
+
+![eping web GUI](docs/img/web-gui.png)
+
+![eping web GUI, host details](docs/img/web-gui-host-details.png)
+
+Terminal (curses) mode:
+
+![eping CLI](docs/img/cli.png)
+
 ## Requirements
 
 - Python 3.6+ (eping.py and epinga.py)
