@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.29'
+VERSION = '4.30'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -3715,6 +3715,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="Display filter: regex">
       <button id="btnMatchFilter" title="apply display filter">SET</button>
       <button id="btnClearFilter" title="clear display filter">CLEAR</button>
+      <span class="sep">&nbsp;|&nbsp;</span>
       <button id="btnAdvFilter" title="ADV FILTER (V): display filter on the inventory fields Model, Location, sysLocation, Type, Comment - only matching hosts are shown, every host keeps being pinged">ADV FILTER</button>
      </span>
      <span class="sep">&nbsp;|&nbsp;</span>
