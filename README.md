@@ -1,4 +1,4 @@
-# eping.py 4.30
+# eping.py 4.31
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -337,7 +337,7 @@ directly, `D` resets the selected option to its default, `R` resets all, ESC/`X`
 | FULL SWEEP | 0 – 50 | `0` = disabled |
 | DNS TTL | 0 – 3600 s | — |
 | TIMEZONE | -24 – +24 h | — |
-| MAX LOG SIZE | 0, 10 – 2500 MB | `0` = no rotation |
+| MAX LOG SIZE | 0, 10 – 2500 MB | default `500`; `0` = no rotation |
 | MAX LOG FILES | 0 – 500 | `0` = unlimited |
 
 Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Output*).
@@ -454,7 +454,7 @@ Hard-enforced at startup and live via ADV OPTIONS (`-web` only), same bounds.
 | `-tz` | -24 – +24 | 0 | timezone offset (h) |
 | `-dg` | — | off | cycle time breakdown |
 | `-du` | — | — | disable online version check |
-| `-lms` | 0, 10 – 2500 | 0 | max CSV log size (MB) before rotating; `0` = no rotation |
+| `-lms` | 0, 10 – 2500 | 500 | max CSV log size (MB) before rotating; `0` = no rotation |
 | `-lmf` | 0 – 500 | 0 | max `eping-log_*.csv` files kept, oldest deleted first; `0` = unlimited |
 | `-lnz` | — | off | do not zip logfiles finished by size rotation (default: zipped in the background) |
 | `-web` | — | off | web GUI instead of CLI |

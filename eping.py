@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.30'
+VERSION = '4.31'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -4308,7 +4308,7 @@ var ADV_OPTIONS_UI = [
     'Hour offset applied to every timestamp shown in the web gui and written to the CSV log',
     'timestamp offset'],
   ['log_max_size',   'MAX LOG SIZE',   'MB',   0,   2500, 50,
-    'Max size of the current CSV log file before rolling over to a new one. 0 = no limit (range 100-2500 when set)',
+    'Max size of the current CSV log file before rolling over to a new one. 0 = no limit (default 500, range 10-2500 when set)',
     'log rotation size'],
   ['log_max_files',  'MAX LOG FILES',  '',     0,   500,  10,
     'Max number of eping-log_*.csv files kept - the oldest is deleted once a rollover exceeds this. 0 = unlimited',
@@ -8452,7 +8452,7 @@ if __name__=='__main__':
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
-    parser.add_argument('-lms', '--log_max_size', default='0', dest='log_max_size', help="max CSV log file size in MB before rotating to a new file, range " + str(LOG_MAX_SIZE_MIN) + "-" + str(LOG_MAX_SIZE_MAX) + " (default: 0 = no limit)")
+    parser.add_argument('-lms', '--log_max_size', default='500', dest='log_max_size', help="max CSV log file size in MB before rotating to a new file, range " + str(LOG_MAX_SIZE_MIN) + "-" + str(LOG_MAX_SIZE_MAX) + " (default: 500, 0 = no limit)")
     parser.add_argument('-lnz', '--log_no_zip', action="store_true", dest='log_no_zip', help="do not zip logfiles finished by size rotation (default: zipped to <name>.csv.zip in the background)")
     parser.add_argument('-lmf', '--log_max_files', default='0', dest='log_max_files', help="max number of eping-log_*.csv files to keep, oldest deleted first once exceeded, range 0-" + str(LOG_MAX_FILES_MAX) + " (default: 0 = unlimited)")
     family_group = parser.add_mutually_exclusive_group()
