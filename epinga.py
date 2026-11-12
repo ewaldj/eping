@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.44'
+VERSION = '2.45'
 version = VERSION   # legacy alias
 
 import re
@@ -248,6 +248,52 @@ class HostStats:
         if state:
             self.current_state = state    # a change during the gap is not ours
 
+    def add_pauses(self, pauses):
+        # STOP..START periods carry no data: draw them as gaps and do not count
+        # them as time in any state. Call after finalise().
+        if not self.first_ts or not self.last_ts:
+            return
+        for a, b in pauses:
+            a = max(a, self.first_ts)
+            b = min(b, self.last_ts)
+            if b <= a:
+                continue
+            pieces = [(a, b)]
+            for g0, g1 in self.gaps:           # source gaps are already excluded
+                nx = []
+                for p0, p1 in pieces:
+                    if g1 <= p0 or g0 >= p1:
+                        nx.append((p0, p1))
+                        continue
+                    if g0 > p0:
+                        nx.append((p0, g0))
+                    if g1 < p1:
+                        nx.append((g1, p1))
+                pieces = nx
+            for p0, p1 in pieces:
+                self._take_time(p0, p1)
+            self.gaps.extend(pieces)
+        self.gaps.sort()
+
+    def _take_time(self, p0, p1):
+        # remove [p0, p1] from the state time buckets, following the state changes
+        state = self.changes[0][1] if self.changes else self.current_state
+        cur = p0
+        for cts, _pv, cv in self.changes:
+            if cts <= p0:
+                state = cv
+                continue
+            if cts >= p1:
+                break
+            self._add_time(state, -(cts - cur))
+            cur, state = cts, cv
+        self._add_time(state, -(p1 - cur))
+        self.gap_total += p1 - p0
+        zero = datetime.timedelta(0)
+        self.time_up    = max(self.time_up, zero)
+        self.time_down  = max(self.time_down, zero)
+        self.time_nodns = max(self.time_nodns, zero)
+
     def _add_time(self, state, delta):
         if state == 'UP':
             self.time_up    += delta
@@ -367,6 +413,8 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
     infos      = []   # [{'ts': datetime, 'text': str}, ...] - from '#INFO#' sentinel rows
     rows_read  = 0
     rows_skipped = 0  # malformed/truncated rows (no hostname, no timestamp, no state)
+    pauses     = []   # [(start, end)] STOP..START periods (CHECK PAUSED / CHECK RESUMED comments)
+    open_pause = None
 
     try:
         fh, file_size = open_log_bin(filename)
@@ -410,11 +458,17 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
                 if ts is None:
                     rows_skipped += 1
                     continue
+                text = field(row, 'IP')
+                if hostname == '#COMMENT#':
+                    if text == 'CHECK PAUSED' and open_pause is None:
+                        open_pause = ts
+                    elif text == 'CHECK RESUMED' and open_pause is not None:
+                        pauses.append((open_pause, ts))
+                        open_pause = None
                 if ts_start and ts < ts_start:
                     continue
                 if ts_end   and ts > ts_end:
                     continue
-                text = field(row, 'IP')
                 if text:
                     (comments if hostname == '#COMMENT#' else infos).append({'ts': ts, 'text': text})
                 continue
@@ -426,6 +480,9 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
             if ts is None:
                 rows_skipped += 1
                 continue
+            if open_pause is not None and ts > open_pause:
+                pauses.append((open_pause, ts))     # eping restarted while paused
+                open_pause = None
             if ts_start and ts < ts_start:
                 continue
             if ts_end   and ts > ts_end:
@@ -475,8 +532,12 @@ def analyse(filename, filter_hosts=None, ts_start=None, ts_end=None, quiet=False
         progress.update(tracker.bytes_read)
         progress.done()
 
+    if open_pause is not None:
+        pauses.append((open_pause, datetime.datetime.max))
     for h in hosts.values():
         h.finalise()
+        if pauses:
+            h.add_pauses(pauses)
 
     comments.sort(key=lambda c: c['ts'])
     infos.sort(key=lambda i: i['ts'])

@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.31'
+VERSION = '4.51'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -43,8 +43,6 @@ TIMEOUT_MAX_MS     = 5000
 RETRIES_MAX        = 5        # fping -re retries per host
 INTERVAL_ARG_MAX   = 250      # -i upper bound; -1 = auto (unset, use --rate), 0 = no pacing
 WAITTIME_MAX       = 600      # -w upper bound (seconds)
-DOWN_SLICES_MAX    = 20
-FULL_SWEEP_MAX     = 50       # 0 = disabled (never sweep)
 DNS_TTL_MAX        = 3600
 DOWNLOAD_FILE_EXTS = ('.csv', '.zip', '.txt', '.html')  # CHOOSE FILE picker - listed types
 VIEW_FILE_EXTS     = ('.csv', '.zip', '.txt')               # VIEW FILE FROM SERVER - listed types
@@ -75,18 +73,7 @@ DNS_PTR_TIMEOUT    = 3.0      # seconds per reverse-DNS lookup for [G] GET NAMES
 # Do NOT lower this to 0. On paper one probe looks safe (a reply is proof of UP, and a
 # host that is already DOWN cannot be wrongly reported DOWN) - but tested against a real
 # /20 it produced flapping hosts that are stable with 1. Two probes stay the default.
-DOWN_RETRIES_DEF   = 1        # -r for hosts already known to be DOWN
-FULL_SWEEP_DEF     = 10       # every Nth run probes everything with full retries (0 = off)
 CONFIRM_DEF        = 2        # consecutive DOWN observations before UP -> DOWN is accepted
-
-# The DOWN group dominates the cycle: measured on a /20, 867 UP hosts needed 1.9s while
-# 3240 DOWN hosts needed 12.4s. Probing only 1/N of the DOWN hosts per round shortens
-# the cycle a lot, so the UP hosts - the interesting ones - refresh much more often.
-# It is a trade, not a free win: measured with 16 UP / 112 DOWN, -ds 4 cut the cycle
-# from 2.9s to 1.2s, but a single DOWN host is then rechecked every 4.9s instead of
-# every 2.9s. Accuracy is untouched - a host that is probed always gets the full
-# treatment, it is only probed less often. -ds 1 restores the old behaviour.
-DOWN_SLICES_DEF    = 4        # DOWN hosts are spread over this many rounds (1 = off)
 
 # --- flapping, view filter and sort order ---
 # A host counts as flapping while its last state change lies inside this window. Only
@@ -174,6 +161,7 @@ import ipaddress
 import subprocess
 import json
 import threading
+import queue
 import datetime
 try:
     import resource
@@ -565,9 +553,13 @@ _remote_help = ''         # 'fping -h' of the jump host (capability probe)
 _source_fail_reason = ''  # set by a failed ssh run during the current round
 _source_down  = False
 _source_alert = ''         # visible error text while the ssh source is down
+DEBUG_EVENTS = False       # -debug: engine / slow round comments in the log
 _source_events = []       # pending comment texts (JUMPHOST OFFLINE / ONLINE, SOURCE SWITCH), written by update_host_state()
 _ssh_pending  = None      # None = no change, False = switch to local, SshCfg = switch to it
 _ssh_lock     = threading.Lock()
+_jr_pf_thread = None      # running jump host name prefetch (see run_ping_round)
+_cli_paused  = False      # STOP button in the curses loop (-wvc); run_web_mode() keeps its own flag
+_switching    = ''         # text shown in the web gui while a source switch is under way
 _ssh_cfgs     = []        # every SshCfg that owns a temp dir (cleaned at exit)
 _jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'accept-new', 'resolve': True}   # form values of the last try (never the secret)
 _jump_hostkeys = {}       # (host, port) -> hashed known_hosts lines offered by TRUST KEY
@@ -839,6 +831,27 @@ def jr_reverse(ips):
 
 _ssh_fam6 = set()     # hostnames tried with fping -6 on the jump host (no resolver there, see below)
 
+def jr_cached_ips(name):
+    """Addresses of name as the jump host resolved them, taken from the cache only (expired
+    entries included, never an ssh call): same pick as resolve_all_ips() - A first, AAAA if
+    there is no A record (swapped with -dns 6). [] if the name is not cached."""
+    with _jr_cache_lock:
+        e = _jr_fwd.get(name)
+    v4, v6 = [], []
+    for a in (e[0] if e else []):
+        try:
+            ip = ipaddress.ip_address(a)
+        except ValueError:
+            continue
+        if ip.version == 4:
+            v4.append(a)
+        elif not ip.ipv4_mapped:
+            v6.append(a)
+    for grp in ((v6, v4) if dns_family == '6' else (v4, v6)):
+        if grp:
+            return sorted(grp, key=lambda a: int(ipaddress.ip_address(a)))
+    return []
+
 def ssh_name_family(name):
     """Address family ('4'/'6') used for the fping run of a hostname on the jump host.
     With a resolver there the names are looked up first (A preferred, AAAA if there is
@@ -848,7 +861,7 @@ def ssh_name_family(name):
     if dns_family in ('4', '6'):
         return dns_family
     if jr_active():
-        ips = resolve_all_ips(name)
+        ips = jr_cached_ips(name)
         if ips:
             return ip_version_str(ips[0]) or '4'
         return '4'
@@ -861,9 +874,12 @@ def fill_jump_ips(rows):
     ssh_name_family(). Names without an answer and NO-DNS rows stay as they are."""
     if not (ssh_target and jr_active()):
         return
+    # Cache only (jr_cached_ips): the names are refreshed in one batch at the start of the next
+    # round (jr_prefetch). A lookup per name here meant one ssh call per name as soon as the
+    # cache entries expired during a long round (1753 names = 5 min).
     for r in rows:
         if r[4] == r[0] and not is_ip_host(r[0]) and 'NO-DNS' not in r[1]:
-            ips = resolve_all_ips(r[0])
+            ips = jr_cached_ips(r[0])
             if ips:
                 r[4] = ips[0]
 
@@ -976,13 +992,22 @@ def ssh_activate(c):
     if old is not None and old is not c:
         old.close()
 
+def switch_finished():
+    """'' while a source switch is still under way, else (once) the done message."""
+    global _switching
+    if _switching and _ssh_pending is None and (_round_checked or _scan_error):
+        _switching = ''
+        return 'switched to %s - done' % SOURCE_LABEL
+    return ''
+
 def ssh_request(c):
     """Queue a source switch (c = SshCfg, or False for local); applied at the next round."""
-    global _ssh_pending
+    global _ssh_pending, _switching
     with _ssh_lock:
         if isinstance(_ssh_pending, SshCfg) and _ssh_pending is not c:
             _ssh_pending.close()
         _ssh_pending = c
+    _switching = ('switching to %s - please wait ...' % ('local fping' if c is False else 'jump host ' + c.label))
 
 def ssh_apply_pending():
     """Start of every round: switch the source if one was requested."""
@@ -1167,12 +1192,13 @@ _dns_lock  = threading.Lock()
 
 dns_family = 'auto'   # '4'=force A only, '6'=force AAAA only, 'auto'=A first, AAAA fallback
 
-def resolve_name(name, ttl):
+def resolve_name(name, ttl, force=False):
     now = time.time()
     with _dns_lock:
         entry = _dns_cache.get(name)
-        if entry and entry[1] > now:
+        if entry and entry[1] > now and not force:
             return entry[0]
+    old_ip = entry[0] if entry else None
     ip = None
     try:
         ips = resolve_all_ips(name)
@@ -1180,7 +1206,11 @@ def resolve_name(name, ttl):
             ip = ips[0]     # deterministic (lowest) pick when a name has several records
     except Exception:
         ip = None
-    base_ttl = ttl if ip else min(ttl, DNS_FAIL_TTL)
+    if not ip and force and old_ip:
+        ip = old_ip                  # background refresh failed: keep the last good address
+        base_ttl = min(ttl, DNS_FAIL_TTL)
+    else:
+        base_ttl = ttl if ip else min(ttl, DNS_FAIL_TTL)
     # jitter the effective TTL (DNS_TTL_JITTER_LO..1.0 x base_ttl) so a large batch
     # of names resolved together (e.g. thousands at startup) doesn't all expire in
     # the same later round - that would force prepare_targets() to re-resolve all
@@ -1190,6 +1220,68 @@ def resolve_name(name, ttl):
     with _dns_lock:
         _dns_cache[name] = (ip, expires_at)
     return ip
+
+# --- background resolver: the ping rounds never wait for DNS. Names are looked up by
+#     worker threads; an expired entry keeps its old address until the new one is there.
+SLOW_ROUND_S = 10.0       # a round longer than this is logged as a comment with its phase times
+DNS_FIRST_WAIT = 2.0     # s a round waits for lookups of never-resolved names (batching)
+_dns_bg = {'wanted': (), 'ttl': 0, 'q': queue.Queue(), 'inflight': set(),
+           'threads': False, 'pending': 0}
+
+
+def _dns_bg_worker():
+    while True:
+        name, ttl = _dns_bg['q'].get()
+        try:
+            resolve_name(name, ttl, force=True)
+        except Exception:
+            pass
+        finally:
+            with _dns_lock:
+                _dns_bg['inflight'].discard(name)
+
+
+def _dns_bg_scan():
+    """Queue every wanted name that has no entry or whose entry expires soon."""
+    now = time.time()
+    ttl = _dns_bg['ttl']
+    margin = min(30.0, 0.2 * ttl)
+    with _dns_lock:
+        for n in _dns_bg['wanted']:
+            if n in _dns_bg['inflight']:
+                continue
+            e = _dns_cache.get(n)
+            if e is None or e[1] - now < (margin if e[0] else 0.0):     # failed names: when expired
+                _dns_bg['inflight'].add(n)
+                _dns_bg['q'].put((n, ttl))
+
+
+def _dns_bg_sched():
+    while True:
+        time.sleep(1.0)
+        try:
+            _dns_bg_scan()
+        except Exception:
+            pass
+
+
+def dns_bg_request(names, ttl):
+    """Declare the names the rounds need; starts the worker threads on first use."""
+    if not _dns_bg['threads']:
+        _dns_bg['threads'] = True
+        for _ in range(DNS_RESOLVERS):
+            threading.Thread(target=_dns_bg_worker, daemon=True).start()
+        threading.Thread(target=_dns_bg_sched, daemon=True).start()
+    _dns_bg['wanted'] = names
+    _dns_bg['ttl'] = ttl
+    _dns_bg_scan()
+
+
+def dns_bg_busy():
+    """Number of names being looked up for the first time (refreshes do not count)."""
+    with _dns_lock:
+        return sum(1 for n in _dns_bg['inflight'] if n not in _dns_cache)
+
 
 def resolve_all_ips(name, family=None):
     """Every A/AAAA record for name, sorted numerically for a stable order.
@@ -1498,44 +1590,27 @@ def prepare_targets(hosts, ttl, progress_cb=None):
     """Map the host list to what is actually handed to fping.
 
     Returns (targets, target -> [display names], unresolved names).
-    With ttl <= 0 nothing is cached and fping does the resolving itself (old behaviour).
-    progress_cb(elapsed) -> True cuts the name lookups short (a keypress/browser
-    command is waiting): nothing is returned for this round ([], {}, []), the lookups
-    already running still fill the cache, so the next round only resolves the rest.
+    With ttl <= 0 nothing is cached and fping does the resolving itself.
+    Names are resolved by background threads (dns_bg_request): a name without an address
+    yet is neither a target nor 'unresolved' - it joins the next round it is resolved in.
+    A round waits at most DNS_FIRST_WAIT s for names that were never resolved before.
+    progress_cb(elapsed) -> True (a browser command is waiting) returns ([], {}, []).
     """
     if ttl <= 0 or ssh_target:      # ssh: the jump host resolves the names
         return list(hosts), dict((h, [h]) for h in hosts), []
 
-    pending = []
-    now     = time.time()
-    with _dns_lock:
-        for h in hosts:
-            if is_ip_host(h):
-                continue
-            entry = _dns_cache.get(h)
-            if not entry or entry[1] <= now:
-                pending.append(h)
-    if pending and progress_cb is not None:
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(DNS_RESOLVERS, len(pending))))
-        futs = [pool.submit(resolve_name, n, ttl) for n in pending]
-        t0   = time.time()
-        try:
-            while not all(f.done() for f in futs):
-                if progress_cb(time.time() - t0):
-                    for f in futs:
-                        f.cancel()                 # not started yet: dropped
-                    return [], {}, []
-                time.sleep(0.1)
-        finally:
-            pool.shutdown(wait=False)
-    elif pending:
-        workers = max(1, min(DNS_RESOLVERS, len(pending)))
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-                list(pool.map(lambda n: resolve_name(n, ttl), pending))
-        except Exception:
-            for n in pending:
-                resolve_name(n, ttl)
+    names = tuple(h for h in hosts if not is_ip_host(h))
+    dns_bg_request(names, ttl)
+    t0 = time.time()
+    while dns_bg_busy() and time.time() - t0 < DNS_FIRST_WAIT:
+        with _dns_lock:
+            missing = any(n not in _dns_cache and n in _dns_bg['inflight'] for n in names)
+        if not missing:
+            break
+        if progress_cb is not None and progress_cb(time.time() - t0):
+            return [], {}, []
+        time.sleep(0.05)
+    _dns_bg['pending'] = 0
 
     global _csv_fb_names
     targets     = []
@@ -1546,7 +1621,12 @@ def prepare_targets(hosts, ttl, progress_cb=None):
         if is_ip_host(h):
             target = h
         else:
-            target = resolve_name(h, ttl)
+            with _dns_lock:
+                entry = _dns_cache.get(h)
+            if entry is None:
+                _dns_bg['pending'] += 1      # lookup still running: joins a later round
+                continue
+            target = entry[0]                # an expired entry is used until it is refreshed
             if not target and csv_ip_fallback:
                 # no DNS record, but the inventory CSV has an address for this host: ping that
                 target = host_csv_ip.get(h) or ''
@@ -1733,6 +1813,11 @@ def fping_cmd(summary_hosts_list, lock, cmd_base=None):
     with lock:
         fping_cmd_output_raw_total.extend(fping_result_data)
 
+
+def _debug_event(ev):
+    """Queue a log comment (timestamp, text) only with -debug."""
+    if DEBUG_EVENTS:
+        _source_events.append(ev)
 
 def get_date_time():
     now = datetime.datetime.now()
@@ -1973,9 +2058,7 @@ def filter_hosts(mode, original_hosts_list, host_state, tz_offset,
     it was first observed in this run - that is what ALWAYS-UP/ALWAYS-DOWN mean here;
     it is a live-session fact, not the full-log uptime% epinga.py's report computes.
     up_seen is accepted for signature compatibility with its other callers (used
-    elsewhere for renaming/pruning bookkeeping) - no current mode reads it here;
-    EVER-UP (former mode 9, the only mode that did) was removed as redundant with
-    UP+FLAPPING (mode 2)."""
+    elsewhere for renaming/pruning bookkeeping) - no mode reads it here."""
     if mode <= 0:
         return list(original_hosts_list)
     now_ref = now_local(tz_offset)
@@ -2111,6 +2194,8 @@ def apply_prefer_ip(hosts_list, dns_ttl):
     return [h for h in hosts_list
             if is_ip_host(h) or not raw_ips.intersection(_cached_all_ips(h, dns_ttl))]
 
+_ip_only_names = {}      # address -> hostname it was renamed from (RESOLVE ALL TO IP), for the mouse-over
+
 def apply_ip_only_on(original_hosts_list, active_hosts_list, host_state, up_seen,
                      down_streak, dns_ttl):
     """[I] IP ONLY (turning on): resolve every hostname entry to its address -
@@ -2154,6 +2239,8 @@ def apply_ip_only_on(original_hosts_list, active_hosts_list, host_state, up_seen
         parts.append(str(unresolved) + ' unresolved')
     if dropped:
         parts.append(str(dropped) + ' dropped (duplicate address)')
+    _ip_only_names.clear()
+    _ip_only_names.update(ip_map)
     return ip_map, 'ip only: on, ' + ', '.join(parts)
 
 def apply_ip_only_off(ip_map, original_hosts_list, active_hosts_list, host_state,
@@ -2167,6 +2254,7 @@ def apply_ip_only_off(ip_map, original_hosts_list, active_hosts_list, host_state
             _rename_host_in_place(ip, name, original_hosts_list, active_hosts_list,
                                   host_state, up_seen, down_streak)
             restored += 1
+    _ip_only_names.clear()
     return 'ip only: off, ' + str(restored) + ' restored'
 
 def apply_ip_only_on_web(original_hosts_list, active_hosts_list, host_state,
@@ -2203,6 +2291,8 @@ def apply_ip_only_on_web(original_hosts_list, active_hosts_list, host_state,
         parts.append(str(unresolved) + ' unresolved')
     if skipped:
         parts.append(str(skipped) + ' skipped (duplicate address)')
+    _ip_only_names.clear()
+    _ip_only_names.update(ip_map)
     return ip_map, 'ip only: on, ' + ', '.join(parts)
 
 def check_python_version(mrv):
@@ -2935,150 +3025,503 @@ def rotate_log_if_needed(logfile_file_name, max_size_mb, max_files, tz_offset=0)
     prune_old_logfiles(max_files)
     return new_name
 
+# =====================================================================
+# LOOP ENGINE (fping -l)
+# One long-running 'fping -l' per address family / chunk instead of one fping run per
+# round: the same ICMP identifier is reused (few NAT / conntrack entries) and a jump
+# host sees a single command instead of one per round. run_ping_round() only takes
+# snapshots of the latest per-host result.
+# =====================================================================
+LOOP_RESTART_DELAY = 5.0     # s before a dead fping / ssh is started again
+LOOP_MIN_PERIOD_MS = 200
+_LOOP_RE   = re.compile(r'^(\S+)\s+:\s+\[\d+\],\s+(.*)$')
+_loop_cv   = threading.Condition()
+_loop      = {'key': None, 'engines': [], 'state': {}, 'fail': '',
+              'stray': collections.deque(maxlen=3), 'started': 0.0}
+_host_eng  = {}              # target -> engine (one fping -l process) that pings it
+_loop_base = {}              # host -> sample counter at the last snapshot
+_loop_stats = {'restarts': 0, 'ev_ts': 0.0, 'adds': 0}
+_loop_last_down = set()       # hosts reported DOWN by the previous snapshot
+_loop_born = {}               # target -> time it was first handed to fping (grace period)
+_loop_seen = set()           # hosts that were reported at least once
+_loop_new_since = [0.0]      # first time targets were waiting for an engine (batching)
+LOOP_MAX_ENGINES = 16        # more than this: consolidate into fresh processes
+LOOP_ADD_WAIT    = 3.0       # s new targets wait for more DNS results before an engine is started
+_round_checked = 0           # fresh results of the last run_ping_round (RUNS counts only if > 0)
+_fam_toggle_ts = 0.0         # last -4/-6 switch for names a jump host cannot resolve
+
+
+def loop_timeout_ms():
+    """-t for fping -l. A loop ping has no retries and fping drops every reply later than
+    -t, so use the longest timeout the retry chain had (-t x -B^-r, at most 2000 ms)."""
+    try:
+        t = int(float(timeout) * float(backoff) ** int(retries))
+    except (TypeError, ValueError):
+        t = int(float(timeout))
+    return max(int(float(timeout)), min(2000, t))
+
+
+def loop_period_ms():
+    """Per-host ping period: the -w value, as the pause between two rounds before."""
+    try:
+        w = int(round(float(args.waittime) * 1000))
+    except (TypeError, ValueError, NameError):
+        w = 500
+    return max(LOOP_MIN_PERIOD_MS, w)
+
+
+def parse_loop_line(line):
+    """One line of 'fping -l' output -> (host, kind, rtt) or None.
+    kind: 'up' | 'miss' (timed out) | 'nodns'."""
+    m = _LOOP_RE.match(line)
+    if m:
+        rest = m.group(2)
+        if rest.startswith('timed out'):
+            return m.group(1), 'miss', ''
+        i = rest.find(' bytes, ')
+        if i >= 0:
+            try:
+                return m.group(1), 'up', format(float(rest[i + 8:].split()[0]), '.2f')
+            except (ValueError, IndexError):
+                return None
+        return None
+    row = parse_fping_line(line, '')
+    if row is not None and 'NO-DNS' in row[1]:
+        return row[0], 'nodns', ''
+    return None
+
+
+def _loop_reader(proc, eng, chunk):
+    """Parse the stdout of one fping -l process into _loop['state']."""
+    stray = _loop['stray']
+    for line in proc.stdout:
+        res = parse_loop_line(line)
+        with _loop_cv:
+            if not eng['live']:
+                return
+            if res is None:
+                s = line.strip()
+                if s:
+                    stray.append(s)
+                continue
+            host, kind, rtt = res
+            if not eng['first_out']:
+                eng['first_out'] = time.time()
+            st = _loop['state'].get(host)
+            if st is None:
+                st = _loop['state'][host] = {'n': 0, 'kind': kind, 'rtt': '', 'misses': 0, 'ts': 0.0}
+            st['n'] += 1
+            st['ts'] = time.time()
+            st['kind'] = kind
+            if kind == 'up':
+                st['rtt'], st['misses'] = rtt, 0
+            elif kind == 'miss':
+                st['misses'] += 1
+            _loop_cv.notify_all()
+    proc.wait()
+    with _loop_cv:
+        if not eng['live'] or _loop['fail']:
+            return
+        # a chunk whose names all failed to resolve ends by itself - not a failure
+        if chunk and all(_loop['state'].get(h, {}).get('kind') == 'nodns' for h in chunk):
+            return
+        _loop['fail'] = (' / '.join(_loop['stray'])
+                         or ('ssh/fping exit ' + str(proc.returncode)))[:200]
+        _loop_cv.notify_all()
+
+
+def _loop_reap(proc):
+    try:
+        proc.wait(5)
+    except Exception:
+        try:
+            proc.kill()
+            proc.wait(5)
+        except Exception:
+            pass
+
+
+def loop_stop(clear=True):
+    """Terminate all loop processes (source switch, parameter change, pause, exit)."""
+    with _loop_cv:
+        engines, _loop['engines'] = _loop['engines'], []
+        for e in engines:
+            e['live'] = False
+        _host_eng.clear()
+        _loop['key'] = None
+        if clear:
+            _loop['state'].clear()
+            _loop_base.clear()
+            _loop_seen.clear()
+            _loop_born.clear()
+        _loop_cv.notify_all()
+    for e in engines:
+        try:
+            e['proc'].terminate()
+        except Exception:
+            pass
+        threading.Thread(target=_loop_reap, args=(e['proc'],), daemon=True).start()
+
+atexit.register(loop_stop)
+
+
+def _loop_start_engine(fam, chunk, iv, period):
+    """Start one 'fping -l' process for chunk. Returns False when it cannot be started."""
+    cmd = ['fping', '-' + fam, '-l', '-p', str(period), '-t', str(loop_timeout_ms()), '-i', str(iv)]
+    if use_check_source and '--check-source' in fping_capabilities():
+        cmd.append('--check-source')
+    use_stdin = len(chunk) > FPING_STDIN_THRESH or bool(ssh_target)
+    if not use_stdin:
+        cmd.extend(chunk)
+    popen_env = None
+    if ssh_target:
+        cmd = ssh_wrap(cmd)
+        popen_env = ssh_env(ssh_cfg)
+    try:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             stdin=(subprocess.PIPE if use_stdin else subprocess.DEVNULL),
+                             encoding='utf-8', errors='replace', bufsize=1, env=popen_env)
+    except FileNotFoundError:
+        with _loop_cv:
+            _loop['fail'] = ('ssh command not found' if ssh_target else
+                             "fping not found - install it via 'sudo apt install fping' or 'brew install fping'")
+        return False
+    if use_stdin:
+        try:
+            p.stdin.write('\n'.join(chunk) + '\n')
+            p.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+    eng = {'fam': fam, 'hosts': list(chunk), 'iv': iv, 'period': period, 'proc': p,
+           'started': time.time(), 'first_out': 0.0, 'live': True}
+    with _loop_cv:
+        _loop['engines'].append(eng)
+        for h in chunk:
+            _host_eng[h] = eng
+    threading.Thread(target=_loop_reader, args=(p, eng, chunk), daemon=True).start()
+    return True
+
+
+def loop_sync(pinged, by_fam, pkey, rate_pps, threads_arg, interval_arg, base_ms):
+    """Make the running fping -l processes cover 'pinged'.
+
+    A change of the source / timing parameters, a dead process or too many stale or small
+    processes restarts everything (stored results are kept unless the source changed).
+    Otherwise only the new targets get their own process - running ones are not touched,
+    targets that are gone are simply not judged any more. Returns a description of what
+    was done ('' = nothing)."""
+    now = time.time()
+    with _loop_cv:
+        old_key, failed, started = _loop['key'], bool(_loop['fail']), _loop['started']
+        n_eng = len(_loop['engines'])
+        covered = len(_host_eng)
+    probed_total = len(pinged)
+
+    def make_specs(groups):
+        specs = []
+        for fam in ('4', '6'):
+            grp = groups[fam]
+            if not grp:
+                continue
+            procs, iv = tune_group(len(grp), len(grp), rate_pps, threads_arg, interval_arg)
+            if ssh_target:
+                procs = min(procs, SSH_MAX_PROCS_NT if os.name == 'nt' else SSH_MAX_PROCS)
+            for chunk in split_seq(grp, procs):
+                if chunk:
+                    specs.append((fam, list(chunk), iv, max(base_ms, len(chunk) * iv + loop_timeout_ms() + 50)))
+        return specs
+
+    full = old_key != pkey
+    if not full and failed:
+        if now - started < LOOP_RESTART_DELAY:
+            return ''
+        full = True
+    note = ''
+    if not full:
+        new = {'4': [], '6': []}
+        n_new = 0
+        for fam in ('4', '6'):
+            for t in by_fam[fam]:
+                if t not in _host_eng:
+                    new[fam].append(t)
+                    n_new += 1
+        stale = covered - (probed_total - n_new)
+        if not n_new:
+            _loop_new_since[0] = 0.0
+            if stale > max(50, covered // 4):
+                full = True              # many removed hosts still pinged: start clean
+            else:
+                return ''
+        else:
+            if not _loop_new_since[0]:
+                _loop_new_since[0] = now
+            if dns_bg_busy() and now - _loop_new_since[0] < LOOP_ADD_WAIT:
+                return ''                # more names are about to resolve: one process for all
+            specs = make_specs(new)
+            if n_eng + len(specs) > LOOP_MAX_ENGINES or stale > max(50, covered // 4):
+                full = True
+            else:
+                _loop_new_since[0] = 0.0
+                for fam, chunk, iv, period in specs:
+                    if not _loop_start_engine(fam, chunk, iv, period):
+                        return ''
+                _loop_stats['adds'] += 1
+                if now - _loop_stats['ev_ts'] > 10:
+                    _loop_stats['ev_ts'] = now
+                    _debug_event((get_date_time(), 'LOOP ADD: %d targets in %d fping (running unchanged: %d)'
+                                           % (n_new, len(specs), covered)))
+                return 'add %d' % n_new
+    # full (re)start
+    loop_stop(clear=(old_key is None or old_key[0] != pkey[0]))
+    _loop_new_since[0] = 0.0
+    specs = make_specs(by_fam)
+    with _loop_cv:
+        _loop['fail'] = ''
+        _loop['stray'].clear()
+        _loop['key'] = pkey
+        _loop['started'] = now
+        _loop_stats['restarts'] += 1
+        if now - _loop_stats['ev_ts'] > 10:      # at most one comment row per 10 s
+            _loop_stats['ev_ts'] = now
+            _debug_event((get_date_time(), 'LOOP START #%d: %d targets, %d fping, -p %dms, -t %dms'
+                                   % (_loop_stats['restarts'], sum(len(x[1]) for x in specs), len(specs),
+                                      max([x[3] for x in specs] or [0]), loop_timeout_ms())))
+    for fam, chunk, iv, period in specs:
+        if not _loop_start_engine(fam, chunk, iv, period):
+            break
+    return 'restart'
+
+
+def loop_snapshot(targets, progress_cb, miss_limit, period_ms):
+    """Take one result per target from the running loop processes: (rows, fail, stats).
+
+    Waits until every target delivered a fresh result (one pass) or the deadline.
+    A host with fewer than miss_limit timeouts in a row keeps its previous state (no row).
+    DOWN needs miss_limit timeouts in a row, or silence for more than 3 periods (e.g.
+    fping cannot send to it) - both judged by time, never by the number of snapshots,
+    and per process: no DOWN before that process delivered its first output.
+    A target that is new gets a grace period: until it has been known for
+    (miss_limit + 1) periods + 5 s it is only reported when it answers, a first contact
+    that is slow (new NAT / firewall state, rate limits) must not show up as DOWN."""
+    t0      = time.time()
+    aborted = False
+    no_out_max = 180.0               # s without any output from a started fping = failure
+    tmo     = loop_timeout_ms() / 1000.0
+    short   = period_ms / 1000.0 + tmo + 0.3
+    with _loop_cv:
+        for t in targets:
+            _loop_born.setdefault(t, t0)
+        if len(_loop_born) > 2 * len(targets) + 100:      # forget targets that are gone
+            keep = set(targets)
+            for t in [x for x in _loop_born if x not in keep]:
+                del _loop_born[t]
+    while True:
+        with _loop_cv:
+            if _loop['fail']:
+                break
+            pending = 0
+            for t in targets:
+                st = _loop['state'].get(t)
+                if st is None or (st['kind'] != 'nodns' and st['n'] <= _loop_base.get(t, 0)):
+                    pending += 1
+            if not pending or time.time() - t0 > short:
+                break
+            _loop_cv.wait(0.1)
+        if progress_cb is not None and progress_cb(time.time() - t0):
+            aborted = True
+            break
+    now_str = get_date_time()
+    rows    = []
+    stats   = {'pend': 0, 'abort': int(aborted), 'silent': 0, 'young': 0, 'fresh': 0}
+    new_silent = new_miss = 0
+    down_now   = set()
+    with _loop_cv:
+        now  = time.time()
+        for e in _loop['engines']:
+            if not e['first_out'] and not _loop['fail'] and now - e['started'] > no_out_max:
+                _loop['fail'] = 'no output from fping for %d s' % no_out_max
+        fail = _loop['fail']
+        outs = [e['first_out'] for e in _loop['engines'] if e['first_out']]
+        age  = (now - min(outs)) if outs else 0.0
+        silent_max = 0.0
+        # Stall guard: when many hosts of one fping process are silent at once, the process
+        # (or this computer's network) stalled - that says nothing about the hosts. Their
+        # state is kept for up to 5 silent periods, only then they count as DOWN.
+        tot, cand = {}, {}
+        for t in targets:
+            e = _host_eng.get(t)
+            if e is None or not e['first_out']:
+                continue
+            k = id(e)
+            tot[k] = tot.get(k, 0) + 1
+            st = _loop['state'].get(t)
+            lim = 3 * e['period'] / 1000.0 + tmo + 0.5
+            if (now - max(st['ts'] if st else 0.0, e['first_out']) > lim
+                    and now - _loop_born.get(t, now) >= (miss_limit + 1) * e['period'] / 1000.0 + 5.0):
+                cand[k] = cand.get(k, 0) + 1
+        stalled = set(k for k in cand if cand[k] >= max(20, 0.3 * tot[k]))
+        if stalled and now - _loop_stats.get('stall_ts', 0.0) > 10:
+            _loop_stats['stall_ts'] = now
+            _debug_event((now_str, 'LOOP STALL: %s of %s targets silent, no DOWN for them yet | stray: %s' % (
+                ', '.join(str(cand[k]) for k in sorted(stalled)), ', '.join(str(tot[k]) for k in sorted(stalled)),
+                ' / '.join(_loop['stray']) or '-')))
+
+        def silent_down(t, st, e, lim, young):
+            if fail or not e['first_out'] or young:
+                return False
+            quiet = now - max(st['ts'] if st else 0.0, e['first_out'])
+            return quiet > (5 * lim if id(e) in stalled else lim)
+        for t in targets:
+            st    = _loop['state'].get(t)
+            eng   = _host_eng.get(t)
+            if eng is None:
+                stats['pend'] += 1       # no process for it yet
+                continue
+            out0   = eng['first_out']    # 0 while this process is still starting (ssh, lookups)
+            silent = 3 * eng['period'] / 1000.0 + tmo + 0.5
+            silent_max = max(silent_max, silent)
+            young  = now - _loop_born.get(t, now) < (miss_limit + 1) * eng['period'] / 1000.0 + 5.0
+            if st is None:
+                if silent_down(t, None, eng, silent, young):
+                    stats['silent'] += 1
+                    new_silent += t not in _loop_last_down
+                    down_now.add(t)
+                    rows.append([t, ' DOWN', now_str, '----', t, 0, '', 0])
+                    _loop_seen.add(t)
+                else:
+                    stats['pend'] += 1
+                continue
+            if st['kind'] != 'nodns' and st['n'] <= _loop_base.get(t, 0):
+                stats['pend'] += 1
+            elif st['kind'] != 'nodns':
+                stats['fresh'] += 1          # a new result since the last snapshot = checked
+            _loop_base[t] = st['n']
+            if st['kind'] == 'nodns':
+                rows.append([t, 'NO-DNS', now_str, '----', t, 0, '', 0])
+            elif silent_down(t, st, eng, silent, young):
+                stats['silent'] += 1         # silent for 3 periods: DOWN, whatever the last result was
+                new_silent += t not in _loop_last_down
+                down_now.add(t)
+                rows.append([t, ' DOWN', now_str, '----', t, 0, '', 0])
+            elif st['kind'] == 'up':
+                rows.append([t, '  UP', now_str, st['rtt'], t, 0, '', 0])
+            elif young:
+                stats['young'] += 1          # new target, not answering yet: not reported
+                continue
+            elif st['misses'] >= miss_limit:
+                new_miss += t not in _loop_last_down
+                down_now.add(t)
+                rows.append([t, ' DOWN', now_str, '----', t, 0, '', 0])
+            else:
+                continue
+            _loop_seen.add(t)
+        if new_silent + new_miss >= 10:
+            _debug_event((now_str, 'LOOP DOWN burst: %d hosts (%d silent, %d timeouts), engine up %.0fs, '
+                                   'silent limit %.1fs, pending %d, stray: %s' % (new_silent + new_miss, new_silent,
+                                                                      new_miss, age, silent_max, stats['pend'],
+                                                                      ' / '.join(_loop['stray']) or '-')))
+        _loop_last_down.clear()
+        _loop_last_down.update(down_now)
+    return rows, fail, stats
+
+
 def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
                    interval_arg='', dns_ttl=DNS_CACHE_TTL,
-                   down_hosts=None, down_retries=None, progress_cb=None,
-                   slice_idx=0, slice_count=1):
-    """Run one fping round.
+                   progress_cb=None):
+    """Loop-mode round: take one snapshot of the running 'fping -l' processes.
 
-    Hosts listed in down_hosts are probed with 'down_retries' instead of the full -r
-    budget (see the retry class comment at the top). Pass down_hosts=None for a full
-    sweep in which every target gets the full treatment.
-
-    Returns (sorted rows, scan description, (full_count, reduced_count), timings).
+    Result: (sorted rows, scan description, (target_count, 0), timings). A host is DOWN
+    after (-re + 1) timeouts in a row.
     """
-    global fping_cmd_output_raw_total
+    global fping_cmd_output_raw_total, _scan_error, _source_fail_reason, _fam_toggle_ts, _round_checked
+    _round_checked = 0                      # hosts that got a fresh result in this round
     ssh_apply_pending()                     # JUMPHOST switch requested since the last round
     fping_cmd_output_raw_total = list()
     timings = {'dns': 0.0, 'ping': 0.0, 'groups': []}
 
     if not active_hosts_list:
+        loop_stop()
         return [], '', (0, 0), timings
 
-    # resolve hostnames from the cache and ping addresses instead of names
     _t = time.time()
     targets, name_map, unresolved = prepare_targets(active_hosts_list, dns_ttl, progress_cb)
     timings['dns'] = time.time() - _t
+    if not targets and not unresolved:
+        # the name lookups were cut short by a pending command: leave the loop processes
+        # and all stored results alone, the next round carries on
+        return [], '', (0, 0), timings
 
-    # --- split into retry classes ---
-    # a target counts as 'confirmed down' only if every hostname pointing at it is down
-    reduced_targets = []
-    full_targets    = targets
-    down_total      = 0
-    if down_hosts and down_retries is not None:
-        reduced_targets = [t for t in targets
-                           if all(nm in down_hosts for nm in name_map.get(t, [t]))]
-        reduced_set  = set(reduced_targets)
-        full_targets = [t for t in targets if t not in reduced_set]
-        down_total   = len(reduced_targets)
-        # only one slice of the DOWN hosts per round - strided, so every slice covers
-        # the whole address range instead of one contiguous block
-        if slice_count > 1 and reduced_targets:
-            reduced_targets = reduced_targets[slice_idx % slice_count::slice_count]
-
-    # each group runs its own fping with its own share of the rate budget
-    groups = []
-    if full_targets:
-        groups.append((full_targets, None, 'full'))
-    if reduced_targets:
-        groups.append((reduced_targets, down_retries, 'reduced'))
-
-    # fping cannot mix v4 and v6 targets in one invocation, so every retry-class
-    # group above is split again by address family. In the common single-family
-    # case this yields exactly one subgroup per group, same as before IPv6 support.
-    subgroups = []   # (targets, retries, label, family)
     if ssh_target and jr_active():
-        jr_prefetch(targets)                 # one ssh call for all uncached names
-    for grp_targets, grp_retries, grp_name in groups:
-        by_fam = {'4': [], '6': []}
-        for t in grp_targets:
-            fam = ip_version_str(t)
-            if not fam and ssh_target:             # name resolved on the jump host
-                fam = ssh_name_family(t)
-            if fam:
-                by_fam[fam].append(t)
-        for fam in ('4', '6'):
-            if by_fam[fam]:
-                subgroups.append((by_fam[fam], grp_retries, grp_name, fam))
+        # one ssh call for all uncached names - in a thread, so a browser command (STOP, ...)
+        # is not stuck behind it; the call carries on in the background and fills the cache
+        global _jr_pf_thread
+        if _jr_pf_thread is None or not _jr_pf_thread.is_alive():
+            _jr_pf_thread = threading.Thread(target=jr_prefetch, args=(list(targets),), daemon=True)
+            _jr_pf_thread.start()
+        _t1 = time.time()
+        while _jr_pf_thread.is_alive():
+            _jr_pf_thread.join(0.1)
+            if progress_cb is not None and progress_cb(time.time() - _t1):
+                return [], '', (0, 0), timings
+    by_fam = {'4': [], '6': []}              # fping cannot mix v4 and v6 in one run
+    for t in targets:
+        fam = ip_version_str(t)
+        if not fam:
+            # a name: on a jump host it is resolved there, locally only with -dns 0
+            # (fping resolves it when it starts)
+            fam = (ssh_name_family(t) if ssh_target
+                   else (dns_family if dns_family in ('4', '6') else '4'))
+        if fam:
+            by_fam[fam].append(t)
+    pinged = by_fam['4'] + by_fam['6']      # only what is handed to fping can be judged
 
-    lock        = threading.Lock()
-    thread_list = []
-    parts       = []
-    total_pps   = 0.0
-    stats       = [[] for _ in subgroups]
-    meta        = []
-    # the rate budget is shared between what is actually probed this round, not
-    # between all known hosts - otherwise slicing would not speed anything up
-    probed_total = sum(len(g[0]) for g in subgroups)
-    for slot, (grp_targets, grp_retries, grp_name, fam) in enumerate(subgroups):
-        procs, interval_ms = tune_group(len(grp_targets), probed_total,
-                                        rate_pps, threads_arg, interval_arg)
-        if ssh_target:
-            procs = min(procs, SSH_MAX_PROCS_NT if os.name == 'nt' else SSH_MAX_PROCS)
-        cmd_base = build_fping_cmd(interval_ms, grp_retries, fam)
-        for chunk in split_seq(grp_targets, procs):
-            thread_list.append(threading.Thread(target=timed_fping,
-                                                args=(chunk, lock, cmd_base, stats, slot)))
-        if interval_ms > 0:
-            total_pps += procs * 1000.0 / interval_ms
-        else:
-            total_pps = -1.0          # -i 0: unpaced, no meaningful rate
-        label = grp_name + ('/v6' if fam == '6' else '')
-        if grp_name == 'reduced' and slice_count > 1:
-            label = ('reduced/v6' if fam == '6' else 'reduced') + ' slice %d/%d of %d' % (
-                     slice_idx % slice_count + 1, slice_count, down_total)
-        parts.append('%d %s (-r %s, %d x fping, -i %dms)'
-                     % (len(grp_targets), label,
-                        retries if grp_retries is None else grp_retries,
-                        procs, interval_ms))
-        meta.append((grp_name, len(grp_targets),
-                     retries if grp_retries is None else grp_retries, procs, interval_ms))
+    base_ms    = loop_period_ms()
+    miss_limit = max(1, int(retries) + 1)
+    pkey = ((ssh_target or '', SOURCE_LABEL if ssh_target else ''), miss_limit, loop_timeout_ms(),
+            bool(use_check_source), base_ms)
+    procs_total = 0
+    interval_ms = 0
+    sync_note   = ''
     _t = time.time()
-    global _scan_error, _source_fail_reason
-    _scan_error = ''
-    _source_fail_reason = ''
-    scan_reset_abort()
-    for t in thread_list:
-        t.start()
-    if progress_cb is None:
-        for t in thread_list:
-            t.join()
+    if pinged:
+        sync_note = loop_sync(pinged, by_fam, pkey, rate_pps, threads_arg, interval_arg, base_ms)
+        with _loop_cv:
+            engs = list(_loop['engines'])
+        procs_total = len(engs)
+        interval_ms = min([e['iv'] for e in engs] or [0])
+        period_max  = max([e['period'] for e in engs] or [base_ms])
+        rows_raw, fail, lstat = loop_snapshot(pinged, progress_cb, miss_limit, period_max)
     else:
-        # stay responsive: poll instead of blocking, and let the caller cut it short
-        while any(t.is_alive() for t in thread_list):
-            if progress_cb(time.time() - _t):
-                scan_abort()
-                break
-            time.sleep(0.15)
-        for t in thread_list:
-            t.join(timeout=10)
+        if not _dns_bg['pending']:
+            loop_stop()          # (names still being resolved: leave the running processes alone)
+        rows_raw, fail, lstat = [], '', {'pend': 0, 'abort': 0, 'silent': 0, 'young': 0}
+    fping_cmd_output_raw_total = rows_raw
+    _round_checked = 0 if fail else lstat.get('fresh', 0)
     timings['ping'] = time.time() - _t
+    if fail:
+        fping_cmd_output_raw_total = list()      # no result of a broken source: hosts keep their state
+        if ssh_target:
+            _source_fail_reason = fail
+        else:
+            _scan_error = fail
     if ssh_target:
         if _source_fail_reason:
-            fping_cmd_output_raw_total = list()    # no result of a broken source: hosts keep their state
             _scan_error = 'SSH SOURCE DOWN (%s): %s - reconnecting' % (SOURCE_LABEL, _source_fail_reason)
         source_set(bool(_source_fail_reason), _source_fail_reason)
-    if total_pps < 0:
-        scan_desc = ' + '.join(parts) + ', unpaced (-i 0)'
-    else:
-        scan_desc = ' + '.join(parts) + (', ~%d pps' % int(round(total_pps)))
-        # be honest when the requested rate cannot be delivered: once -i sits at its
-        # 1ms floor, a higher --rate changes nothing at all
-        if not interval_arg and total_pps < rate_pps * 0.95:
-            scan_desc += (' (--rate %d not reachable, -i floor 1ms)' % rate_pps)
+
+    with _loop_cv:
+        pps = sum(len(e['hosts']) * 1000.0 / e['period'] for e in _loop['engines'])
+    scan_desc = ('%d loop (-p %dms, -t %s, %d x fping -l, -i %dms, DOWN after %d misses), ~%d pps'
+                 % (len(targets), base_ms, loop_timeout_ms(), procs_total, interval_ms, miss_limit, int(round(pps))))
     if use_check_source and '--check-source' in fping_capabilities():
         scan_desc += ', check-source'
     if _csv_fb_names:
         scan_desc += ', %d by CSV IP (no DNS)' % len(_csv_fb_names)
     if _scan_error:
         scan_desc += ' | ERROR: ' + _scan_error
-
-    # per group: how long did fping itself actually run?
-    for slot, (name, cnt, rr, procs, iv) in enumerate(meta):
-        wall = 0.0
-        if stats[slot]:
-            wall = max(e for _, e in stats[slot]) - min(b for b, _ in stats[slot])
-        timings['groups'].append((name, cnt, rr, iv, wall))
+    timings['groups'].append(('loop restarts=%d adds=%d pend=%d dnspend=%d abort=%d silent=%d young=%d' % (
+        _loop_stats['restarts'], _loop_stats['adds'], lstat['pend'], _dns_bg['pending'], lstat['abort'], lstat['silent'], lstat['young']),
+        len(targets), '%dmiss' % miss_limit, interval_ms, timings['ping']))
 
     # map the pinged address back to the hostname(s) the user entered
     rows = []
@@ -3094,20 +3537,26 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
 
     fill_jump_ips(rows)
     if ssh_target and not jr_active() and dns_family == 'auto':
-        for r in rows:                       # alternate -4 / -6 for names fping cannot resolve
-            if not is_ip_host(r[0]) and 'NO-DNS' in r[1]:
-                if r[0] in _ssh_fam6:
-                    _ssh_fam6.discard(r[0])
-                else:
-                    _ssh_fam6.add(r[0])
+        # alternate -4 / -6 for names fping cannot resolve - at most every 30 s, every
+        # switch restarts the loop processes
+        if time.time() - _fam_toggle_ts > 30:
+            toggled = False
+            for r in rows:
+                if not is_ip_host(r[0]) and 'NO-DNS' in r[1]:
+                    toggled = True
+                    if r[0] in _ssh_fam6:
+                        _ssh_fam6.discard(r[0])
+                    else:
+                        _ssh_fam6.add(r[0])
+            if toggled:
+                _fam_toggle_ts = time.time()
     # names that do not resolve never reach fping - report them like fping would
     if unresolved:
         now_str = get_date_time()
         for name in unresolved:
             rows.append([name, 'NO-DNS', now_str, '----', '', 0, '', 0])
 
-    return (sort_fping_result_data(rows), scan_desc,
-            (len(full_targets), len(reduced_targets)), timings)
+    return (sort_fping_result_data(rows), scan_desc, (len(targets), 0), timings)
 
 
 # =====================================================================
@@ -3153,6 +3602,7 @@ web_state = {
     'learning_total'   : 0,
     'wait_time'        : 0.5,
     'stopped'          : False,
+    'paused'           : False,   # STOP button: no pings until START
     'message'          : '',
     'msg_seq'          : 0,
     'scan_info'        : '',
@@ -3195,6 +3645,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
          padding:4px 10px;cursor:pointer;font:inherit;border-radius:3px}
   button:hover{border-color:var(--acc);color:var(--acc)}
   button.on{border-color:var(--up);color:var(--up)}
+  button.srcon{border-color:var(--up);color:var(--up);font-weight:700}
+  button.paused{border-color:var(--down);color:var(--down);font-weight:700}
   button.danger:hover{border-color:var(--down);color:var(--down)}
   #deleteFilesBtn{background:var(--down);border-color:var(--down);color:var(--bg);font-weight:600}
   #deleteFilesBtn:hover{background:var(--down);border-color:var(--down);color:var(--bg)}
@@ -3738,6 +4190,8 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="choose">CHOOSE LOGFILE</option>
        <option value="upload">UPLOAD FROM CLIENT</option>
       </select>
+     <span class="sep">&nbsp;|&nbsp;</span>
+     <button id="btnPause" title="pause checking - no pings until START, the table stays as it is">STOP</button>
     </span>
    </span>
   </div>
@@ -3746,6 +4200,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
     <span>HOSTS: <b id="sHosts">0</b></span>
     <span>RUNTIME: <b id="sRuntime">0.00</b><b id="sRuntimeUnit">s</b></span>
     <span>RUNS: <b id="sRuns">0</b></span>
+    <span class="d" id="sPaused" style="display:none"><b>PAUSED</b></span>
     <span class="u">HOSTS-UP: <b id="sUp">0</b></span>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
     <span>FLAPPING: <b id="sFlap">0</b></span>
@@ -3858,7 +4313,7 @@ window.addEventListener('resize', function(){
 });
 
 /* ---------------- commands ---------------- */
-var PENDING = {up_only:'switching view ...', set_filter:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
+var PENDING = {pause:'switching ...', up_only:'switching view ...', set_filter:'switching view ...', sort:'sorting ...', add:'adding host(s) ...',
                del:'removing host(s) ...', set_ref:'setting reference ...',
                clear:'clearing all hosts ...', zero:'resetting change counters ...',
                addr_mode:'switching address mode ...',
@@ -3879,6 +4334,7 @@ var pendingSortMode   = null;   // same problem/fix as pendingAddrMode, for sort
 var lastOptions       = {};    // ADV OPTIONS - latest snapshot from the server, see poll()
 
 var noteClearTimer = null;
+var wasSwitching = false;
 function note(text, isPending){
   var m = document.getElementById('msg');
   m.textContent = text || '';
@@ -4272,11 +4728,8 @@ var ADV_OPTIONS_UI = [
     'Initial per-target timeout: how long fping waits for a reply to the first probe before retrying',
     'initial per-host timeout'],
   ['retries',        'RETRIES',        'tries', 0,   5,    1,
-    'Number of retries per host before it is reported DOWN (hosts already confirmed DOWN use DOWN RETRIES instead)',
+    'Number of retries per host before it is reported DOWN',
     'retries before DOWN'],
-  ['down_retries',   'DOWN RETRIES',   'tries', 0,   5,    1,
-    'Retries for hosts already known to be DOWN - fewer retries here shortens the round since DOWN hosts dominate its length. 0 = disabled, every host gets the full RETRIES budget',
-    'retries once already DOWN'],
   ['interval',       'INTERVAL',       'ms',  -1,  250,  1,
     'Fixed interval between individual pings in ms, overrides RATE. -1 = auto (unset, use RATE instead). 0 = no pacing at all, needs the privileges fping was installed with',
     'fixed ping spacing'],
@@ -4295,12 +4748,6 @@ var ADV_OPTIONS_UI = [
   ['flap_window',    'FLAP WINDOW',    'min', 1,   72000,10,
     'Minutes since a host\'s last state change for it to still count as flapping',
     'flapping detection window'],
-  ['down_slices',    'DOWN SLICES',    'rounds', 1,   20,   1,
-    'Spreads known-DOWN hosts over N rounds instead of probing all of them every round, shortening the cycle for UP hosts. 1 = probe every DOWN host every round',
-    'DOWN hosts spread over N rounds'],
-  ['full_sweep',     'FULL SWEEP',     'rounds', 0,   50,   1,
-    'Every Nth round probes every host with the full retry budget, ignoring DOWN RETRIES/DOWN SLICES for that round. 0 = disabled, never',
-    'full-retry sweep interval'],
   ['dns_ttl',        'DNS TTL',        's',   0,   3600, 10,
     'Seconds a resolved hostname stays cached before being looked up again. 0 = let fping resolve it fresh every round',
     'hostname cache lifetime'],
@@ -5144,6 +5591,20 @@ function cancelReportSources(){
 }
 document.getElementById('modalBtnReportSrcGo').onclick = runReportSources;
 document.getElementById('modalBtnReportSrcCancel').onclick = cancelReportSources;
+var pausedOn = false;
+function renderPause(p){
+  pausedOn = !!p;
+  var b = document.getElementById('btnPause');
+  if(b){
+    b.textContent = pausedOn ? 'START' : 'STOP';
+    b.classList.toggle('paused', pausedOn);
+    b.title = pausedOn ? 'resume checking - pings start again'
+                       : 'pause checking - no pings until START, the table stays as it is';
+  }
+  var sp = document.getElementById('sPaused');
+  if(sp) sp.style.display = pausedOn ? '' : 'none';
+}
+document.getElementById('btnPause').onclick = function(){ post('pause', pausedOn ? '0' : '1'); };
 document.getElementById('selGenReport').onchange = function(){
   var what = this.value;
   this.value = '';                              // reset - a select, not a toggle
@@ -5586,7 +6047,7 @@ function render(rows){
       ? '<div class="empty">NO HOSTS TO PING!<div class="hint">'
         + 'add a host above, upload a host file or drop one onto this page</div></div>'
       : '<div class="empty" style="color:var(--up)">PLEASE WAIT'
-        + '<div class="hint">scanning ...</div></div>';
+        + '<div class="hint">' + (wasSwitching ? 'switching source ...' : 'scanning ...') + '</div></div>';
     setFoot(firstRunDone
       ? 'no hosts - add a host above, upload a file or drop one onto this page'
       : 'scanning - please wait ...');
@@ -5648,6 +6109,7 @@ function tipRowsOf(d){
     r.push({k: k, v: String(v), cls: cls || '', sep: !!sep});
   }
   add('state', d.state, up ? 'up' : 'down');
+  if(d.orig_host && d.orig_host !== d.csv_hostname) add('hostname', d.orig_host);   // RESOLVE ALL TO IP: name before the rename
   if(d.changes > 0) add('previous', d.prev);
   if(d.dns_fb) add('dns', 'no DNS record - pinged by the CSV address', 'down');
   if(d.ip && d.ip !== d.host) add('address', d.ip);
@@ -5757,7 +6219,7 @@ document.addEventListener('mousemove', function(e){
   if(!name){ if(tipName) tipHide(); return; }
   if(name !== tipName){
     tipHide(); tipName = name;
-    tipTimer = setTimeout(function(){ tipLoad(name, false); }, 350);
+    tipTimer = setTimeout(function(){ tipLoad(name, false); }, 700);
   } else if(tipBox().style.display === 'block'){ tipPlace(); }
 });
 /* click on a host row pins the popup (text selectable, COPY button); click elsewhere or ESC closes it */
@@ -5809,7 +6271,7 @@ function poll(){
     if(bj){
       var se = document.getElementById('srcErr');
       if(se){ se.textContent = s.source_error || ''; se.style.display = s.source_error ? 'block' : 'none'; }
-      bj.style.borderColor = s.source ? 'var(--acc)' : '';
+      bj.classList.toggle('srcon', !!s.source);        // green while a jump host is active
       bj.title = s.source ? ('pinging via jump host ' + s.source + ' - click to change') : 'ping from a jump host via ssh instead of from this computer';
     }
     document.getElementById('clock').textContent = s.datetime;
@@ -5849,6 +6311,7 @@ function poll(){
     document.getElementById('sLog').innerHTML = s.logging
       ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
     loggingOn = !!s.logging;
+    renderPause(s.paused);
     saveCsv        = !!s.save_csv;
     allCsv         = !!s.all_csv;
     hostfileActive = !!s.hostfile_active;
@@ -5903,7 +6366,9 @@ function poll(){
     // msg_seq (not text) drives this: two commands in a row can produce the exact
     // same message text ("comment logged" twice) - comparing text alone would miss
     // the second completion and leave the "... ing" pending note stuck on screen.
-    if(s.msg_seq !== lastMsgSeq){ lastMsgSeq = s.msg_seq; note(s.message || '', !!s.pending_wait); }
+    if(s.switching){ note(s.switching, true); wasSwitching = true; }
+    else if(wasSwitching){ wasSwitching = false; note('', false); }
+    if(s.msg_seq !== lastMsgSeq && !s.switching){ lastMsgSeq = s.msg_seq; note(s.message || '', !!s.pending_wait); }
 
     var b = document.getElementById('banner');
     if(s.update_available){ b.style.display='block';
@@ -6501,10 +6966,9 @@ _OPT_SWITCHES = (('disable_versioncheck', '-du'), ('force_ipv4', '-4'), ('force_
                  ('web_view', '-wv'), ('web_view_control', '-wvc'))
 # ADV OPTIONS key -> argparse dest of its default
 _OPT_KEY_DEST = {'backoff': 'backoff', 'timeout': 'timeout', 'retries': 'retries',
-                 'down_retries': 'down_retries', 'interval': 'interval',
+                 'interval': 'interval',
                  'num_of_threads': 'num_of_threads', 'waittime': 'waittime',
                  'confirm': 'confirm', 'rate_pps': 'rate_pps', 'flap_window': 'flap_window',
-                 'down_slices': 'down_slices', 'full_sweep': 'full_sweep',
                  'dns_ttl': 'dns_ttl', 'tz_offset': 'time_zone_adjust',
                  'log_max_size': 'log_max_size', 'log_max_files': 'log_max_files'}
 
@@ -6755,6 +7219,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             snapshot['datetime'] = now_local(_tz).strftime("%d/%m/%Y %H:%M:%S")
             snapshot['source'] = SOURCE_LABEL if ssh_cfg else ''
             snapshot['source_error'] = _source_alert if ssh_cfg else ''
+            snapshot['switching'] = _switching
             body = json.dumps(snapshot)      # serialize outside the lock - no stall of the ping loop
             self._respond(200, 'application/json; charset=utf-8', body)
         elif path in ('/api/logfiles', 'api/logfiles'):
@@ -7178,7 +7643,7 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
             payload = {}
         cmd   = str(payload.get('cmd', ''))
         value = str(payload.get('value', ''))[:(8192 if cmd == 'adv_filter' else 256)]
-        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'adv_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report') + SAVE_HOSTS_CMDS:
+        if cmd not in ('up_only', 'set_filter', 'add', 'del', 'set_ref', 'clear', 'zero', 'sort', 'exit', 'addr_mode', 'get_names', 'match_filter', 'adv_filter', 'add_comment', 'reset_log', 'set_option', 'reset_options', 'run_report', 'pause') + SAVE_HOSTS_CMDS:
             self._respond(400, 'application/json; charset=utf-8', json.dumps({'ok': False}))
             return
         if cmd == 'run_report':
@@ -7320,6 +7785,7 @@ def host_details(name, tz_offset=0):
             'dns_fb': name in _csv_fb_names,
             'csv_hostname': meta[0], 'serial': meta[1], 'model': meta[2],
             'location': meta[3], 'sysloc': meta[4], 'type': meta[5], 'comment': meta[6],
+            'orig_host': _ip_only_names.get(name, ''),
             'hist': hist_list(name, tz_offset)}
 
 
@@ -7383,15 +7849,12 @@ ADV_OPTIONS = [
     ('backoff',         'float', BACKOFF_MIN, BACKOFF_MAX,       0.1, '',    None),
     ('timeout',         'int',   TIMEOUT_MIN_MS, TIMEOUT_MAX_MS, 10,  'ms',  None),
     ('retries',         'int',   0,   RETRIES_MAX,               1,   '',    None),
-    ('down_retries',    'int',   0,   RETRIES_MAX,               1,   '',    0),    # 0 = disabled
     ('interval',        'int',   -1,  INTERVAL_ARG_MAX,          1,   'ms',  -1),   # -1 = auto (unset, use --rate)
     ('num_of_threads',  'int',   0,   THREADS_MANUAL_MAX,        1,   '',    0),    # 0 = auto
     ('waittime',        'float', 0,   WAITTIME_MAX,              0.1, 's',   None),
     ('confirm',         'int',   1,   10,                        1,   '',    None),
     ('rate_pps',        'int',   MIN_RATE_PPS, MAX_RATE_PPS,     10,  'pps', None),
     ('flap_window',     'int',   1,   FLAP_WINDOW_MAX,           10,  'min', None),
-    ('down_slices',     'int',   1,   DOWN_SLICES_MAX,           1,   '',    None),
-    ('full_sweep',      'int',   0,   FULL_SWEEP_MAX,            1,   '',    None),  # 0 = disabled
     ('dns_ttl',         'int',   0,   DNS_TTL_MAX,               10,  's',   None),
     ('tz_offset',       'int',   -24, 24,                        1,   'h',   None),
     ('log_max_size',    'int',   LOG_MAX_SIZE_MIN, LOG_MAX_SIZE_MAX, 50, 'MB', 0),   # 0 = no limit
@@ -7406,15 +7869,12 @@ ADV_OPTION_LABELS = {
     'backoff':         'BACKOFF',
     'timeout':         'TIMEOUT',
     'retries':         'RETRIES',
-    'down_retries':    'DOWN RETRIES',
     'interval':        'INTERVAL',
     'num_of_threads':  'THREADS',
     'waittime':        'WAIT TIME',
     'confirm':         'CONFIRM',
     'rate_pps':        'RATE',
     'flap_window':     'FLAP WINDOW',
-    'down_slices':     'DOWN SLICES',
-    'full_sweep':      'FULL SWEEP',
     'dns_ttl':         'DNS TTL',
     'tz_offset':       'TIMEZONE',
     'log_max_size':    'MAX LOG SIZE',
@@ -7423,8 +7883,7 @@ ADV_OPTION_LABELS = {
 
 # keys kept as local variables inside run_web_mode() (not read from args each
 # round) - the caller applies the returned value itself, see run_web_mode()
-ADV_OPTION_LOCAL_KEYS = set(['down_retries', 'flap_window', 'confirm',
-                             'down_slices', 'full_sweep', 'tz_offset'])
+ADV_OPTION_LOCAL_KEYS = set(['flap_window', 'confirm', 'tz_offset'])
 
 
 def apply_adv_option(key, raw, args):
@@ -7453,7 +7912,7 @@ def apply_adv_option(key, raw, args):
             num = float(raw) if kind == 'float' else int(raw)
             if auto_sentinel is not None and num == auto_sentinel:
                 # 'auto'/'off' sentinel, per field: interval (-1) -> '' (unset,
-                # use --rate), num_of_threads (0) -> 'auto', down_retries (0) -> None
+                # use --rate), num_of_threads (0) -> 'auto'
                 if key == 'interval':
                     val = ''
                 elif key == 'num_of_threads':
@@ -7468,9 +7927,6 @@ def apply_adv_option(key, raw, args):
                 val = round(num, 2) if kind == 'float' else int(num)
     except ValueError:
         return False, None, key + ': invalid value'
-
-    if key == 'down_retries' and val is not None and val > int(retries):
-        return False, None, 'down_retries must not be larger than retries (' + str(retries) + ')'
 
     if key == 'waittime':
         args.waittime = str(val)
@@ -7496,8 +7952,7 @@ def apply_adv_option(key, raw, args):
     return True, val, key + ' set to ' + str(val)
 
 
-def adv_option_values(args, down_retries, flap_window, confirm, down_slices,
-                      full_sweep, tz_offset):
+def adv_option_values(args, flap_window, confirm, tz_offset):
     """Snapshot of all ADV OPTIONS current values, as raw strings the client/
     apply_adv_option() round-trip understands. Used for the web gui's options
     modal and for the -reset to default- snapshot taken at run_web_mode() start."""
@@ -7506,15 +7961,11 @@ def adv_option_values(args, down_retries, flap_window, confirm, down_slices,
         'interval':       args.interval if args.interval != '' else '-1',
         'rate_pps':       args.rate_pps,
         # 0, not the word 'auto' - a <input type=range> silently ignores a
-        # non-numeric .value assignment (stays wherever it was); down_retries
-        # is int-backed already so it never hits this problem
+        # non-numeric .value assignment (stays wherever it was)
         'num_of_threads': '0' if args.num_of_threads == 'auto' else str(args.num_of_threads),
         'dns_ttl':        args.dns_ttl,
-        'down_retries':   str(down_retries) if down_retries is not None else '0',
         'flap_window':    str(flap_window),
         'confirm':        str(confirm),
-        'down_slices':    str(down_slices),
-        'full_sweep':     str(full_sweep),
         'tz_offset':      str(tz_offset),
         'log_max_size':   args.log_max_size,
         'log_max_files':  args.log_max_files,
@@ -7536,15 +7987,12 @@ ADV_OPTION_CLI_FLAG = {
     'backoff':         '-B',
     'timeout':         '-t',
     'retries':         '-re',
-    'down_retries':    '-dr',
     'interval':        '-i',
     'num_of_threads':  '-p',
     'waittime':        '-w',
     'confirm':         '-cf',
     'rate_pps':        '-ra',
     'flap_window':     '-fw',
-    'down_slices':     '-ds',
-    'full_sweep':      '-fs',
     'dns_ttl':         '-dns',
     'tz_offset':       '-tz',
     'log_max_size':    '-lms',
@@ -7557,22 +8005,19 @@ def format_option_cli(key, val):
 
     val is apply_adv_option()'s already-normalized return value - this only
     maps the auto/off sentinels back to the CLI's own spelling (interval=''
-    -> -1, num_of_threads='auto' stays 'auto', down_retries=None -> 0).
+    -> -1, num_of_threads='auto' stays 'auto').
     """
     flag = ADV_OPTION_CLI_FLAG[key]
     if key == 'interval':
         shown = '-1' if val in ('', None) else str(int(val))
     elif key == 'num_of_threads':
         shown = 'auto' if val == 'auto' else str(int(val))
-    elif key == 'down_retries':
-        shown = '0' if val is None else str(int(val))
     else:
         shown = str(val)
     return flag + ' ' + shown
 
 
-def current_option_value(key, args, backoff, timeout, retries, down_retries,
-                         flap_window, confirm, down_slices, full_sweep, tz_offset):
+def current_option_value(key, args, backoff, timeout, retries, flap_window, confirm, tz_offset):
     """One ADV OPTIONS key's current value, normalized the same way
     apply_adv_option()'s return value is - so it can be diffed/logged with
     format_option_cli() after a RESET TO DEFAULT (see reset_options).
@@ -7580,15 +8025,12 @@ def current_option_value(key, args, backoff, timeout, retries, down_retries,
     if key == 'backoff':        return float(backoff)
     if key == 'timeout':        return int(timeout)
     if key == 'retries':        return int(retries)
-    if key == 'down_retries':   return down_retries
     if key == 'interval':       return '' if args.interval == '' else int(args.interval)
     if key == 'num_of_threads': return 'auto' if args.num_of_threads == 'auto' else int(args.num_of_threads)
     if key == 'waittime':       return float(args.waittime)
     if key == 'confirm':        return confirm
     if key == 'rate_pps':       return int(args.rate_pps)
     if key == 'flap_window':    return flap_window
-    if key == 'down_slices':    return down_slices
-    if key == 'full_sweep':     return full_sweep
     if key == 'dns_ttl':        return int(args.dns_ttl)
     if key == 'tz_offset':      return tz_offset
     if key == 'log_max_size':   return int(args.log_max_size)
@@ -7596,8 +8038,8 @@ def current_option_value(key, args, backoff, timeout, retries, down_retries,
     return None
 
 
-def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_window,
-                       confirm, down_slices, full_sweep, tz_offset):
+def build_cli_snapshot(args, backoff, timeout, retries, flap_window,
+                       confirm, tz_offset):
     """Full current configuration as one CLI-flag-style string, for the
     startup #INFO# log line (write_log_info()) - reconstructs the equivalent
     'eping.py ...' command line for every currently active setting.
@@ -7624,6 +8066,8 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
         parts.append('-o ' + args.logfile)
     if not args.disable_logging:
         parts.append('-dl')
+    if getattr(args, 'debug', False):
+        parts.append('-debug')
     parts.append('-up ' + str(args.up_hosts_check))
     parts.append('-p ' + ('auto' if args.num_of_threads == 'auto' else str(args.num_of_threads)))
     parts.append('-tz ' + str(tz_offset))
@@ -7640,13 +8084,10 @@ def build_cli_snapshot(args, backoff, timeout, retries, down_retries, flap_windo
         parts.append('-ph')
     if args.ip_only:
         parts.append('-ipo')
-    parts.append('-dr ' + ('0' if down_retries is None else str(down_retries)))
     if args.diag:
         parts.append('-dg')
     parts.append('-fw ' + str(flap_window))
     parts.append('-cf ' + str(confirm))
-    parts.append('-ds ' + str(down_slices))
-    parts.append('-fs ' + str(full_sweep))
     parts.append('-lms ' + str(args.log_max_size))
     parts.append('-lmf ' + str(args.log_max_files))
     if args.no_check_source:
@@ -7696,10 +8137,9 @@ def host_spec_cli(action, value):
 
 
 def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
-                 update_available, up_check_runs, down_retries=None, full_sweep=0,
-                 confirm=1, down_slices=1, flap_window=FLAP_WINDOW_DEF):
+                 update_available, up_check_runs, confirm=1, flap_window=FLAP_WINDOW_DEF):
     """Headless main loop - same logic as the CLI loop, output goes to the web gui."""
-    global _logfile_file_name   # kept in sync with logfile_file_name - see _web_sigint()
+    global _switching, _logfile_file_name   # kept in sync with logfile_file_name - see _web_sigint()
     global backoff, timeout, retries   # ADV OPTIONS - mutated by apply_adv_option()
     bind_addr = args.web_bind
     port      = int(args.web_port)
@@ -7720,8 +8160,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
 
     tz_offset         = int(args.time_zone_adjust)
     # ADV OPTIONS: snapshot of every startup value, for RESET TO DEFAULT
-    start_option_values = adv_option_values(args, down_retries, flap_window,
-                                            confirm, down_slices, full_sweep, tz_offset)
+    start_option_values = adv_option_values(args, flap_window,
+                                            confirm, tz_offset)
     # published right away - without this the ADV OPTIONS modal shows empty
     # fields/sliders at their minimum until the first round completes and a
     # later web_publish()/set_option call fills web_state['options'] in
@@ -7779,6 +8219,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     else:
         active_hosts_list = apply_addr_mode(active_hosts_list)
 
+    paused = False      # STOP / START button
     while True:
         # --- [G] background PTR lookup: apply results once the thread is done ---
         gn_just_finished = False
@@ -7826,8 +8267,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         message = 'no hosts match ' + WEB_VIEW_MODES[target_mode][0]
             elif cmd == 'addr_mode':
                 # web-gui-only dropdown: off / prefer hostname / prefer ip / ip only
-                # - mutually exclusive, replaces the old separate prefer_hostname
-                # and ip_only toggles (see ADDR_MODE_LABELS)
+                # - mutually exclusive (see ADDR_MODE_LABELS)
                 try:
                     target_mode = int(value)
                 except (TypeError, ValueError):
@@ -8052,8 +8492,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         # fresh file - same full snapshot as a program startup, see main()
                         write_log_info(args.disable_logging, logfile_file_name,
                                        build_cli_snapshot(args, backoff, timeout, retries,
-                                                          down_retries, flap_window, confirm,
-                                                          down_slices, full_sweep, tz_offset),
+                                                          flap_window, confirm,
+                                                          tz_offset),
                                        tz_offset)
                     else:
                         message = 'failed to start logging'
@@ -8066,8 +8506,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message = 'logging reset - ' + logfile_file_name + ' cleared'
                             write_log_info(args.disable_logging, logfile_file_name,
                                            build_cli_snapshot(args, backoff, timeout, retries,
-                                                              down_retries, flap_window, confirm,
-                                                              down_slices, full_sweep, tz_offset),
+                                                              flap_window, confirm,
+                                                              tz_offset),
                                            tz_offset)
                         else:
                             message = 'failed to reset log file'
@@ -8081,8 +8521,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             message = 'new logfile: ' + logfile_file_name
                             write_log_info(args.disable_logging, logfile_file_name,
                                            build_cli_snapshot(args, backoff, timeout, retries,
-                                                              down_retries, flap_window, confirm,
-                                                              down_slices, full_sweep, tz_offset),
+                                                              flap_window, confirm,
+                                                              tz_offset),
                                            tz_offset)
                         else:
                             message = 'failed to create new logfile'
@@ -8102,8 +8542,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     message = 'invalid file name - hosts file not saved'
                 else:
                     if save_hosts_file(target, shown_now, ('' if 'noopt' in cmd else opt_lines_text(
-                            args, adv_option_values(args, down_retries, flap_window, confirm,
-                                                    down_slices, full_sweep, tz_offset),
+                            args, adv_option_values(args, flap_window, confirm,
+                                                    tz_offset),
                             addr_mode, args.disable_logging))):
                         message = 'saved ' + str(len(shown_now)) + ' host(s) to ' + target
                         write_log_info(args.disable_logging, logfile_file_name,
@@ -8117,16 +8557,10 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 key, _, raw = str(value).partition('=')
                 ok, val, _opt_msg = apply_adv_option(key, raw, args)
                 if ok and key in ADV_OPTION_LOCAL_KEYS:
-                    if key == 'down_retries':
-                        down_retries = val
-                    elif key == 'flap_window':
+                    if key == 'flap_window':
                         flap_window = val
                     elif key == 'confirm':
                         confirm = val
-                    elif key == 'down_slices':
-                        down_slices = val
-                    elif key == 'full_sweep':
-                        full_sweep = val
                     elif key == 'tz_offset':
                         tz_offset = val
                 if ok:
@@ -8141,42 +8575,36 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # client see a stale value and wrongly revert+flash a just-accepted
                 # change as rejected.
                 with web_lock:
-                    web_state['options'] = adv_option_values(args, down_retries, flap_window,
-                                                             confirm, down_slices, full_sweep, tz_offset)
+                    web_state['options'] = adv_option_values(args, flap_window,
+                                                             confirm, tz_offset)
             elif cmd == 'reset_options':
                 # same as set_option above: no footer message on purpose
                 _before_reset = {_k: current_option_value(_k, args, backoff, timeout, retries,
-                                                          down_retries, flap_window, confirm,
-                                                          down_slices, full_sweep, tz_offset)
+                                                          flap_window, confirm,
+                                                          tz_offset)
                                  for _k in ADV_OPTION_KEYS}
                 for _key, _raw in start_option_values.items():
                     _ok, _val, _ = apply_adv_option(_key, _raw, args)
                     if _ok and _key in ADV_OPTION_LOCAL_KEYS:
-                        if _key == 'down_retries':
-                            down_retries = _val
-                        elif _key == 'flap_window':
+                        if _key == 'flap_window':
                             flap_window = _val
                         elif _key == 'confirm':
                             confirm = _val
-                        elif _key == 'down_slices':
-                            down_slices = _val
-                        elif _key == 'full_sweep':
-                            full_sweep = _val
                         elif _key == 'tz_offset':
                             tz_offset = _val
                 # only log keys RESET TO DEFAULT actually changed - a reset that
                 # touches nothing (already at defaults) should stay silent
                 for _key in ADV_OPTION_KEYS:
                     _after = current_option_value(_key, args, backoff, timeout, retries,
-                                                  down_retries, flap_window, confirm,
-                                                  down_slices, full_sweep, tz_offset)
+                                                  flap_window, confirm,
+                                                  tz_offset)
                     if _after != _before_reset[_key]:
                         write_log_info(args.disable_logging, logfile_file_name,
                                        format_option_cli(_key, _after), tz_offset)
                 # same immediate-publish reasoning as set_option above
                 with web_lock:
-                    web_state['options'] = adv_option_values(args, down_retries, flap_window,
-                                                             confirm, down_slices, full_sweep, tz_offset)
+                    web_state['options'] = adv_option_values(args, flap_window,
+                                                             confirm, tz_offset)
             elif cmd == 'clear':
                 active_hosts_list   = []
                 original_hosts_list[:] = []
@@ -8192,6 +8620,16 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 filter_mode = 0
                 message = 'all hosts cleared'
                 write_log_info(args.disable_logging, logfile_file_name, 'CLEAR', tz_offset)
+            elif cmd == 'pause':
+                want = (value == '1')
+                if want != paused:
+                    paused = want
+                    with web_lock:
+                        web_state['paused'] = paused
+                    write_log_comment(args.disable_logging, logfile_file_name,
+                                      'CHECK PAUSED' if paused else 'CHECK RESUMED', tz_offset)
+                    loop_stop()          # no fping process while paused
+                    message = 'paused - START resumes the checks' if paused else 'checks resumed'
             elif cmd == 'exit':
                 with web_lock:
                     web_state['stopped'] = True
@@ -8262,8 +8700,16 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # logging state can flip live (START LOG) - keep the quick path in sync too
                 web_state['logging']      = bool(args.disable_logging)
                 web_state['logfile']      = logfile_file_name if args.disable_logging else ''
-                web_state['options']      = adv_option_values(args, down_retries, flap_window,
-                                                              confirm, down_slices, full_sweep, tz_offset)
+                web_state['options']      = adv_option_values(args, flap_window,
+                                                              confirm, tz_offset)
+
+        # --- paused (STOP button): no pings, the table stays as it is ---
+        if paused:
+            with web_lock:
+                web_state['scanning'] = 0.0
+                web_state['datetime'] = now_local(tz_offset).strftime("%d/%m/%Y %H:%M:%S")
+            time.sleep(0.2)
+            continue
 
         # --- learning phase ---
         if not learning_done:
@@ -8289,13 +8735,6 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
 
         # --- ping round ---
         time1 = datetime.datetime.now()
-        # --fs 0 means 'never sweep', not 'always sweep' - only down_retries = None
-        # (i.e. --down_retries -1) disables the retry classes altogether
-        sweep_now = (down_retries is None
-                     or (full_sweep > 0 and (run_counter - 1) % full_sweep == 0))
-        down_now  = None if sweep_now else set(
-            h for h, e in host_state.items() if 'UP' not in e[1])
-
         def web_progress(elapsed):
             with web_lock:
                 web_state['scanning'] = elapsed
@@ -8304,10 +8743,14 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
 
         fping_result_data_sorted, used_scan, used_split, phase = run_ping_round(
             active_hosts_list, args.num_of_threads, int(args.rate_pps),
-            args.interval, int(args.dns_ttl), down_now, down_retries, web_progress,
-            run_counter - 1, down_slices)
+            args.interval, int(args.dns_ttl), web_progress)
         with web_lock:
             web_state['scanning'] = 0.0
+        _m = switch_finished()
+        if _m:                               # the new source delivered its first results
+            message = _m
+            with web_lock:
+                web_state['msg_seq'] = web_state.get('msg_seq', 0) + 1
         _t = time.time()
         update_host_state(host_state, fping_result_data_sorted, tz_offset,
                           learning_done, learning_phase, up_seen,
@@ -8321,8 +8764,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 _logfile_file_name = _new_lf
                 write_log_info(args.disable_logging, logfile_file_name,
                               build_cli_snapshot(args, backoff, timeout, retries,
-                                                 down_retries, flap_window, confirm,
-                                                 down_slices, full_sweep, tz_offset), tz_offset)
+                                                 flap_window, confirm,
+                                                 tz_offset), tz_offset)
         if pending_add_hosts and pending_add_hosts <= set(host_state):
             pending_add_hosts.clear()
             message = 'done'
@@ -8353,7 +8796,8 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
             time.sleep(max(remaining, 0.05))
         phase['wait'] = time.time() - _t
 
-        run_time = format(float((datetime.datetime.now() - time1).total_seconds()), ".2f")
+        _round = (datetime.datetime.now() - time1).total_seconds()
+        run_time = format(max(_round - phase.get('dns', 0), 0.0), ".2f")     # name lookups are not part of it
 
         grp_txt = '  '.join('%s %d(-r %s,-i %dms) %.2fs' % g for g in phase.get('groups', []))
         with web_lock:
@@ -8361,11 +8805,12 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                        % (phase.get('ping', 0), grp_txt, phase.get('dns', 0),
                                           phase.get('state', 0), phase.get('build', 0),
                                           phase.get('wait', 0)))
+        if _round > SLOW_ROUND_S:
+            _debug_event((get_date_time(), 'SLOW ROUND %.1fs: ' % _round
+                                   + web_state.get('phase_info', '')))
         with web_lock:
             web_state['sort_mode'] = sort_mode
         scan_info = used_scan
-        if scan_info and sweep_now and down_retries is not None:
-            scan_info += ' | full sweep'
         if scan_info and confirm > 1:
             damped = sum(1 for v in down_streak.values() if v)
             scan_info += ' | confirm %d%s' % (confirm, (', %d pending' % damped) if damped else '')
@@ -8376,11 +8821,14 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     args.disable_logging, logfile_file_name, update_available,
                     tz_offset, message, scan_info, sort_mode, addr_mode,
                     match_filter_text, original_hosts_list, hosts_shown=hosts_count_shown,
-                    options=adv_option_values(args, down_retries, flap_window, confirm,
-                                              down_slices, full_sweep, tz_offset),
+                    options=adv_option_values(args, flap_window, confirm,
+                                              tz_offset),
                     hosts_flap=hosts_count_flap, pending_wait=bool(pending_add_hosts))
 
-        run_counter += 1
+        if _round_checked:               # RUNS counts only rounds in which hosts were checked
+            run_counter += 1
+        else:
+            time.sleep(0.2)              # nothing checked yet (lookups / start): do not spin
 
 
 # MAIN MAIN MAIN
@@ -8443,6 +8891,8 @@ if __name__=='__main__':
     parser.add_argument('-i', '--interval', default='', dest='interval', help="interval between sending pings in ms, range 0-250; overrides --rate. -1 = auto (unset, same as omitting this flag). 0 = no pacing at all (fastest, needs the privileges fping was installed with, sends one hard burst)")
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
+    parser.add_argument('-debug', '--debug', action="store_true",
+                        help="log engine events (LOOP START/ADD/DOWN burst/STALL, SLOW ROUND) as comments")
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete ALL files starting with 'eping-*' in the current directory - logs, reports AND the hosts file eping-hosts.txt")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-setref', '--set_reference', action="store_true", dest='set_reference', help="with -up: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing [S]/SET REFERENCE)" )
@@ -8461,12 +8911,9 @@ if __name__=='__main__':
     parser.add_argument('-ph', '--prefer_hostname', action="store_true", dest='prefer_hostname', help="start with PREFER HOSTNAMES active - skip a raw IP host when the same address is already covered by a hostname entry (toggle later with [P] / the web button)")
     parser.add_argument('-ipo', '--ip_only', action="store_true", dest='ip_only', help="start with IP ONLY active - resolve every hostname to its address (v4 or v6, whichever resolves - not distinguished) and ping/track it by IP instead of by name (toggle later with [I] / the web button)")
     parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
-    parser.add_argument('-dr', '--down_retries', default=str(DOWN_RETRIES_DEF), dest='down_retries', help="retries for hosts already known to be DOWN, range 0-" + str(RETRIES_MAX) + " (default: " + str(DOWN_RETRIES_DEF) + ", 0 = disabled - treat them like every other host)")
     parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per retry group plus dns/state/build/wait/draw")
     parser.add_argument('-fw', '--flap_window', default=str(FLAP_WINDOW_DEF), dest='flap_window', help="minutes since the last state change for a host to count as flapping (default: " + str(FLAP_WINDOW_DEF) + " = 50 days, max)")
     parser.add_argument('-cf', '--confirm', default=str(CONFIRM_DEF), dest='confirm', help="consecutive DOWN observations before a host leaves UP (default: " + str(CONFIRM_DEF) + ", 1 = report every single observation)")
-    parser.add_argument('-ds', '--down_slices', default=str(DOWN_SLICES_DEF), dest='down_slices', help="spread the known DOWN hosts over N rounds, range 1-" + str(DOWN_SLICES_MAX) + " (default: " + str(DOWN_SLICES_DEF) + ", 1 = probe all of them every round)")
-    parser.add_argument('-fs', '--full_sweep', default=str(FULL_SWEEP_DEF), dest='full_sweep', help="every Nth run probes every host with full retries, range 0-" + str(FULL_SWEEP_MAX) + " (default: " + str(FULL_SWEEP_DEF) + ", 0 = disabled/never)")
     parser.add_argument('-ssh', '--ssh', dest='ssh', metavar='[USER@]HOST[:PORT]', default=None, help="run fping on this jump host via ssh instead of locally (system ssh; password or key passphrase is asked at startup; the jump host resolves the names and needs a working fping)")
     parser.add_argument('-sshkey', '--ssh_key', dest='ssh_key', metavar='FILE', default=None, help="private key file for -ssh (default: ssh agent / default keys)")
     parser.add_argument('-sshnr', '--ssh_no_resolve', action="store_true", dest='ssh_no_resolve', help="with -ssh: do not resolve names on the jump host (default: GET NAMES, PREFER HOSTNAME / IP ADDRESS and IP ONLY use getent / dig / nslookup / host there when available; otherwise the local resolver is used)")
@@ -8507,6 +8954,7 @@ if __name__=='__main__':
     # read arguments from command line
     _ARG_DEFAULTS = vars(parser.parse_args([]))
     args = parser.parse_args()
+    DEBUG_EVENTS = bool(args.debug)
     _OPT_ARGS = args
     LOG_ZIP_ROTATED = not args.log_no_zip
     if curses is None:
@@ -8629,19 +9077,6 @@ if __name__=='__main__':
     except ValueError:
         error_handler("ERROR: --rate: must be between " + str(MIN_RATE_PPS) + " and " + str(MAX_RATE_PPS))
 
-    # retries for hosts already known to be down. 0 disables the retry classes -
-    # every host gets the full --retries budget (same sentinel convention as -p above)
-    try:
-        down_retries = int(args.down_retries)
-        if down_retries < 0 or down_retries > RETRIES_MAX:
-            error_handler("ERROR: --down_retries: must be between 0 and " + str(RETRIES_MAX))
-        if down_retries > int(args.retries):
-            error_handler("ERROR: --down_retries must not be larger than --retries")
-    except ValueError:
-        error_handler("ERROR: --down_retries: must be between 0 and " + str(RETRIES_MAX))
-    if down_retries == 0:
-        down_retries = None          # disabled - every host gets the full budget
-
     # flap window
     try:
         flap_window = int(args.flap_window)
@@ -8657,22 +9092,6 @@ if __name__=='__main__':
             error_handler("ERROR: --confirm: must be between 1 and 10")
     except ValueError:
         error_handler("ERROR: --confirm: must be between 1 and 10")
-
-    # down slices
-    try:
-        down_slices = int(args.down_slices)
-        if down_slices < 1 or down_slices > DOWN_SLICES_MAX:
-            error_handler("ERROR: --down_slices: must be between 1 and " + str(DOWN_SLICES_MAX))
-    except ValueError:
-        error_handler("ERROR: --down_slices: must be between 1 and " + str(DOWN_SLICES_MAX))
-
-    # full sweep interval - 0 = disabled (never sweep)
-    try:
-        full_sweep = int(args.full_sweep)
-        if full_sweep < 0 or full_sweep > FULL_SWEEP_MAX:
-            error_handler("ERROR: --full_sweep: must be between 0 and " + str(FULL_SWEEP_MAX))
-    except ValueError:
-        error_handler("ERROR: --full_sweep: must be between 0 and " + str(FULL_SWEEP_MAX))
 
     # dns cache ttl
     try:
@@ -8762,12 +9181,9 @@ if __name__=='__main__':
                 "# opt: -ph                          # start with PREFER HOSTNAMES active\n",
                 "# opt: -ipo                         # start with IP ONLY active\n",
                 "# opt: -gn                          # reverse-DNS raw IPs to hostnames once at startup\n",
-                "# opt: -dr 1                        # retries for hosts already known DOWN\n",
                 "# opt: -dg                          # show per-phase cycle time diagnostics\n",
                 "# opt: -fw 72000                    # flapping window, minutes\n",
                 "# opt: -cf 2                        # consecutive DOWN observations before UP -> DOWN\n",
-                "# opt: -ds 4                        # spread known DOWN hosts over N rounds\n",
-                "# opt: -fs 10                       # every Nth run: full retries for everyone (0 = never)\n",
                 "# opt: -ncs                         # do not pass --check-source to fping\n",
                 "# opt: -ncf                         # CSV: do not ping the CSV IP of a name without DNS record\n",
                 "# opt: -web                         # start the web gui instead of the CLI\n",
@@ -8870,8 +9286,7 @@ if __name__=='__main__':
             error_handler('ERROR: failed to create logfile: ' + logfile_file_name + ' (' + str(e) + ')')
         # #INFO# startup snapshot - full CLI-equivalent of every current setting
         startup_snapshot = build_cli_snapshot(args, backoff, timeout, retries,
-                                              down_retries, flap_window, confirm,
-                                              down_slices, full_sweep,
+                                              flap_window, confirm,
                                               int(args.time_zone_adjust))
         write_log_info(args.disable_logging, logfile_file_name, startup_snapshot,
                        int(args.time_zone_adjust))
@@ -8911,8 +9326,8 @@ if __name__=='__main__':
             os._exit(0)
         signal.signal(signal.SIGINT, _web_sigint)
         run_web_mode(list(summary_hosts_list), host_state, args, logfile_file_name,
-                     _update_available, int(args.up_hosts_check), down_retries, full_sweep,
-                     confirm, down_slices, flap_window)
+                     _update_available, int(args.up_hosts_check),
+                     confirm, flap_window)
         sys.exit(0)
 
     # =================================================================
@@ -8986,14 +9401,9 @@ if __name__=='__main__':
         while not stop_event.is_set():
             run_time = RUNTIME_UNAVAILABLE
             t0 = datetime.datetime.now()
-            sweep_now = (down_retries is None
-                        or (full_sweep > 0 and (run_counter - 1) % full_sweep == 0))
-            down_now  = None if sweep_now else set(
-                h for h, e in host_state.items() if 'UP' not in e[1])
             fping_result_data_sorted, _scan, _split, _phase = run_ping_round(
                 active_hosts_list, args.num_of_threads, int(args.rate_pps),
-                args.interval, int(args.dns_ttl), down_now, down_retries, None,
-                run_counter - 1, down_slices)
+                args.interval, int(args.dns_ttl), None)
             update_host_state(host_state, fping_result_data_sorted, tz_offset,
                               learning_done, learning_phase, up_seen,
                               args.disable_logging, logfile_file_name,
@@ -9006,12 +9416,13 @@ if __name__=='__main__':
                     _logfile_file_name = _new_lf
                     write_log_info(args.disable_logging, logfile_file_name,
                                   build_cli_snapshot(args, backoff, timeout, retries,
-                                                     down_retries, flap_window, confirm,
-                                                     down_slices, full_sweep, tz_offset), tz_offset)
+                                                     flap_window, confirm,
+                                                     tz_offset), tz_offset)
             if pending_add_hosts and pending_add_hosts <= set(host_state):
                 pending_add_hosts.clear()
                 web_sync('done', bump=True)
-            run_counter += 1
+            if _round_checked:               # RUNS counts only rounds in which hosts were checked
+                run_counter += 1
             remaining = float(args.waittime) - (datetime.datetime.now() - t0).total_seconds()
             stop_event.wait(max(remaining, 0.05))
 
@@ -9634,27 +10045,21 @@ if __name__=='__main__':
         dragged slider, so every accepted change is logged immediately (no
         debounce needed - see run_web_mode()'s pending_info for why the web gui
         needs one and curses does not)."""
-        global down_retries, flap_window, confirm, down_slices, full_sweep, tz_offset
+        global flap_window, confirm, tz_offset
 
         def _assign_local(key, val):
-            global down_retries, flap_window, confirm, down_slices, full_sweep, tz_offset
-            if key == 'down_retries':
-                down_retries = val
-            elif key == 'flap_window':
+            global flap_window, confirm, tz_offset
+            if key == 'flap_window':
                 flap_window = val
             elif key == 'confirm':
                 confirm = val
-            elif key == 'down_slices':
-                down_slices = val
-            elif key == 'full_sweep':
-                full_sweep = val
             elif key == 'tz_offset':
                 tz_offset = val
 
         def _cur(key):
             return current_option_value(key, args, backoff, timeout, retries,
-                                        down_retries, flap_window, confirm,
-                                        down_slices, full_sweep, tz_offset)
+                                        flap_window, confirm,
+                                        tz_offset)
 
         def _numeric(key, spec):
             _, _kind, lo, _hi, _step, _unit, auto_sentinel = spec
@@ -9667,7 +10072,7 @@ if __name__=='__main__':
             _, kind, _lo, _hi, _step, unit, _auto_sentinel = spec
             val = _cur(key)
             if val in ('', None):
-                return 'OFF' if key == 'down_retries' else 'AUTO'
+                return 'AUTO'
             if val == 'auto':
                 return 'AUTO'
             shown = ('%.2f' % val) if kind == 'float' else str(val)
@@ -9800,8 +10205,8 @@ if __name__=='__main__':
         global filter_mode, active_hosts_list, original_hosts_list, prefer_hostname
         global prefer_ip, ip_only_mode, ip_only_map, sort_mode, match_filter_re
         global match_filter_text, gn_thread, gn_result, gn_candidates
-        global logfile_file_name, _logfile_file_name, down_retries, flap_window
-        global confirm, down_slices, full_sweep, tz_offset, pending_add_hosts
+        global logfile_file_name, _logfile_file_name, flap_window
+        global confirm, tz_offset, pending_add_hosts, cli_message, _cli_paused
 
         message = 'done'   # default footer text - overridden below where a more
                             # specific one applies; always sent so the pending
@@ -10040,6 +10445,18 @@ if __name__=='__main__':
             write_log_info(args.disable_logging, logfile_file_name, 'ZERO', tz_offset)
             message = 'change counters reset'
 
+        elif bcmd == 'pause':
+            # STOP / START button: no pings while paused, the table stays as it is
+            want = (str(bval) == '1')
+            if want != _cli_paused:
+                _cli_paused = want
+                with web_lock:
+                    web_state['paused'] = want
+                write_log_comment(args.disable_logging, logfile_file_name,
+                                  'CHECK PAUSED' if want else 'CHECK RESUMED', tz_offset)
+                loop_stop()          # no fping process while paused
+                message = 'paused - START resumes the checks' if want else 'checks resumed'
+
         elif bcmd == 'get_names':
             if gn_thread is not None and gn_thread.is_alive():
                 notice('GET NAMES: ALREADY RUNNING', 3)
@@ -10123,9 +10540,7 @@ if __name__=='__main__':
                     notice('LOGGING STARTED: ' + logfile_file_name, 2)
                     message = 'logging started: ' + logfile_file_name
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries, down_retries,
-                                                      flap_window, confirm, down_slices, full_sweep,
-                                                      tz_offset), tz_offset)
+                                   build_cli_snapshot(args, backoff, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
                 else:
                     notice('FAILED TO START LOGGING', 3)
                     message = 'failed to start logging'
@@ -10138,9 +10553,7 @@ if __name__=='__main__':
                     notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
                     message = 'logging reset - ' + logfile_file_name + ' cleared'
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries, down_retries,
-                                                      flap_window, confirm, down_slices, full_sweep,
-                                                      tz_offset), tz_offset)
+                                   build_cli_snapshot(args, backoff, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
                 else:
                     notice('FAILED TO RESET LOGFILE', 3)
                     message = 'failed to reset logfile'
@@ -10155,9 +10568,7 @@ if __name__=='__main__':
                     notice('NEW LOGFILE: ' + logfile_file_name, 2)
                     message = 'new logfile: ' + logfile_file_name
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries, down_retries,
-                                                      flap_window, confirm, down_slices, full_sweep,
-                                                      tz_offset), tz_offset)
+                                   build_cli_snapshot(args, backoff, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
                 else:
                     notice('FAILED TO CREATE NEW LOGFILE', 3)
                     message = 'failed to create new logfile'
@@ -10180,8 +10591,8 @@ if __name__=='__main__':
                 message = 'invalid file name - hosts file not saved'
             else:
                 if save_hosts_file(target, shown_now, ('' if 'noopt' in bcmd else opt_lines_text(
-                        args, adv_option_values(args, down_retries, flap_window, confirm,
-                                                down_slices, full_sweep, tz_offset),
+                        args, adv_option_values(args, flap_window, confirm,
+                                                tz_offset),
                         (3 if ip_only_mode else (2 if prefer_ip else (1 if prefer_hostname else 0))),
                         args.disable_logging))):
                     notice('SAVED ' + str(len(shown_now)) + ' HOST(S) TO ' + target, 2)
@@ -10196,11 +10607,8 @@ if __name__=='__main__':
             key, _, raw = str(bval).partition('=')
             ok, val, msg = apply_adv_option(key, raw, args)
             if ok and key in ADV_OPTION_LOCAL_KEYS:
-                if key == 'down_retries':   down_retries = val
-                elif key == 'flap_window':  flap_window = val
+                if key == 'flap_window':  flap_window = val
                 elif key == 'confirm':      confirm = val
-                elif key == 'down_slices':  down_slices = val
-                elif key == 'full_sweep':   full_sweep = val
                 elif key == 'tz_offset':    tz_offset = val
             if ok:
                 write_log_info(args.disable_logging, logfile_file_name,
@@ -10209,21 +10617,16 @@ if __name__=='__main__':
                 notice(msg.upper(), 3, 1.2)
 
         elif bcmd == 'reset_options':
-            before = {k: current_option_value(k, args, backoff, timeout, retries, down_retries,
-                                              flap_window, confirm, down_slices, full_sweep, tz_offset)
+            before = {k: current_option_value(k, args, backoff, timeout, retries, flap_window, confirm, tz_offset)
                      for k in ADV_OPTION_KEYS}
             for key, raw in start_option_values.items():
                 ok, val, _ = apply_adv_option(key, raw, args)
                 if ok and key in ADV_OPTION_LOCAL_KEYS:
-                    if key == 'down_retries':   down_retries = val
-                    elif key == 'flap_window':  flap_window = val
+                    if key == 'flap_window':  flap_window = val
                     elif key == 'confirm':      confirm = val
-                    elif key == 'down_slices':  down_slices = val
-                    elif key == 'full_sweep':   full_sweep = val
                     elif key == 'tz_offset':    tz_offset = val
             for key in ADV_OPTION_KEYS:
-                after = current_option_value(key, args, backoff, timeout, retries, down_retries,
-                                             flap_window, confirm, down_slices, full_sweep, tz_offset)
+                after = current_option_value(key, args, backoff, timeout, retries, flap_window, confirm, tz_offset)
                 if after != before[key]:
                     write_log_info(args.disable_logging, logfile_file_name,
                                    format_option_cli(key, after), tz_offset)
@@ -10252,6 +10655,7 @@ if __name__=='__main__':
             draw_screen()
             screen.refresh()
             web_sync(message, bump=True)
+        cli_message = None      # notice() text of this command is already part of 'message'
 
     def notice(text, color=3, seconds=1.4):
         """Show a short message box in the middle of the screen.
@@ -10282,8 +10686,8 @@ if __name__=='__main__':
     tz_offset = int(args.time_zone_adjust)
     # [X] ADV OPTIONS: snapshot of every startup value, for RESET TO DEFAULT -
     # same reasoning as run_web_mode()'s start_option_values.
-    start_option_values = adv_option_values(args, down_retries, flap_window,
-                                            confirm, down_slices, full_sweep, tz_offset)
+    start_option_values = adv_option_values(args, flap_window,
+                                            confirm, tz_offset)
     if args.web_view or args.web_view_control:
         # published right away - without this the browser's ADV OPTIONS modal
         # shows empty fields/sliders at their minimum until the first round
@@ -10369,8 +10773,8 @@ if __name__=='__main__':
                          if host_is_flapping(e, now_local(tz_offset), flap_window))
         # ADV OPTIONS current values - only actually looked at by the browser's
         # options modal in -wvc (harmless, cheap dict build otherwise)
-        opts = adv_option_values(args, down_retries, flap_window, confirm,
-                                 down_slices, full_sweep, tz_offset)
+        opts = adv_option_values(args, flap_window, confirm,
+                                 tz_offset)
         web_publish(display_list, run_counter, run_time, total_up, total_down,
                     filter_mode, learning_phase, run_counter, up_check_runs,
                     args.disable_logging, logfile_file_name, update_available_cli,
@@ -10965,8 +11369,8 @@ if __name__=='__main__':
                     # fresh file - same full snapshot as a program startup, see main()
                     write_log_info(args.disable_logging, logfile_file_name,
                                    build_cli_snapshot(args, backoff, timeout, retries,
-                                                      down_retries, flap_window, confirm,
-                                                      down_slices, full_sweep, tz_offset),
+                                                      flap_window, confirm,
+                                                      tz_offset),
                                    tz_offset)
                 else:
                     notice('FAILED TO START LOGGING', 3)
@@ -10983,8 +11387,8 @@ if __name__=='__main__':
                         notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
                         write_log_info(args.disable_logging, logfile_file_name,
                                        build_cli_snapshot(args, backoff, timeout, retries,
-                                                          down_retries, flap_window, confirm,
-                                                          down_slices, full_sweep, tz_offset),
+                                                          flap_window, confirm,
+                                                          tz_offset),
                                        tz_offset)
                     else:
                         notice('FAILED TO RESET LOGFILE', 3)
@@ -11002,8 +11406,8 @@ if __name__=='__main__':
                         notice('NEW LOGFILE: ' + logfile_file_name, 2)
                         write_log_info(args.disable_logging, logfile_file_name,
                                        build_cli_snapshot(args, backoff, timeout, retries,
-                                                          down_retries, flap_window, confirm,
-                                                          down_slices, full_sweep, tz_offset),
+                                                          flap_window, confirm,
+                                                          tz_offset),
                                        tz_offset)
                     else:
                         notice('FAILED TO CREATE NEW LOGFILE', 3)
@@ -11078,22 +11482,21 @@ if __name__=='__main__':
         else:
             learning_phase = True
 
+        # --- paused (STOP button): no pings, keys and browser commands are still handled ---
+        if _cli_paused:
+            with web_lock:
+                web_state['scanning'] = 0.0
+            time.sleep(0.1)
+            continue
+
         # --- run fping ---
         time1 = datetime.datetime.now()
-        # confirmed DOWN hosts get the reduced retry budget, unknown hosts do not.
-        # every full_sweep-th run probes everything fully, so a slow host cannot get
-        # stuck in DOWN just because its reply never fits into the shorter window.
-        # --fs 0 means 'never sweep', not 'always sweep' - only down_retries = None
-        # (i.e. --down_retries -1) disables the retry classes altogether
-        sweep_now = (down_retries is None
-                     or (full_sweep > 0 and (run_counter - 1) % full_sweep == 0))
-        down_now  = None if sweep_now else set(
-            h for h, e in host_state.items() if 'UP' not in e[1])
-
         fping_result_data_sorted, used_scan, used_split, phase = run_ping_round(
             active_hosts_list, args.num_of_threads, int(args.rate_pps),
-            args.interval, int(args.dns_ttl), down_now, down_retries, scan_progress,
-            run_counter - 1, down_slices)
+            args.interval, int(args.dns_ttl), scan_progress)
+        _m = switch_finished()
+        if _m:
+            web_sync(_m, bump=True)
         if not have_data:
             screen.clear()         # remove the 'please wait' box
             have_data = True
@@ -11112,8 +11515,8 @@ if __name__=='__main__':
                 _logfile_file_name = _new_lf
                 write_log_info(args.disable_logging, logfile_file_name,
                               build_cli_snapshot(args, backoff, timeout, retries,
-                                                 down_retries, flap_window, confirm,
-                                                 down_slices, full_sweep, tz_offset), tz_offset)
+                                                 flap_window, confirm,
+                                                 tz_offset), tz_offset)
         if pending_add_hosts and pending_add_hosts <= set(host_state):
             pending_add_hosts.clear()
             web_sync('done', bump=True)
@@ -11140,12 +11543,20 @@ if __name__=='__main__':
         phase['wait'] = time.time() - _t
 
         time2    = datetime.datetime.now()
-        run_time = format(float((time2 - time1).total_seconds()), ".2f")
+        _round   = (time2 - time1).total_seconds()
+        run_time = format(max(_round - phase.get('dns', 0), 0.0), ".2f")
+        if _round > SLOW_ROUND_S:
+            _debug_event((get_date_time(), 'SLOW ROUND %.1fs: fping %.2f | dns %.2f | state %.2f | build %.2f | wait %.2f'
+                                   % (_round, phase.get('ping', 0), phase.get('dns', 0), phase.get('state', 0),
+                                      phase.get('build', 0), phase.get('wait', 0))))
         t_draw   = time.time()
 
         draw_screen()
         screen.refresh()
         last_draw_time = time.time() - t_draw
         web_sync()
-        run_counter += 1
+        if _round_checked:               # RUNS counts only rounds in which hosts were checked
+            run_counter += 1
+        else:
+            time.sleep(0.2)              # nothing checked yet (lookups / start): do not spin
 # THX – Wanna patch my brain? Drop your tweaks here: https://github.com/ewaldj/eping — you know how 😉

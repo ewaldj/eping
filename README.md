@@ -1,4 +1,4 @@
-# eping.py 4.31
+# eping.py 4.51
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -226,6 +226,8 @@ Single self-contained page, no external resources.
   if needed ("SCROLL RIGHT FOR MORE" hint in the stats bar).
 - Footer stats: HOSTS, RUNTIME, HOST UP/DOWN/FLAPPING always count all hosts; SHOWN is the
   number of rows displayed after the view, the match filter and the ADV FILTER. The CLI footer counts the same way. RUNTIME shows `n/a` briefly during a background round.
+- While a source switch (local / jump host) is under way the message line shows `switching to ... - please wait ...`,
+  then `switched to ... - done`. The JUMPHOST button is green while a jump host is active.
 - Adding many hosts (`ADD`, ADD HOSTS FILE, upload) shows "added N host(s) - please wait,
   pinging ..." until they appear with a state, then `done`.
 - Font size 6–28px (slider, `A−`/`A+`, `+`/`−` keys), stored in `localStorage`.
@@ -235,7 +237,13 @@ Single self-contained page, no external resources.
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, LOGGING, FILE OPERATIONS
     select, EXIT, font size.
   - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), ADD/DEL LIST, comment
-    field (COMMENT), GENERATE REPORT select.
+    field (COMMENT), GENERATE REPORT select, STOP/START button.
+  - **STOP / START** (last button of row 2): `STOP` pauses the check - no pings are sent, the table, the
+    counters and the log stay as they are (header shows `PAUSED`, the button turns red and reads `START`).
+    Commands (view, sort, filter, ADD/DELETE ...) keep working while paused; added hosts are pinged after
+    `START`. A round that is running when `STOP` is pressed is cut short. The log gets the comment rows
+    `CHECK PAUSED` / `CHECK RESUMED`; epinga.py shows the pause as a gap in the timeline
+    (grey, like missing data) and does not count it as time in any state. Works in `-web` and `-wvc` (no CLI key); not in the read-only view (`-wv`).
   - View select, sort order select, address mode select and ADV OPTIONS all match the
     CLI's `U`/`O`/`P`/`X` pickers exactly. FILE OPERATIONS (incl. ADD HOSTS FILE FROM CLIENT/
     FROM SERVER) is web-gui-only (no CLI key - CLI already runs on the server's own
@@ -326,15 +334,12 @@ directly, `D` resets the selected option to its default, `R` resets all, ESC/`X`
 | BACKOFF | 1 – 2 | — |
 | TIMEOUT | 10 – 5000 ms | — |
 | RETRIES | 0 – 5 | — |
-| DOWN RETRIES | 0 – 5 | `0` = disabled, full RETRIES |
 | INTERVAL | -1 – 250 ms | `-1` = auto (use RATE), `0` = no pacing |
 | THREADS | 0 – 32 | `0` = auto |
 | WAIT TIME | 0 – 600 s | — |
 | CONFIRM | 1 – 10 | — |
 | RATE | 10 – 25000 pps | — |
 | FLAP WINDOW | 1 – 72000 min | — |
-| DOWN SLICES | 1 – 20 | — |
-| FULL SWEEP | 0 – 50 | `0` = disabled |
 | DNS TTL | 0 – 3600 s | — |
 | TIMEZONE | -24 – +24 h | — |
 | MAX LOG SIZE | 0, 10 – 2500 MB | default `500`; `0` = no rotation |
@@ -368,9 +373,9 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
 `adv_filter`, `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
-`set_option`, `reset_options`, `run_report`, `save_hosts_file`, `exit`. `adv_filter` value: JSON object `{"<field>":{"mode":"in|out","values":[...]}}` with the fields `model`,
+`set_option`, `reset_options`, `run_report`, `pause` (value `1` = STOP, `0` = START), `save_hosts_file`, `exit`. `adv_filter` value: JSON object `{"<field>":{"mode":"in|out","values":[...]}}` with the fields `model`,
 `location`, `sysloc`, `type`, `comment`; `\u0001none` as value = hosts without a value; `{}` = off
-(the old `{"<field>":"<value>"}` form is still accepted as `in` with one value). `set_option`
+`set_option`
 value: `key=value`. `reset_log` value: logging off - optional custom file name (blank =
 auto-generated); logging on - `y` (clear) or `new`/`new=<name>` (new file, optional
 custom name). `run_report`: `value` = empty (active logfile) or one `.csv` filename; or
@@ -381,27 +386,35 @@ JSON body field `values`: `[...]` to merge and analyse multiple `.csv` files as 
 `-wv` answers `403` to `POST /api/command`/`/api/upload`; `-wvc`/`-web` allow both. No
 authentication. Default bind `0.0.0.0` — use `-bind 127.0.0.1` outside trusted networks.
 
-## How a scan round works
+## How checking works (loop mode)
 
-1. Hostnames resolved once (32 parallel), cached around `-dns` seconds (randomized a
-   bit so a large batch resolved together doesn't all expire - and need re-resolving -
-   in the same round later). Same-address names share one probe. Unresolvable → NO-DNS,
-   no fping call. `-dns 0` = fping-side resolve. A command (filter, add, ...) cuts
-   the name resolution short as well, so it applies at once even with thousands of
-   hostnames.
-2. UP/new hosts get full `-re` retries; confirmed-DOWN hosts get `-dr` retries. Every
-   `-fs`-th round probes everything with full retries.
-3. Only 1/`-ds` of DOWN hosts probed per round, strided.
-4. Both classes run concurrently, one fping process each, sharing `--rate`; `-i`
-   derived from that share.
-5. With `-cf` > 1, a host leaves UP only after that many consecutive non-UP results;
-   suppressed count written to the log's TBD column.
+eping starts long-running `fping -l` processes and takes one snapshot of their latest results
+per round. A process keeps one ICMP identifier for its whole life (few NAT / conntrack entries
+on a router) and a jump host sees one command instead of one per round.
 
-One fping process per group (`-p` still accepts up to 32 for diagnostics): measured on
-a /20 with 4109 hosts, 9 processes reported 244 UP, one process reported 866.
-
-`-i` floor is 1ms (~1000 pps nominal); measured ~1.8ms (~550 pps) on a real /20. `-i 0`
-removes pacing (needs fping's install privileges), one hard burst.
+- **Period:** fping pings every host once per period = `-w` (at least 200 ms), raised to
+  `hosts x interval + timeout` so one pass fits. A round ends when every host delivered a new
+  result (at most one period + timeout). RUNS counts only rounds in which hosts were checked.
+- **UP / DOWN:** a reply = UP at once. DOWN after `-re` + 1 timeouts in a row, or when fping
+  delivered nothing for a host for 3 periods. fping drops replies later than its timeout, so the
+  loop timeout is `-t` x `-B`^`-re`, at most 2000 ms. With `-cf` > 1 a host leaves UP only after that
+  many consecutive non-UP results (suppressed count in the log's TBD column).
+- **New hosts:** only an answer is reported during a grace period of (`-re` + 2) periods + 5 s - a slow first
+  contact (new NAT / firewall state) must not show up as DOWN.
+- **Names:** resolved by background threads (32 parallel, cached `-dns` seconds, randomized; an expired
+  entry stays in use until its refresh is done). A name without an address yet joins as soon as it
+  resolves, a round waits at most 2 s for names never resolved before; unresolvable = NO-DNS.
+  `-dns 0` = fping resolves. With a jump host the jump host resolves.
+- **Add / delete:** ADD starts one extra fping for the new hosts, running processes are not touched.
+  DELETE only stops judging the hosts. Everything is restarted (results kept) when the source or a
+  timing option changes, a process died, there are more than 16 processes or many hosts were removed.
+- **Stall guard:** if at least 30 % (and 20) of the hosts of one fping process go silent at once, that is
+  taken as a stall of fping or of this computer's network, not as hosts being down: their state is kept for
+  up to 5 silent periods.
+- **Rate:** one process sends one packet per `-i` ms, `-ra` sets the packets/s. A pass over N hosts takes at
+  least N / `-ra` s: 32 000 hosts at `-ra 1000` = about 34 s per round. Raise `-ra` for big lists (mind the
+  router / NAT / jump host). `-i` floor is 1 ms; `-i 0` removes pacing.
+- STOP stops the processes, START starts them again.
 
 ## Options
 
@@ -418,17 +431,14 @@ separated) · `-r` IP range (comma separated, shortened end)
 | Option | Range | Default | Meaning |
 |---|---|---|---|
 | `-B` | 1 – 2 | 1.5 | backoff factor per retry |
-| `-t` | 10 – 5000 | 250 | initial timeout (ms) |
-| `-re` | 0 – 5 | 3 | retries, UP/unknown hosts |
-| `-dr` | 0 – 5 | 1 | retries, confirmed DOWN (`0` = same as others) |
+| `-t` | 10 – 5000 | 250 | timeout (ms); with `-B` and `-re` it gives the loop timeout |
+| `-re` | 0 – 5 | 3 | DOWN after `-re` + 1 timeouts in a row |
 | `-i` | -1 – 250 | auto | send interval (ms), overrides `-ra`; `-1` auto, `0` unpaced |
-| `-p` | 0 – 32 | auto | fping processes per group |
-| `-w` | 0 – 600 | 0.5 | pause between rounds (s) |
+| `-p` | 0 – 32 | auto | fping processes per address family |
+| `-w` | 0 – 600 | 0.5 | ping period per host (s, at least 0.2) |
 | `-cf` | 1 – 10 | 2 | consecutive DOWN before leaving UP (`1` = off) |
 | `-ra` | 10 – 25000 | 1000 | ICMP packets/s |
 | `-fw` | 1 – 72000 | 72000 | minutes to count as flapping |
-| `-ds` | 1 – 20 | 4 | spread DOWN hosts over N rounds |
-| `-fs` | 0 – 50 | 10 | every Nth round: full sweep (`0` = never) |
 | `-dns` | 0 – 3600 | 300 | hostname cache TTL (s, `0` off) |
 | `-4` / `-6` | — | auto | prefer IPv4/IPv6, mutually exclusive |
 | `-ph` | — | off | start with DEDUP: KEEP HOSTNAME |
@@ -453,6 +463,7 @@ Hard-enforced at startup and live via ADV OPTIONS (`-web` only), same bounds.
 | `-cl` | — | — | delete all `eping-*` files and exit |
 | `-tz` | -24 – +24 | 0 | timezone offset (h) |
 | `-dg` | — | off | cycle time breakdown |
+| `-debug` | — | off | write engine events (LOOP START / ADD / DOWN burst / STALL, SLOW ROUND) as `#COMMENT#` rows to the log |
 | `-du` | — | — | disable online version check |
 | `-lms` | 0, 10 – 2500 | 500 | max CSV log size (MB) before rotating; `0` = no rotation |
 | `-lmf` | 0 – 500 | 0 | max `eping-log_*.csv` files kept, oldest deleted first; `0` = unlimited |
@@ -495,7 +506,7 @@ log file keeps everything already written.
 in `HOSTNAME`, text in `IP`. No-op with a notice if logging is off. epinga.py detects
 these rows automatically.
 
-`LOGGING`/`L` (formerly RESET LOGGING):
+`LOGGING`/`L`:
 - Logging on: confirmation first (CLI keypress / web modal). `Y` clears all entries,
   restarts logging into the same file. `N` starts a fresh file, old file untouched -
   optional custom name (blank = auto-generated `eping-log_<timestamp>.csv`); a name
@@ -633,10 +644,11 @@ box with an elapsed counter meanwhile, the web mode a line in the terminal.
 CLI: a hostname whose address collides with another host is dropped and not restored.
 Web GUI: colliding/unresolvable hosts are hidden (not pinged) while active, restored
 automatically when switching away.
+The web GUI mouse-over of a renamed host shows the hostname it had before (`hostname` row).
 
 CLI `P` and the web GUI's address mode select/`P` picker reach the same 4 exclusive
-modes: `KEEP ALL (NO DEDUP)` (default), `DEDUP: KEEP HOSTNAME` (formerly PREFER HOSTNAME),
-`DEDUP: KEEP IP` (formerly PREFER IP ADDRESS), `RESOLVE ALL TO IP` (formerly SWITCH TO IP ONLY). The web GUI additionally has its own `P`/`I` keyboard shortcuts
+modes: `KEEP ALL (NO DEDUP)` (default), `DEDUP: KEEP HOSTNAME`,
+`DEDUP: KEEP IP`, `RESOLVE ALL TO IP`. The web GUI additionally has its own `P`/`I` keyboard shortcuts
 that toggle DEDUP: KEEP HOSTNAME / RESOLVE ALL TO IP directly (see *Web GUI*). Leaving
 `RESOLVE ALL TO IP` restores hostnames before applying the new mode.
 
@@ -695,20 +707,22 @@ other mask rejected. IPv6 addresses are always stored in shortest form.
 ## Diagnostics (`-dg`)
 
 ```
-FPING 11.46 [full 865(-r 3,-i 5ms) 4.31s  reduced 3242(-r 1,-i 1ms) 11.46s]
-   || DNS 0.00 STATE 0.01 BUILD 0.00 WAIT 0.50 DRAW 0.11
+FPING 34.11 [loop restarts=1 adds=0 pend=0 dnspend=0 abort=0 silent=0 young=0 30000(-r 4miss,-i 1ms) 34.11s]
+   || DNS 0.00 STATE 0.35 BUILD 0.01 WAIT 0.10 DRAW 0.11
 ```
 
-`FPING`: round wall time, then per-group wall time (parallel, max not sum). Remaining
-phases: eping's own work (~0.12s on 4109 hosts).
+`FPING`: wait for the snapshot, then engine counters: process restarts, added processes, hosts still without
+a new result (`pend`), names being resolved (`dnspend`), cut short by a command (`abort`), hosts DOWN by
+silence (`silent`), hosts in the grace period (`young`). Remaining phases: eping's own work.
+With `-debug` a round longer than 10 s is also logged as a `SLOW ROUND` comment with these times.
 
 ## Notes
 
 - ICMP echo requests only. Use only on authorised networks.
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
-- `-dr 0` produces flapping hosts in practice — keep the default of 1.
+- Needs an fping with `-l` and per-target sequence numbers (fping 4.3 or newer; the Windows / macOS packages have it).
 
-# epinga.py 2.44
+# epinga.py 2.45
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and
@@ -750,7 +764,7 @@ Logs written while eping.py ran on a jump host carry a `SOURCE` column. With `--
 selection shown on a terminal when the log holds several sources; numbers like `1,3`, ENTER = all)
 only the periods of the selected sources are calculated: uptime, up/down time, RTT, changes and the
 timeline. Periods of other sources are excluded and shown as a gap in the timeline; a state change that
-happened during such a gap is not counted. Without `--source` everything is combined (as before).
+happened during such a gap is not counted. Without `--source` everything is combined.
 Logs without a `SOURCE` column are treated as `local`.
 
 **Source switch in the HTML report**: if the (selected) sources are two or more, epinga analyses every source on
