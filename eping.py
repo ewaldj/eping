@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.51'
+VERSION = '4.62'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -26,20 +26,22 @@ FPING_STDIN_THRESH = 5000     # feed targets via stdin above this count (avoids 
 DEFAULT_RATE_PPS   = 1000     # aggregate ICMP packets per second over all fping processes
 MIN_RATE_PPS       = 10
 MAX_RATE_PPS       = 25000
-# One fping process per retry group - and no more. Every raw ICMP socket receives a
+# One fping process per address family - and no more. Every raw ICMP socket receives a
 # copy of every incoming ICMP packet and has to filter by id, so N concurrent fping
 # processes give each of them N times the receive load. Measured on a /20 with 4109
 # hosts: 9 processes reported 244 hosts UP, a single process reported 866 - roughly
 # 70% of the reachable hosts were lost as false DOWN. Extra processes buy nothing
 # either, because a scan round takes hosts/rate seconds no matter how it is split.
-PROCS_PER_GROUP    = 1        # fping processes per retry group (accuracy over speed)
+PROCS_PER_GROUP    = 1        # fping processes per address family (accuracy over speed)
 INTERVAL_MAX_MS    = 100      # upper bound for the auto-computed pacing interval (not -i itself, see -i validation)
 
 # --- -B/-t/-re/-i/-w hard bounds (CLI validation and ADV OPTIONS, both use these) ---
-BACKOFF_MIN        = 1.0      # fping -B exponential backoff factor; <1 would make retries faster, not slower
-BACKOFF_MAX        = 2.0
-TIMEOUT_MIN_MS     = 10       # fping -t initial per-target timeout
+TIMEOUT_MIN_MS     = 10       # fping -t per-target timeout
 TIMEOUT_MAX_MS     = 5000
+NEW_GRACE_MAX      = 60       # -ng seconds
+SILENT_PERIODS_MAX = 10       # -sp periods
+NEW_GRACE_DEF      = 1        # s added to the grace period of a new target
+SILENT_PERIODS_DEF = 3        # silent periods until a host is DOWN
 RETRIES_MAX        = 5        # fping -re retries per host
 INTERVAL_ARG_MAX   = 250      # -i upper bound; -1 = auto (unset, use --rate), 0 = no pacing
 WAITTIME_MAX       = 600      # -w upper bound (seconds)
@@ -194,10 +196,9 @@ cidr_ipv4_re = re.compile(r'^(?:' + _OCTET + r'\.){3}' + _OCTET + r'(?:\/(?:3[0-
 _LABEL  = r'(?!-)[a-zA-Z0-9\-äöüÄÖÜ]{1,63}(?<!-)'
 fqdn_re = re.compile(r'(?=^.{1,253}$)(?!^[0-9.]+$)^' + _LABEL + r'(?:\.' + _LABEL + r')*\.?$')
 
-# --- fping tuning values (module-level so build_fping_cmd() works when imported;
-#     overwritten from the CLI args in main and by apply_adv_option()) ---
-backoff  = '1.5'
-timeout  = '250'
+# --- fping tuning values (module-level; overwritten from the CLI args in main and
+#     by apply_adv_option()) ---
+timeout  = '1000'
 retries  = '3'
 interval = ''
 
@@ -558,7 +559,7 @@ _source_events = []       # pending comment texts (JUMPHOST OFFLINE / ONLINE, SO
 _ssh_pending  = None      # None = no change, False = switch to local, SshCfg = switch to it
 _ssh_lock     = threading.Lock()
 _jr_pf_thread = None      # running jump host name prefetch (see run_ping_round)
-_cli_paused  = False      # STOP button in the curses loop (-wvc); run_web_mode() keeps its own flag
+_cli_paused  = False      # PAUSE button in the curses loop (-wvc); run_web_mode() keeps its own flag
 _switching    = ''         # text shown in the web gui while a source switch is under way
 _ssh_cfgs     = []        # every SshCfg that owns a temp dir (cleaned at exit)
 _jump_last    = {'host': '', 'port': '', 'user': '', 'key': '', 'hostkey': 'accept-new', 'resolve': True}   # form values of the last try (never the secret)
@@ -1645,27 +1646,6 @@ def prepare_targets(hosts, ttl, progress_cb=None):
     return targets, name_map, unresolved
 
 
-def build_fping_cmd(interval_ms, retries_override=None, family='4'):
-    """Assemble the fping command line shared by all worker processes of one group.
-    family selects -4/-6 - fping cannot ping v4 and v6 targets in the same invocation,
-    so a round with both families in play runs two separate fping command lines."""
-    use_retries = str(retries if retries_override is None else retries_override)
-    cmd = ['fping', '-' + str(family), '-e', '-B', backoff, '-t', timeout, '-r', use_retries]
-    # careful: 0 is a valid interval (no pacing at all) but falsy, so test explicitly
-    try:
-        iv = int(interval_ms)
-    except (TypeError, ValueError):
-        iv = None
-    if iv is not None and iv >= 0:
-        cmd.extend(['-i', str(iv)])
-    if use_check_source and '--check-source' in fping_capabilities():
-        # drop echo replies coming from a foreign address - two concurrent fping
-        # processes can share the lower 16 bits of their PID and steal each other's
-        # replies, which would show a dead host as UP
-        cmd.append('--check-source')
-    return cmd
-
-
 def split_seq(seq, num_pieces):
     # Split seq into num_pieces contiguous chunks. O(n) total.
     n = len(seq)
@@ -1725,93 +1705,6 @@ def scan_abort():
             pr.terminate()
         except Exception:
             pass
-
-
-def timed_fping(hosts, lock, cmd_base, stats, slot):
-    """Run fping_cmd and record (start, end) so a group's wall time can be derived."""
-    t0 = time.time()
-    try:
-        fping_cmd(hosts, lock, cmd_base)
-    finally:
-        with lock:
-            stats[slot].append((t0, time.time()))
-
-
-def fping_cmd(summary_hosts_list, lock, cmd_base=None):
-    # Run fping on a subset of hosts and append parsed results to the global list.
-    global fping_cmd_output_raw_total, _source_fail_reason
-
-    if not summary_hosts_list:
-        return
-
-    cmd = list(cmd_base) if cmd_base else build_fping_cmd(interval)
-
-    use_stdin = len(summary_hosts_list) > FPING_STDIN_THRESH or bool(ssh_target)
-    if not use_stdin:
-        cmd.extend(summary_hosts_list)
-    popen_env = None
-    if ssh_target:
-        cmd = ssh_wrap(cmd)
-        popen_env = ssh_env(ssh_cfg)
-
-    with _procs_lock:
-        if _abort_scan:
-            return
-
-    try:
-        ping = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,          # merge: simpler + avoids deadlock
-            stdin=(subprocess.PIPE if use_stdin else subprocess.DEVNULL),
-            encoding='utf-8', errors='replace',
-            bufsize=1,
-            env=popen_env,
-        )
-    except FileNotFoundError:
-        # never sys.exit() inside a worker thread - it would only kill this thread
-        # and leave the main loop running with an empty result. Report via scan_desc.
-        global _scan_error
-        if ssh_target:
-            _source_fail_reason = 'ssh command not found'
-        else:
-            _scan_error = "fping not found - install it via 'sudo apt install fping' or 'brew install fping'"
-        return
-
-    with _procs_lock:
-        _running_procs.append(ping)
-
-    # Feed targets via stdin for large batches (avoids ARG_MAX). Close stdin so fping starts pinging.
-    if use_stdin:
-        try:
-            ping.stdin.write('\n'.join(summary_hosts_list) + '\n')
-            ping.stdin.close()
-        except BrokenPipeError:
-            pass
-
-    # parse while streaming - no second pass over a buffered copy of the output
-    fping_result_data = []
-    stray = collections.deque(maxlen=3)        # non-result lines (ssh errors), for the SOURCE DOWN reason
-    for line in ping.stdout:
-        row = parse_fping_line(line, get_date_time())
-        if row is not None:
-            fping_result_data.append(row)
-        elif ssh_target and line.strip():
-            stray.append(line.strip())
-    ping.wait()
-    # a scan cut short by a command (scan_abort) ends the ssh client with exit 255 ("Killed
-    # by signal 15"): that is not a lost jump host
-    if ssh_target and not _abort_scan and (ping.returncode == 255 or (
-            not fping_result_data and ping.returncode not in (0, 1, 2))):
-        _source_fail_reason = (' / '.join(stray) or ('ssh/fping exit ' + str(ping.returncode)))[:200]
-    with _procs_lock:
-        try:
-            _running_procs.remove(ping)
-        except ValueError:
-            pass
-
-    with lock:
-        fping_cmd_output_raw_total.extend(fping_result_data)
 
 
 def _debug_event(ev):
@@ -3052,13 +2945,43 @@ _fam_toggle_ts = 0.0         # last -4/-6 switch for names a jump host cannot re
 
 
 def loop_timeout_ms():
-    """-t for fping -l. A loop ping has no retries and fping drops every reply later than
-    -t, so use the longest timeout the retry chain had (-t x -B^-r, at most 2000 ms)."""
+    """-t for fping -l: a loop ping has no retries and fping drops every reply later
+    than -t, so -t is the longest a reply may take."""
     try:
-        t = int(float(timeout) * float(backoff) ** int(retries))
+        return max(1, int(float(timeout)))
     except (TypeError, ValueError):
-        t = int(float(timeout))
-    return max(int(float(timeout)), min(2000, t))
+        return 1000
+
+
+def loop_miss_limit(period_ms):
+    """Timeouts in a row that make a host DOWN in loop mode.
+
+    -re + 1 at most; fewer when the ping period is long (many hosts at -ra), so the time
+    to DOWN stays near 2 x -t. Never below 2: a single lost ping is no DOWN."""
+    try:
+        n = max(1, int(retries) + 1)
+        window = 2.0 * float(timeout)
+    except (TypeError, ValueError):
+        return max(1, int(retries) + 1)
+    if n < 2:
+        return n
+    return max(2, min(n, int(-(-window // max(1, period_ms)))))
+
+
+def new_grace_s():
+    """-ng: seconds added to the grace period of a new target."""
+    try:
+        return float(args.new_grace)
+    except (TypeError, ValueError, NameError, AttributeError):
+        return 1.0
+
+
+def silent_periods():
+    """-sp: silent periods after which a host without any fping output is DOWN."""
+    try:
+        return max(1, int(args.silent_periods))
+    except (TypeError, ValueError, NameError, AttributeError):
+        return 3
 
 
 def loop_period_ms():
@@ -3117,7 +3040,6 @@ def _loop_reader(proc, eng, chunk):
                 st['rtt'], st['misses'] = rtt, 0
             elif kind == 'miss':
                 st['misses'] += 1
-            _loop_cv.notify_all()
     proc.wait()
     with _loop_cv:
         if not eng['live'] or _loop['fail']:
@@ -3297,11 +3219,11 @@ def loop_snapshot(targets, progress_cb, miss_limit, period_ms):
 
     Waits until every target delivered a fresh result (one pass) or the deadline.
     A host with fewer than miss_limit timeouts in a row keeps its previous state (no row).
-    DOWN needs miss_limit timeouts in a row, or silence for more than 3 periods (e.g.
+    DOWN needs miss_limit timeouts in a row, or silence for more than -sp periods (e.g.
     fping cannot send to it) - both judged by time, never by the number of snapshots,
     and per process: no DOWN before that process delivered its first output.
     A target that is new gets a grace period: until it has been known for
-    (miss_limit + 1) periods + 5 s it is only reported when it answers, a first contact
+    (miss_limit + 1) periods + new_grace_s() it is only reported when it answers, a first contact
     that is slow (new NAT / firewall state, rate limits) must not show up as DOWN."""
     t0      = time.time()
     aborted = False
@@ -3315,18 +3237,25 @@ def loop_snapshot(targets, progress_cb, miss_limit, period_ms):
             keep = set(targets)
             for t in [x for x in _loop_born if x not in keep]:
                 del _loop_born[t]
+    # Hosts still waiting for a fresh result. A result never goes away again, so the set
+    # only shrinks: each pass checks the remaining hosts, not the whole list. The wait
+    # between passes grows with the set (no per-line wakeups from the readers).
+    waiting = list(targets)
     while True:
         with _loop_cv:
             if _loop['fail']:
                 break
-            pending = 0
-            for t in targets:
-                st = _loop['state'].get(t)
-                if st is None or (st['kind'] != 'nodns' and st['n'] <= _loop_base.get(t, 0)):
-                    pending += 1
-            if not pending or time.time() - t0 > short:
+            state = _loop['state']
+            base  = _loop_base
+            left  = []
+            for t in waiting:
+                st = state.get(t)
+                if st is None or (st['kind'] != 'nodns' and st['n'] <= base.get(t, 0)):
+                    left.append(t)
+            waiting = left
+            if not waiting or time.time() - t0 > short:
                 break
-            _loop_cv.wait(0.1)
+            _loop_cv.wait(min(0.5, max(0.05, len(waiting) / 200000.0)))
         if progress_cb is not None and progress_cb(time.time() - t0):
             aborted = True
             break
@@ -3355,9 +3284,9 @@ def loop_snapshot(targets, progress_cb, miss_limit, period_ms):
             k = id(e)
             tot[k] = tot.get(k, 0) + 1
             st = _loop['state'].get(t)
-            lim = 3 * e['period'] / 1000.0 + tmo + 0.5
+            lim = silent_periods() * e['period'] / 1000.0 + tmo + 0.5
             if (now - max(st['ts'] if st else 0.0, e['first_out']) > lim
-                    and now - _loop_born.get(t, now) >= (miss_limit + 1) * e['period'] / 1000.0 + 5.0):
+                    and now - _loop_born.get(t, now) >= (miss_limit + 1) * e['period'] / 1000.0 + new_grace_s()):
                 cand[k] = cand.get(k, 0) + 1
         stalled = set(k for k in cand if cand[k] >= max(20, 0.3 * tot[k]))
         if stalled and now - _loop_stats.get('stall_ts', 0.0) > 10:
@@ -3378,9 +3307,9 @@ def loop_snapshot(targets, progress_cb, miss_limit, period_ms):
                 stats['pend'] += 1       # no process for it yet
                 continue
             out0   = eng['first_out']    # 0 while this process is still starting (ssh, lookups)
-            silent = 3 * eng['period'] / 1000.0 + tmo + 0.5
+            silent = silent_periods() * eng['period'] / 1000.0 + tmo + 0.5
             silent_max = max(silent_max, silent)
-            young  = now - _loop_born.get(t, now) < (miss_limit + 1) * eng['period'] / 1000.0 + 5.0
+            young  = now - _loop_born.get(t, now) < (miss_limit + 1) * eng['period'] / 1000.0 + new_grace_s()
             if st is None:
                 if silent_down(t, None, eng, silent, young):
                     stats['silent'] += 1
@@ -3452,7 +3381,7 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
         return [], '', (0, 0), timings
 
     if ssh_target and jr_active():
-        # one ssh call for all uncached names - in a thread, so a browser command (STOP, ...)
+        # one ssh call for all uncached names - in a thread, so a browser command (PAUSE, ...)
         # is not stuck behind it; the call carries on in the background and fills the cache
         global _jr_pf_thread
         if _jr_pf_thread is None or not _jr_pf_thread.is_alive():
@@ -3478,7 +3407,7 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
     base_ms    = loop_period_ms()
     miss_limit = max(1, int(retries) + 1)
     pkey = ((ssh_target or '', SOURCE_LABEL if ssh_target else ''), miss_limit, loop_timeout_ms(),
-            bool(use_check_source), base_ms)
+            bool(use_check_source), base_ms, int(rate_pps), str(threads_arg), str(interval_arg))
     procs_total = 0
     interval_ms = 0
     sync_note   = ''
@@ -3490,7 +3419,7 @@ def run_ping_round(active_hosts_list, threads_arg, rate_pps=DEFAULT_RATE_PPS,
         procs_total = len(engs)
         interval_ms = min([e['iv'] for e in engs] or [0])
         period_max  = max([e['period'] for e in engs] or [base_ms])
-        rows_raw, fail, lstat = loop_snapshot(pinged, progress_cb, miss_limit, period_max)
+        rows_raw, fail, lstat = loop_snapshot(pinged, progress_cb, loop_miss_limit(period_max), period_max)
     else:
         if not _dns_bg['pending']:
             loop_stop()          # (names still being resolved: leave the running processes alone)
@@ -3602,7 +3531,7 @@ web_state = {
     'learning_total'   : 0,
     'wait_time'        : 0.5,
     'stopped'          : False,
-    'paused'           : False,   # STOP button: no pings until START
+    'paused'           : False,   # PAUSE button: no pings until RESUME
     'message'          : '',
     'msg_seq'          : 0,
     'scan_info'        : '',
@@ -4191,21 +4120,21 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="upload">UPLOAD FROM CLIENT</option>
       </select>
      <span class="sep">&nbsp;|&nbsp;</span>
-     <button id="btnPause" title="pause checking - no pings until START, the table stays as it is">STOP</button>
+     <button id="btnPause" title="pause checking - no pings until RESUME, the table stays as it is">PAUSE</button>
     </span>
    </span>
   </div>
 
   <div class="stats">
     <span>HOSTS: <b id="sHosts">0</b></span>
+    <span title="hosts shown by the view and display filters, out of all hosts"
+          id="sShownWrap">SHOWN: <b id="sShown">0</b></span>
     <span>RUNTIME: <b id="sRuntime">0.00</b><b id="sRuntimeUnit">s</b></span>
     <span>RUNS: <b id="sRuns">0</b></span>
     <span class="d" id="sPaused" style="display:none"><b>PAUSED</b></span>
     <span class="u">HOSTS-UP: <b id="sUp">0</b></span>
     <span class="d">HOSTS-DOWN: <b id="sDown">0</b></span>
     <span>FLAPPING: <b id="sFlap">0</b></span>
-    <span title="hosts shown by the view and display filters, out of all hosts"
-          id="sShownWrap">SHOWN: <b id="sShown">0</b></span>
     <span id="sLog"></span>
     <span class="msg" id="msg"></span>
     <span id="scrollHint"></span>
@@ -4715,33 +4644,36 @@ document.getElementById('modalBtnSaveHostsCancel').onclick  = closeSaveHosts;
 
 // key, label, unit, sliderMin, sliderMax, step, longDesc (full mouseover tooltip),
 // shortDesc (few words, shown inline next to the label).
-// Same order and same hard bounds as ADV_OPTIONS server-side (BACKOFF_MIN etc.) -
+// Same order and same hard bounds as ADV_OPTIONS server-side (TIMEOUT_MIN_MS etc.) -
 // one set of limits, enforced on both ends; apply_adv_option() re-validates every
 // value anyway, this is just what the slider itself can be dragged to.
 // The (unit) shown after the label always names the unit, never a sentinel note
 // (0=off, -1=auto etc.) - those live in longDesc/shortDesc instead.
 var ADV_OPTIONS_UI = [
-  ['backoff',        'BACKOFF',        '×',    1,   2,    0.1,
-    'Exponential backoff factor: fping multiplies TIMEOUT by this after every failed retry, so the wait time grows the longer a host stays unreachable',
-    'retry timeout multiplier'],
   ['timeout',        'TIMEOUT',        'ms',  10,  5000, 10,
-    'Initial per-target timeout: how long fping waits for a reply to the first probe before retrying',
-    'initial per-host timeout'],
+    'Maximum wait for a reply to one ping. A reply later than this is lost for fping and counts as a timeout',
+    'ping timeout'],
   ['retries',        'RETRIES',        'tries', 0,   5,    1,
-    'Number of retries per host before it is reported DOWN',
-    'retries before DOWN'],
+    'A host is DOWN after RETRIES + 1 timeouts in a row (fewer when the ping period is long, see the README)',
+    'timeouts before DOWN, minus 1'],
   ['interval',       'INTERVAL',       'ms',  -1,  250,  1,
     'Fixed interval between individual pings in ms, overrides RATE. -1 = auto (unset, use RATE instead). 0 = no pacing at all, needs the privileges fping was installed with',
     'fixed ping spacing'],
   ['num_of_threads', 'THREADS',        'procs', 0,   32,   1,
-    'fping processes run in parallel per retry group. 0 = auto (one process). Higher values finish a round faster but cost measurement accuracy - see the README',
-    'fping processes per group'],
+    'fping processes per address family. 0 = auto (one process). More processes shorten the ping period of a big host list but cost measurement accuracy - see the README',
+    'fping processes'],
   ['waittime',       'WAIT TIME',      's',   0,   600,  0.5,
-    'Pause between the end of one ping round and the start of the next',
-    'pause between rounds'],
+    'Ping period per host: every host is pinged once per period (at least 0.2 s; a big host list needs longer, it is limited by RATE)',
+    'ping period'],
   ['confirm',        'CONFIRM',        'obs', 1,   10,   1,
     'Consecutive DOWN observations required before a host leaves the UP state. 1 = report every single observation, higher values damp flapping at the cost of slower DOWN detection',
     'DOWN confirmations needed'],
+  ['new_grace',      'NEW HOST GRACE', 's',   0,   60,   0.5,
+    'Seconds added to the grace period of a new host (added hosts, start, source switch): during (misses + 1) periods plus this time a new host is only reported when it answers, a slow first contact must not show as DOWN',
+    'grace for new hosts'],
+  ['silent_periods', 'SILENT LIMIT',   'periods', 2, 10,  1,
+    'A host without any fping output for this many ping periods is DOWN (a stalled fping or lost output, not a timeout)',
+    'silent periods until DOWN'],
   ['rate_pps',       'RATE',           'pps', 10,  25000,10,
     'Target aggregate ICMP packets per second across all fping processes combined',
     'packets per second'],
@@ -4778,7 +4710,7 @@ var advRowsBuilt     = false;
 // A queued option change is only actually applied server-side the next time
 // run_web_mode() drains web_commands, at the top of its loop - it can sit
 // queued for as long as the CURRENT fping round takes (many hosts, or a high
-// TIMEOUT/RETRIES/BACKOFF itself, easily exceed a couple of seconds). So this
+// TIMEOUT/RETRIES itself, easily exceed a couple of seconds). So this
 // is checked on every poll() tick (see below) against a generous timeout,
 // instead of a single fixed-delay check - a slow round is not the same as the
 // server rejecting the value, and treating it as one was causing the field to
@@ -5596,10 +5528,10 @@ function renderPause(p){
   pausedOn = !!p;
   var b = document.getElementById('btnPause');
   if(b){
-    b.textContent = pausedOn ? 'START' : 'STOP';
+    b.textContent = pausedOn ? 'RESUME' : 'PAUSE';
     b.classList.toggle('paused', pausedOn);
     b.title = pausedOn ? 'resume checking - pings start again'
-                       : 'pause checking - no pings until START, the table stays as it is';
+                       : 'pause checking - no pings until RESUME, the table stays as it is';
   }
   var sp = document.getElementById('sPaused');
   if(sp) sp.style.display = pausedOn ? '' : 'none';
@@ -6965,10 +6897,10 @@ _OPT_SWITCHES = (('disable_versioncheck', '-du'), ('force_ipv4', '-4'), ('force_
                  ('diag', '-dg'), ('no_check_source', '-ncs'), ('no_csv_fallback', '-ncf'), ('web', '-web'),
                  ('web_view', '-wv'), ('web_view_control', '-wvc'))
 # ADV OPTIONS key -> argparse dest of its default
-_OPT_KEY_DEST = {'backoff': 'backoff', 'timeout': 'timeout', 'retries': 'retries',
+_OPT_KEY_DEST = {'timeout': 'timeout', 'retries': 'retries',
                  'interval': 'interval',
                  'num_of_threads': 'num_of_threads', 'waittime': 'waittime',
-                 'confirm': 'confirm', 'rate_pps': 'rate_pps', 'flap_window': 'flap_window',
+                 'confirm': 'confirm', 'new_grace': 'new_grace', 'silent_periods': 'silent_periods', 'rate_pps': 'rate_pps', 'flap_window': 'flap_window',
                  'dns_ttl': 'dns_ttl', 'tz_offset': 'time_zone_adjust',
                  'log_max_size': 'log_max_size', 'log_max_files': 'log_max_files'}
 
@@ -7841,18 +7773,19 @@ def web_publish(display_list, run_counter, run_time, hosts_up, hosts_down,
 
 # --- ADV OPTIONS: runtime-adjustable timer/fping settings (web gui only) ---
 # (key, kind, lo, hi, step, unit, auto_sentinel) - order matches the web gui modal.
-# These are the SAME hard bounds the CLI parser validates (see BACKOFF_MIN etc. and
-# the -B/-t/-re/-i/-p/-w/... validation block) - one set of limits, enforced twice.
+# These are the SAME hard bounds the CLI parser validates (see TIMEOUT_MIN_MS etc. and
+# the -t/-re/-i/-p/-w/... validation block) - one set of limits, enforced twice.
 # auto_sentinel: the value the slider/textbox sends for "auto"/"disabled"/"unset" -
 # translated to the field's real off-value (''/'auto'/None) in apply_adv_option().
 ADV_OPTIONS = [
-    ('backoff',         'float', BACKOFF_MIN, BACKOFF_MAX,       0.1, '',    None),
     ('timeout',         'int',   TIMEOUT_MIN_MS, TIMEOUT_MAX_MS, 10,  'ms',  None),
     ('retries',         'int',   0,   RETRIES_MAX,               1,   '',    None),
     ('interval',        'int',   -1,  INTERVAL_ARG_MAX,          1,   'ms',  -1),   # -1 = auto (unset, use --rate)
     ('num_of_threads',  'int',   0,   THREADS_MANUAL_MAX,        1,   '',    0),    # 0 = auto
     ('waittime',        'float', 0,   WAITTIME_MAX,              0.1, 's',   None),
     ('confirm',         'int',   1,   10,                        1,   '',    None),
+    ('new_grace',       'float', 0,   NEW_GRACE_MAX,             0.5, 's',   None),
+    ('silent_periods',  'int',   2,   SILENT_PERIODS_MAX,        1,   '',    None),
     ('rate_pps',        'int',   MIN_RATE_PPS, MAX_RATE_PPS,     10,  'pps', None),
     ('flap_window',     'int',   1,   FLAP_WINDOW_MAX,           10,  'min', None),
     ('dns_ttl',         'int',   0,   DNS_TTL_MAX,               10,  's',   None),
@@ -7866,13 +7799,14 @@ ADV_OPTION_KEYS = set(o[0] for o in ADV_OPTIONS)
 # ADV_OPTIONS above (single source of truth), only the display label lives here.
 # Same labels as ADV_OPTIONS_UI (web gui JS), kept in the same order.
 ADV_OPTION_LABELS = {
-    'backoff':         'BACKOFF',
     'timeout':         'TIMEOUT',
     'retries':         'RETRIES',
     'interval':        'INTERVAL',
     'num_of_threads':  'THREADS',
     'waittime':        'WAIT TIME',
     'confirm':         'CONFIRM',
+    'new_grace':       'NEW HOST GRACE',
+    'silent_periods':  'SILENT LIMIT',
     'rate_pps':        'RATE',
     'flap_window':     'FLAP WINDOW',
     'dns_ttl':         'DNS TTL',
@@ -7891,13 +7825,13 @@ def apply_adv_option(key, raw, args):
 
     args-backed keys (waittime/interval/rate_pps/num_of_threads/dns_ttl) are
     written straight into args, since run_web_mode() re-reads args.X live each
-    round. backoff/timeout/retries are true module globals (see build_fping_cmd()).
+    round. timeout/retries are true module globals.
     The ADV_OPTION_LOCAL_KEYS are local variables in run_web_mode() - this
     function only validates/parses them, the caller assigns the returned value.
 
     Returns (ok, value, message).
     """
-    global backoff, timeout, retries
+    global timeout, retries
     spec = next((o for o in ADV_OPTIONS if o[0] == key), None)
     if spec is None:
         return False, None, 'unknown option: ' + str(key)
@@ -7944,8 +7878,10 @@ def apply_adv_option(key, raw, args):
         args.log_max_files = str(int(val))
     elif key == 'retries':
         retries = str(int(val))
-    elif key == 'backoff':
-        backoff = str(val)
+    elif key == 'new_grace':
+        args.new_grace = str(val)
+    elif key == 'silent_periods':
+        args.silent_periods = str(int(val))
     elif key == 'timeout':
         timeout = str(int(val))
     # else: ADV_OPTION_LOCAL_KEYS - caller applies 'val' to its own local var
@@ -7966,10 +7902,11 @@ def adv_option_values(args, flap_window, confirm, tz_offset):
         'dns_ttl':        args.dns_ttl,
         'flap_window':    str(flap_window),
         'confirm':        str(confirm),
+        'new_grace':      str(args.new_grace),
+        'silent_periods': str(args.silent_periods),
         'tz_offset':      str(tz_offset),
         'log_max_size':   args.log_max_size,
         'log_max_files':  args.log_max_files,
-        'backoff':        str(backoff),
         'timeout':        str(timeout),
         'retries':        str(retries),
     }
@@ -7984,13 +7921,14 @@ def adv_option_values(args, flap_window, confirm, tz_offset):
 INFO_DEBOUNCE_SECONDS = 1.0
 
 ADV_OPTION_CLI_FLAG = {
-    'backoff':         '-B',
     'timeout':         '-t',
     'retries':         '-re',
     'interval':        '-i',
     'num_of_threads':  '-p',
     'waittime':        '-w',
     'confirm':         '-cf',
+    'new_grace':       '-ng',
+    'silent_periods':  '-sp',
     'rate_pps':        '-ra',
     'flap_window':     '-fw',
     'dns_ttl':         '-dns',
@@ -8017,18 +7955,19 @@ def format_option_cli(key, val):
     return flag + ' ' + shown
 
 
-def current_option_value(key, args, backoff, timeout, retries, flap_window, confirm, tz_offset):
+def current_option_value(key, args, timeout, retries, flap_window, confirm, tz_offset):
     """One ADV OPTIONS key's current value, normalized the same way
     apply_adv_option()'s return value is - so it can be diffed/logged with
     format_option_cli() after a RESET TO DEFAULT (see reset_options).
     """
-    if key == 'backoff':        return float(backoff)
     if key == 'timeout':        return int(timeout)
     if key == 'retries':        return int(retries)
     if key == 'interval':       return '' if args.interval == '' else int(args.interval)
     if key == 'num_of_threads': return 'auto' if args.num_of_threads == 'auto' else int(args.num_of_threads)
     if key == 'waittime':       return float(args.waittime)
     if key == 'confirm':        return confirm
+    if key == 'new_grace':      return float(args.new_grace)
+    if key == 'silent_periods': return int(args.silent_periods)
     if key == 'rate_pps':       return int(args.rate_pps)
     if key == 'flap_window':    return flap_window
     if key == 'dns_ttl':        return int(args.dns_ttl)
@@ -8038,7 +7977,7 @@ def current_option_value(key, args, backoff, timeout, retries, flap_window, conf
     return None
 
 
-def build_cli_snapshot(args, backoff, timeout, retries, flap_window,
+def build_cli_snapshot(args, timeout, retries, flap_window,
                        confirm, tz_offset):
     """Full current configuration as one CLI-flag-style string, for the
     startup #INFO# log line (write_log_info()) - reconstructs the equivalent
@@ -8058,7 +7997,6 @@ def build_cli_snapshot(args, backoff, timeout, retries, flap_window,
         parts.append('-n ' + args.network_cidr)
     if args.network_range:
         parts.append('-r ' + args.network_range)
-    parts.append('-B ' + str(backoff))
     parts.append('-t ' + str(timeout))
     parts.append('-re ' + str(retries))
     parts.append('-i ' + ('-1' if args.interval == '' else str(args.interval)))
@@ -8088,6 +8026,8 @@ def build_cli_snapshot(args, backoff, timeout, retries, flap_window,
         parts.append('-dg')
     parts.append('-fw ' + str(flap_window))
     parts.append('-cf ' + str(confirm))
+    parts.append('-ng ' + str(args.new_grace))
+    parts.append('-sp ' + str(args.silent_periods))
     parts.append('-lms ' + str(args.log_max_size))
     parts.append('-lmf ' + str(args.log_max_files))
     if args.no_check_source:
@@ -8140,7 +8080,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                  update_available, up_check_runs, confirm=1, flap_window=FLAP_WINDOW_DEF):
     """Headless main loop - same logic as the CLI loop, output goes to the web gui."""
     global _switching, _logfile_file_name   # kept in sync with logfile_file_name - see _web_sigint()
-    global backoff, timeout, retries   # ADV OPTIONS - mutated by apply_adv_option()
+    global timeout, retries   # ADV OPTIONS - mutated by apply_adv_option()
     bind_addr = args.web_bind
     port      = int(args.web_port)
     start_web_server(bind_addr, port)
@@ -8219,7 +8159,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     else:
         active_hosts_list = apply_addr_mode(active_hosts_list)
 
-    paused = False      # STOP / START button
+    paused = False      # PAUSE / RESUME button
     while True:
         # --- [G] background PTR lookup: apply results once the thread is done ---
         gn_just_finished = False
@@ -8491,7 +8431,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         message = 'logging started: ' + logfile_file_name
                         # fresh file - same full snapshot as a program startup, see main()
                         write_log_info(args.disable_logging, logfile_file_name,
-                                       build_cli_snapshot(args, backoff, timeout, retries,
+                                       build_cli_snapshot(args, timeout, retries,
                                                           flap_window, confirm,
                                                           tz_offset),
                                        tz_offset)
@@ -8505,7 +8445,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                         if reset_logfile(logfile_file_name):
                             message = 'logging reset - ' + logfile_file_name + ' cleared'
                             write_log_info(args.disable_logging, logfile_file_name,
-                                           build_cli_snapshot(args, backoff, timeout, retries,
+                                           build_cli_snapshot(args, timeout, retries,
                                                               flap_window, confirm,
                                                               tz_offset),
                                            tz_offset)
@@ -8520,7 +8460,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                             _logfile_file_name = new_name   # keep _web_sigint() in sync
                             message = 'new logfile: ' + logfile_file_name
                             write_log_info(args.disable_logging, logfile_file_name,
-                                           build_cli_snapshot(args, backoff, timeout, retries,
+                                           build_cli_snapshot(args, timeout, retries,
                                                               flap_window, confirm,
                                                               tz_offset),
                                            tz_offset)
@@ -8570,7 +8510,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     pending_info[key] = (val, time.time())
                 # Publish the new value right away, not at the end of this fping
                 # round - a round can easily take longer than advCheckApplied()'s
-                # check delay (especially right after raising backoff/timeout/
+                # check delay (especially right after raising timeout/
                 # retries, which lengthens the round itself), which was making the
                 # client see a stale value and wrongly revert+flash a just-accepted
                 # change as rejected.
@@ -8579,7 +8519,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                                                              confirm, tz_offset)
             elif cmd == 'reset_options':
                 # same as set_option above: no footer message on purpose
-                _before_reset = {_k: current_option_value(_k, args, backoff, timeout, retries,
+                _before_reset = {_k: current_option_value(_k, args, timeout, retries,
                                                           flap_window, confirm,
                                                           tz_offset)
                                  for _k in ADV_OPTION_KEYS}
@@ -8595,7 +8535,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 # only log keys RESET TO DEFAULT actually changed - a reset that
                 # touches nothing (already at defaults) should stay silent
                 for _key in ADV_OPTION_KEYS:
-                    _after = current_option_value(_key, args, backoff, timeout, retries,
+                    _after = current_option_value(_key, args, timeout, retries,
                                                   flap_window, confirm,
                                                   tz_offset)
                     if _after != _before_reset[_key]:
@@ -8629,7 +8569,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                     write_log_comment(args.disable_logging, logfile_file_name,
                                       'CHECK PAUSED' if paused else 'CHECK RESUMED', tz_offset)
                     loop_stop()          # no fping process while paused
-                    message = 'paused - START resumes the checks' if paused else 'checks resumed'
+                    message = 'paused - RESUME continues the checks' if paused else 'checks resumed'
             elif cmd == 'exit':
                 with web_lock:
                     web_state['stopped'] = True
@@ -8703,7 +8643,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 web_state['options']      = adv_option_values(args, flap_window,
                                                               confirm, tz_offset)
 
-        # --- paused (STOP button): no pings, the table stays as it is ---
+        # --- paused (PAUSE button): no pings, the table stays as it is ---
         if paused:
             with web_lock:
                 web_state['scanning'] = 0.0
@@ -8763,7 +8703,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 logfile_file_name  = _new_lf
                 _logfile_file_name = _new_lf
                 write_log_info(args.disable_logging, logfile_file_name,
-                              build_cli_snapshot(args, backoff, timeout, retries,
+                              build_cli_snapshot(args, timeout, retries,
                                                  flap_window, confirm,
                                                  tz_offset), tz_offset)
         if pending_add_hosts and pending_add_hosts <= set(host_state):
@@ -8885,9 +8825,8 @@ if __name__=='__main__':
     parser.add_argument('-df', '--disable_hostfile', action="store_true", help="disable hostsfile")
     parser.add_argument('-n', '--network', default='', dest='network_cidr', help='one or more CIDR networks, comma separated, e.g. 172.17.17.0/24,10.0.0.0/30  minimum mask: /' + str(CIDR_MIN_MASK) )
     parser.add_argument('-r', '--network_range', default='', dest='network_range', help='one or more IP ranges, comma separated, e.g. 10.180.0.0-10.180.3.255,172.19.0.0-1.13,172.20.2.0-15 - the end may be shortened to its last 1-3 octets, borrowed from the start address')
-    parser.add_argument('-B', '--backoff', default='1.5', dest='backoff', help="set exponential backoff factor to N (default: 1.5, range: 1-2)" )
-    parser.add_argument('-t', '--timeout', default='250', dest='timeout', help="individual target initial timeout (default: 250ms, range: 10-5000)")
-    parser.add_argument('-re', '--retries', default='3', dest='retries', help="number of retries per host (default: 3, range: 0-5)")
+    parser.add_argument('-t', '--timeout', default='1000', dest='timeout', help="maximum wait for a reply to one ping in ms (default: 1000, range: " + str(TIMEOUT_MIN_MS) + "-" + str(TIMEOUT_MAX_MS) + ")")
+    parser.add_argument('-re', '--retries', default='3', dest='retries', help="a host is DOWN after N + 1 timeouts in a row (default: 3, range: 0-5; fewer when the ping period is long)")
     parser.add_argument('-i', '--interval', default='', dest='interval', help="interval between sending pings in ms, range 0-250; overrides --rate. -1 = auto (unset, same as omitting this flag). 0 = no pacing at all (fastest, needs the privileges fping was installed with, sends one hard burst)")
     parser.add_argument('-o', '--logfile', default='', dest='logfile', help="logging filename" )
     parser.add_argument('-dl', '--disable_logging', action="store_false", help="disable logging")
@@ -8896,9 +8835,9 @@ if __name__=='__main__':
     parser.add_argument('-cl', '--clean', action="store_true", dest='delete_files', help="delete ALL files starting with 'eping-*' in the current directory - logs, reports AND the hosts file eping-hosts.txt")
     parser.add_argument('-up', '--up', default='0', dest='up_hosts_check', help="display and check only host the are up x runs" )
     parser.add_argument('-setref', '--set_reference', action="store_true", dest='set_reference', help="with -up: once the learning phase ends, use the hosts found UP as the new reference list (same as pressing [S]/SET REFERENCE)" )
-    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="fping processes per retry group, range 0-" + str(THREADS_MANUAL_MAX) + " (default: auto = " + str(PROCS_PER_GROUP) + "; 0 is an alias for auto; higher values cost accuracy)" )
+    parser.add_argument('-p', '--threads', default='auto', dest='num_of_threads', help="fping processes per address family, range 0-" + str(THREADS_MANUAL_MAX) + " (default: auto = " + str(PROCS_PER_GROUP) + "; 0 is an alias for auto; higher values cost accuracy)" )
     parser.add_argument('-tz', '--timezone', default='0', dest='time_zone_adjust', help="default is 0 range from -24 to 24" )
-    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="wait time between rounds in seconds, range 0-" + str(WAITTIME_MAX) )
+    parser.add_argument('-w', '--wait', default ='0.5', dest='waittime', help="ping period per host in seconds, range 0-" + str(WAITTIME_MAX) )
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
@@ -8911,9 +8850,11 @@ if __name__=='__main__':
     parser.add_argument('-ph', '--prefer_hostname', action="store_true", dest='prefer_hostname', help="start with PREFER HOSTNAMES active - skip a raw IP host when the same address is already covered by a hostname entry (toggle later with [P] / the web button)")
     parser.add_argument('-ipo', '--ip_only', action="store_true", dest='ip_only', help="start with IP ONLY active - resolve every hostname to its address (v4 or v6, whichever resolves - not distinguished) and ping/track it by IP instead of by name (toggle later with [I] / the web button)")
     parser.add_argument('-gn', '--get_names', action="store_true", dest='get_names', help="once at startup, reverse-DNS every raw IP host and rename it to its hostname if one is found (same as [G] / GET NAMES, but only once before the first ping round)")
-    parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per retry group plus dns/state/build/wait/draw")
+    parser.add_argument('-dg', '--diag', action="store_true", dest='diag', help="show where the cycle time goes: fping wall time per address family plus dns/state/build/wait/draw")
     parser.add_argument('-fw', '--flap_window', default=str(FLAP_WINDOW_DEF), dest='flap_window', help="minutes since the last state change for a host to count as flapping (default: " + str(FLAP_WINDOW_DEF) + " = 50 days, max)")
     parser.add_argument('-cf', '--confirm', default=str(CONFIRM_DEF), dest='confirm', help="consecutive DOWN observations before a host leaves UP (default: " + str(CONFIRM_DEF) + ", 1 = report every single observation)")
+    parser.add_argument('-ng', '--new_grace', default=str(NEW_GRACE_DEF), dest='new_grace', help="seconds added to the grace period of a new host, in which it is only reported when it answers (default: " + str(NEW_GRACE_DEF) + ", range 0-" + str(NEW_GRACE_MAX) + ")")
+    parser.add_argument('-sp', '--silent_periods', default=str(SILENT_PERIODS_DEF), dest='silent_periods', help="ping periods without any fping output until a host is DOWN (default: " + str(SILENT_PERIODS_DEF) + ", range 2-" + str(SILENT_PERIODS_MAX) + ")")
     parser.add_argument('-ssh', '--ssh', dest='ssh', metavar='[USER@]HOST[:PORT]', default=None, help="run fping on this jump host via ssh instead of locally (system ssh; password or key passphrase is asked at startup; the jump host resolves the names and needs a working fping)")
     parser.add_argument('-sshkey', '--ssh_key', dest='ssh_key', metavar='FILE', default=None, help="private key file for -ssh (default: ssh agent / default keys)")
     parser.add_argument('-sshnr', '--ssh_no_resolve', action="store_true", dest='ssh_no_resolve', help="with -ssh: do not resolve names on the jump host (default: GET NAMES, PREFER HOSTNAME / IP ADDRESS and IP ONLY use getent / dig / nslookup / host there when available; otherwise the local resolver is used)")
@@ -8961,7 +8902,6 @@ if __name__=='__main__':
         if args.web_view or args.web_view_control:
             error_handler("ERROR: -wv/-wvc need curses (not available here) - use -web")
         args.web = True
-    backoff = args.backoff
     timeout = args.timeout
     retries = args.retries
     interval = args.interval
@@ -9009,15 +8949,23 @@ if __name__=='__main__':
     except ValueError:
             error_handler("ERROR: -tz: must be between -24 and 24")
 
-    # -B: fping exponential backoff factor
+    # -ng: grace for new hosts (seconds)
     try:
-        bo = float(args.backoff)
-        if bo < BACKOFF_MIN or bo > BACKOFF_MAX:
-            error_handler("ERROR: -B: must be between " + str(BACKOFF_MIN) + " and " + str(BACKOFF_MAX))
+        ng = float(args.new_grace)
+        if ng < 0 or ng > NEW_GRACE_MAX:
+            error_handler("ERROR: -ng: must be between 0 and " + str(NEW_GRACE_MAX))
     except ValueError:
-        error_handler("ERROR: -B: must be between " + str(BACKOFF_MIN) + " and " + str(BACKOFF_MAX))
+        error_handler("ERROR: -ng: must be between 0 and " + str(NEW_GRACE_MAX))
 
-    # -t: fping initial per-target timeout (ms)
+    # -sp: silent periods until DOWN
+    try:
+        sp = int(args.silent_periods)
+        if sp < 2 or sp > SILENT_PERIODS_MAX:
+            error_handler("ERROR: -sp: must be between 2 and " + str(SILENT_PERIODS_MAX))
+    except ValueError:
+        error_handler("ERROR: -sp: must be between 2 and " + str(SILENT_PERIODS_MAX))
+
+    # -t: fping per-target timeout (ms)
     try:
         to = int(args.timeout)
         if to < TIMEOUT_MIN_MS or to > TIMEOUT_MAX_MS:
@@ -9033,7 +8981,7 @@ if __name__=='__main__':
     except ValueError:
         error_handler("ERROR: -re: must be between 0 and " + str(RETRIES_MAX))
 
-    # -p: fping processes per retry group. 0 is an alias for 'auto' (PROCS_PER_GROUP),
+    # -p: fping processes per address family. 0 is an alias for 'auto' (PROCS_PER_GROUP),
     # same sentinel convention as ADV OPTIONS' THREADS slider
     if args.num_of_threads in ('auto', '0'):
         args.num_of_threads = 'auto'
@@ -9047,7 +8995,7 @@ if __name__=='__main__':
         except ValueError:
                 error_handler("ERROR: -p: must be between 0 (auto) and " + str(THREADS_MANUAL_MAX))
 
-    # -w: wait time between rounds (seconds)
+    # -w: ping period per host (seconds)
     try:
         wait_time = float(args.waittime)
         if wait_time < 0 or wait_time > WAITTIME_MAX:
@@ -9161,8 +9109,7 @@ if __name__=='__main__':
                 "# opt: -df                          # disable hostsfile\n",
                 "# opt: -n 192.168.0.0/24            # CIDR network(s), comma separated\n",
                 "# opt: -r 10.10.10.1-11.12          # IP range(s), comma separated\n",
-                "# opt: -B 1.5                       # exponential backoff factor\n",
-                "# opt: -t 250                       # initial per-target timeout (ms)\n",
+                "# opt: -t 1000                      # ping timeout (ms)\n",
                 "# opt: -re 3                        # retries per host\n",
                 "# opt: -i                           # interval between pings (ms), overrides -ra\n",
                 "# opt: -o                           # logging filename\n",
@@ -9170,9 +9117,9 @@ if __name__=='__main__':
                 "# opt: -cl                          # delete all 'eping-l*' files\n",
                 "# opt: -up 0                        # check only hosts UP for x runs\n",
                 "# opt: -setref                      # after -up learning: UP hosts become the reference list\n",
-                "# opt: -p auto                      # fping processes per retry group\n",
+                "# opt: -p auto                      # fping processes per address family\n",
                 "# opt: -tz 0                        # timezone adjust, -24..24\n",
-                "# opt: -w 0.5                       # wait time between rounds\n",
+                "# opt: -w 0.5                       # ping period per host (s)\n",
                 "# opt: -du                          # disable online versioncheck\n",
                 "# opt: -ra 1000                     # ICMP packets per second\n",
                 "# opt: -dns 300                     # seconds a resolved hostname is cached\n",
@@ -9184,6 +9131,8 @@ if __name__=='__main__':
                 "# opt: -dg                          # show per-phase cycle time diagnostics\n",
                 "# opt: -fw 72000                    # flapping window, minutes\n",
                 "# opt: -cf 2                        # consecutive DOWN observations before UP -> DOWN\n",
+                "# opt: -ng 1                        # seconds added to the grace period of new hosts\n",
+                "# opt: -sp 3                        # silent ping periods until DOWN\n",
                 "# opt: -ncs                         # do not pass --check-source to fping\n",
                 "# opt: -ncf                         # CSV: do not ping the CSV IP of a name without DNS record\n",
                 "# opt: -web                         # start the web gui instead of the CLI\n",
@@ -9285,7 +9234,7 @@ if __name__=='__main__':
         except OSError as e:
             error_handler('ERROR: failed to create logfile: ' + logfile_file_name + ' (' + str(e) + ')')
         # #INFO# startup snapshot - full CLI-equivalent of every current setting
-        startup_snapshot = build_cli_snapshot(args, backoff, timeout, retries,
+        startup_snapshot = build_cli_snapshot(args, timeout, retries,
                                               flap_window, confirm,
                                               int(args.time_zone_adjust))
         write_log_info(args.disable_logging, logfile_file_name, startup_snapshot,
@@ -9415,7 +9364,7 @@ if __name__=='__main__':
                     logfile_file_name  = _new_lf
                     _logfile_file_name = _new_lf
                     write_log_info(args.disable_logging, logfile_file_name,
-                                  build_cli_snapshot(args, backoff, timeout, retries,
+                                  build_cli_snapshot(args, timeout, retries,
                                                      flap_window, confirm,
                                                      tz_offset), tz_offset)
             if pending_add_hosts and pending_add_hosts <= set(host_state):
@@ -10057,7 +10006,7 @@ if __name__=='__main__':
                 tz_offset = val
 
         def _cur(key):
-            return current_option_value(key, args, backoff, timeout, retries,
+            return current_option_value(key, args, timeout, retries,
                                         flap_window, confirm,
                                         tz_offset)
 
@@ -10446,7 +10395,7 @@ if __name__=='__main__':
             message = 'change counters reset'
 
         elif bcmd == 'pause':
-            # STOP / START button: no pings while paused, the table stays as it is
+            # PAUSE / RESUME button: no pings while paused, the table stays as it is
             want = (str(bval) == '1')
             if want != _cli_paused:
                 _cli_paused = want
@@ -10455,7 +10404,7 @@ if __name__=='__main__':
                 write_log_comment(args.disable_logging, logfile_file_name,
                                   'CHECK PAUSED' if want else 'CHECK RESUMED', tz_offset)
                 loop_stop()          # no fping process while paused
-                message = 'paused - START resumes the checks' if want else 'checks resumed'
+                message = 'paused - RESUME continues the checks' if want else 'checks resumed'
 
         elif bcmd == 'get_names':
             if gn_thread is not None and gn_thread.is_alive():
@@ -10540,7 +10489,7 @@ if __name__=='__main__':
                     notice('LOGGING STARTED: ' + logfile_file_name, 2)
                     message = 'logging started: ' + logfile_file_name
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
+                                   build_cli_snapshot(args, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
                 else:
                     notice('FAILED TO START LOGGING', 3)
                     message = 'failed to start logging'
@@ -10553,7 +10502,7 @@ if __name__=='__main__':
                     notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
                     message = 'logging reset - ' + logfile_file_name + ' cleared'
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
+                                   build_cli_snapshot(args, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
                 else:
                     notice('FAILED TO RESET LOGFILE', 3)
                     message = 'failed to reset logfile'
@@ -10568,7 +10517,7 @@ if __name__=='__main__':
                     notice('NEW LOGFILE: ' + logfile_file_name, 2)
                     message = 'new logfile: ' + logfile_file_name
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
+                                   build_cli_snapshot(args, timeout, retries, flap_window, confirm, tz_offset), tz_offset)
                 else:
                     notice('FAILED TO CREATE NEW LOGFILE', 3)
                     message = 'failed to create new logfile'
@@ -10617,7 +10566,7 @@ if __name__=='__main__':
                 notice(msg.upper(), 3, 1.2)
 
         elif bcmd == 'reset_options':
-            before = {k: current_option_value(k, args, backoff, timeout, retries, flap_window, confirm, tz_offset)
+            before = {k: current_option_value(k, args, timeout, retries, flap_window, confirm, tz_offset)
                      for k in ADV_OPTION_KEYS}
             for key, raw in start_option_values.items():
                 ok, val, _ = apply_adv_option(key, raw, args)
@@ -10626,7 +10575,7 @@ if __name__=='__main__':
                     elif key == 'confirm':      confirm = val
                     elif key == 'tz_offset':    tz_offset = val
             for key in ADV_OPTION_KEYS:
-                after = current_option_value(key, args, backoff, timeout, retries, flap_window, confirm, tz_offset)
+                after = current_option_value(key, args, timeout, retries, flap_window, confirm, tz_offset)
                 if after != before[key]:
                     write_log_info(args.disable_logging, logfile_file_name,
                                    format_option_cli(key, after), tz_offset)
@@ -10762,6 +10711,10 @@ if __name__=='__main__':
     def web_sync(msg='', bump=False):
         if not (args.web_view or args.web_view_control):
             return
+        if not msg:
+            # a plain refresh keeps the message of the last command: the browser reads it
+            # when msg_seq changes, an empty one here would overwrite 'done' before it is polled
+            msg = web_state.get('message', '')
         # mirror the same fix as run_web_mode(): HOSTS-UP/DOWN in the web view should
         # be the totals for the current view, not narrowed by the [M] display filter
         # the way the curses screen's own hosts_count_up/down are (left untouched here).
@@ -11368,7 +11321,7 @@ if __name__=='__main__':
                     notice('LOGGING STARTED: ' + logfile_file_name, 2)
                     # fresh file - same full snapshot as a program startup, see main()
                     write_log_info(args.disable_logging, logfile_file_name,
-                                   build_cli_snapshot(args, backoff, timeout, retries,
+                                   build_cli_snapshot(args, timeout, retries,
                                                       flap_window, confirm,
                                                       tz_offset),
                                    tz_offset)
@@ -11386,7 +11339,7 @@ if __name__=='__main__':
                     if reset_logfile(logfile_file_name):
                         notice('LOGGING RESET - ' + logfile_file_name + ' CLEARED', 2)
                         write_log_info(args.disable_logging, logfile_file_name,
-                                       build_cli_snapshot(args, backoff, timeout, retries,
+                                       build_cli_snapshot(args, timeout, retries,
                                                           flap_window, confirm,
                                                           tz_offset),
                                        tz_offset)
@@ -11405,7 +11358,7 @@ if __name__=='__main__':
                         _logfile_file_name = new_name   # keep sigint_handler() in sync
                         notice('NEW LOGFILE: ' + logfile_file_name, 2)
                         write_log_info(args.disable_logging, logfile_file_name,
-                                       build_cli_snapshot(args, backoff, timeout, retries,
+                                       build_cli_snapshot(args, timeout, retries,
                                                           flap_window, confirm,
                                                           tz_offset),
                                        tz_offset)
@@ -11482,7 +11435,7 @@ if __name__=='__main__':
         else:
             learning_phase = True
 
-        # --- paused (STOP button): no pings, keys and browser commands are still handled ---
+        # --- paused (PAUSE button): no pings, keys and browser commands are still handled ---
         if _cli_paused:
             with web_lock:
                 web_state['scanning'] = 0.0
@@ -11514,7 +11467,7 @@ if __name__=='__main__':
                 logfile_file_name  = _new_lf
                 _logfile_file_name = _new_lf
                 write_log_info(args.disable_logging, logfile_file_name,
-                              build_cli_snapshot(args, backoff, timeout, retries,
+                              build_cli_snapshot(args, timeout, retries,
                                                  flap_window, confirm,
                                                  tz_offset), tz_offset)
         if pending_add_hosts and pending_add_hosts <= set(host_state):

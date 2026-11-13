@@ -1,4 +1,4 @@
-# eping.py 4.51
+# eping.py 4.62
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -249,11 +249,11 @@ Single self-contained page, no external resources.
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, LOGGING, FILE OPERATIONS
     select, EXIT, font size.
   - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), ADD/DEL LIST, comment
-    field (COMMENT), GENERATE REPORT select, STOP/START button.
-  - **STOP / START** (last button of row 2): `STOP` pauses the check - no pings are sent, the table, the
-    counters and the log stay as they are (header shows `PAUSED`, the button turns red and reads `START`).
+    field (COMMENT), GENERATE REPORT select, PAUSE/RESUME button.
+  - **PAUSE / RESUME** (last button of row 2): `PAUSE` pauses the check - no pings are sent, the table, the
+    counters and the log stay as they are (header shows `PAUSED`, the button turns red and reads `RESUME`).
     Commands (view, sort, filter, ADD/DELETE ...) keep working while paused; added hosts are pinged after
-    `START`. A round that is running when `STOP` is pressed is cut short. The log gets the comment rows
+    `RESUME`. A round that is running when `PAUSE` is pressed is cut short. The log gets the comment rows
     `CHECK PAUSED` / `CHECK RESUMED`; epinga.py shows the pause as a gap in the timeline
     (grey, like missing data) and does not count it as time in any state. Works in `-web` and `-wvc` (no CLI key); not in the read-only view (`-wv`).
   - View select, sort order select, address mode select and ADV OPTIONS all match the
@@ -343,13 +343,14 @@ directly, `D` resets the selected option to its default, `R` resets all, ESC/`X`
 
 | Option | Range | 0/-1 means |
 |---|---|---|
-| BACKOFF | 1 – 2 | — |
 | TIMEOUT | 10 – 5000 ms | — |
 | RETRIES | 0 – 5 | — |
 | INTERVAL | -1 – 250 ms | `-1` = auto (use RATE), `0` = no pacing |
 | THREADS | 0 – 32 | `0` = auto |
 | WAIT TIME | 0 – 600 s | — |
 | CONFIRM | 1 – 10 | — |
+| NEW HOST GRACE | 0 – 60 s | — |
+| SILENT LIMIT | 2 – 10 periods | — |
 | RATE | 10 – 25000 pps | — |
 | FLAP WINDOW | 1 – 72000 min | — |
 | DNS TTL | 0 – 3600 s | — |
@@ -385,7 +386,7 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
 `adv_filter`, `sort`, `add`, `del`, `set_ref`, `zero`, `add_comment`, `reset_log`, `clear`,
-`set_option`, `reset_options`, `run_report`, `pause` (value `1` = STOP, `0` = START), `save_hosts_file`, `exit`. `adv_filter` value: JSON object `{"<field>":{"mode":"in|out","values":[...]}}` with the fields `model`,
+`set_option`, `reset_options`, `run_report`, `pause` (value `1` = PAUSE, `0` = RESUME), `save_hosts_file`, `exit`. `adv_filter` value: JSON object `{"<field>":{"mode":"in|out","values":[...]}}` with the fields `model`,
 `location`, `sysloc`, `type`, `comment`; `\u0001none` as value = hosts without a value; `{}` = off
 `set_option`
 value: `key=value`. `reset_log` value: logging off - optional custom file name (blank =
@@ -407,11 +408,11 @@ on a router) and a jump host sees one command instead of one per round.
 - **Period:** fping pings every host once per period = `-w` (at least 200 ms), raised to
   `hosts x interval + timeout` so one pass fits. A round ends when every host delivered a new
   result (at most one period + timeout). RUNS counts only rounds in which hosts were checked.
-- **UP / DOWN:** a reply = UP at once. DOWN after `-re` + 1 timeouts in a row, or when fping
-  delivered nothing for a host for 3 periods. fping drops replies later than its timeout, so the
-  loop timeout is `-t` x `-B`^`-re`, at most 2000 ms. With `-cf` > 1 a host leaves UP only after that
-  many consecutive non-UP results (suppressed count in the log's TBD column).
-- **New hosts:** only an answer is reported during a grace period of (`-re` + 2) periods + 5 s - a slow first
+- **UP / DOWN:** a reply = UP at once. DOWN after `-re` + 1 timeouts in a row (fewer when the ping period is
+  long: the number is cut to what fits in 2 x `-t`, at least 2), or when fping delivered nothing for a host for
+  `-sp` periods. fping drops replies later than `-t`, so `-t` is the longest a reply may take. With `-cf` > 1 a
+  host leaves UP only after that many consecutive non-UP results (suppressed count in the log's TBD column).
+- **New hosts:** only an answer is reported during a grace period of (miss limit + 1) periods + `-ng` s (1 s) - a slow first
   contact (new NAT / firewall state) must not show up as DOWN.
 - **Names:** resolved by background threads (32 parallel, cached `-dns` seconds, randomized; an expired
   entry stays in use until its refresh is done). A name without an address yet joins as soon as it
@@ -426,7 +427,7 @@ on a router) and a jump host sees one command instead of one per round.
 - **Rate:** one process sends one packet per `-i` ms, `-ra` sets the packets/s. A pass over N hosts takes at
   least N / `-ra` s: 32 000 hosts at `-ra 1000` = about 34 s per round. Raise `-ra` for big lists (mind the
   router / NAT / jump host). `-i` floor is 1 ms; `-i 0` removes pacing.
-- STOP stops the processes, START starts them again.
+- PAUSE stops the processes, RESUME starts them again.
 
 ## Options
 
@@ -442,13 +443,14 @@ separated) · `-r` IP range (comma separated, shortened end)
 ### Probing
 | Option | Range | Default | Meaning |
 |---|---|---|---|
-| `-B` | 1 – 2 | 1.5 | backoff factor per retry |
-| `-t` | 10 – 5000 | 250 | timeout (ms); with `-B` and `-re` it gives the loop timeout |
-| `-re` | 0 – 5 | 3 | DOWN after `-re` + 1 timeouts in a row |
+| `-t` | 10 – 5000 | 1000 | ping timeout (ms): a reply later than this is lost |
+| `-re` | 0 – 5 | 3 | DOWN after up to `-re` + 1 timeouts in a row (see *How checking works*) |
 | `-i` | -1 – 250 | auto | send interval (ms), overrides `-ra`; `-1` auto, `0` unpaced |
 | `-p` | 0 – 32 | auto | fping processes per address family |
 | `-w` | 0 – 600 | 0.5 | ping period per host (s, at least 0.2) |
 | `-cf` | 1 – 10 | 2 | consecutive DOWN before leaving UP (`1` = off) |
+| `-ng` | 0 – 60 | 1 | seconds added to the grace period of new hosts |
+| `-sp` | 2 – 10 | 3 | silent ping periods (no fping output) until DOWN |
 | `-ra` | 10 – 25000 | 1000 | ICMP packets/s |
 | `-fw` | 1 – 72000 | 72000 | minutes to count as flapping |
 | `-dns` | 0 – 3600 | 300 | hostname cache TTL (s, `0` off) |
