@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.62'
+VERSION = '4.66'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -3711,6 +3711,11 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   #ctrls{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
   .ctrls-row{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;flex-basis:100%}
   #ctrlsMain{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .ctrls-row:empty{display:none}
+  .ctrls-row .sp{flex:1 1 auto}
+  body.lay-wide .ctrls-row, body.lay-medium .ctrls-row{flex-wrap:nowrap}
+  .ctrls-row button{white-space:nowrap}
+  body.lay-wrapok .ctrls-row{flex-wrap:wrap}
   #ro{color:var(--acc)}
   #grid{display:flex;align-items:flex-start;gap:0;
         overflow-x:auto;overflow-y:hidden;padding:4px 0 0 8px;
@@ -4027,7 +4032,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       <span>eping.py <small id="ver"></small> &nbsp;&middot;&nbsp;
       &copy; Ewald Jeitler &nbsp;&middot;&nbsp;
       supervised by <a href="https://jeitler.cc/nelly/" target="_blank" rel="noopener">Nelly</a> &nbsp;&middot;&nbsp;
-      <a href="https://tools.jeitler.cc" target="_blank" rel="noopener">tools.jeitler.cc</a> &nbsp;&middot;&nbsp;
+      <span id="hdrTools"><a href="https://tools.jeitler.cc" target="_blank" rel="noopener">tools.jeitler.cc</a> &nbsp;&middot;&nbsp;</span>
       <a href="https://www.jeitler.cc" target="_blank" rel="noopener">www.jeitler.cc</a></span>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
         <ellipse cx="12" cy="16.5" rx="5.4" ry="4.3"/>
@@ -4042,9 +4047,12 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
 
   <div class="bar">
    <span id="ctrls">
-    <span class="ctrls-row" id="ctrlsRow1">
-     <span id="ctrlsMain">
-      <select id="selFilter" title="display filter: choose which hosts are shown (evaluated live) - all hosts keep being pinged until SET REFERENCE removes the hosts that are not shown">
+    <span class="ctrls-row" id="ctrlsRow1"></span>
+    <span class="ctrls-row" id="ctrlsRow2"></span>
+    <span class="ctrls-row" id="ctrlsRow3"></span>
+    <!-- all controls live here; fitToolbar() moves them into the rows for the current window width -->
+    <span id="ctrlStash" style="display:none">
+     <select id="selFilter" title="display filter: choose which hosts are shown (evaluated live) - all hosts keep being pinged until SET REFERENCE removes the hosts that are not shown">
         <option value="0">ALL HOSTS</option>
         <option value="1">CURRENTLY-UP</option>
         <option value="3">ALWAYS-UP</option>
@@ -4055,63 +4063,44 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
         <option value="7">DOWN+FLAPPING</option>
         <option value="8">NO-DNS</option>
       </select>
-      <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
+     <select id="sortSel" title="sort order - a flapping host is grouped as FLAP regardless of its current state">
         <option value="0">ADDRESS</option>
         <option value="1">UP/FLAP/DOWN</option>
         <option value="2">DOWN/FLAP/UP</option>
         <option value="3">FLAP/UP/DOWN</option>
         <option value="4">FLAP/DOWN/UP</option>
       </select>
-      <button id="btnSetRef" title="use the hosts currently shown as the new reference list - all other hosts are removed and no longer pinged">SET REFERENCE</button>
-      <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
-      <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
-      <select id="selAddrMode" title="What happens when the same target is in the list as hostname AND as IP | KEEP ALL (NO DEDUP): both are pinged and shown as entered | DEDUP: KEEP HOSTNAME: an IP entry is dropped when a hostname resolves to the same address | DEDUP: KEEP IP: a hostname entry is dropped when its address is already listed as IP | RESOLVE ALL TO IP: every hostname is renamed to its IP (history kept); duplicates and unresolvable names are hidden. Non-destructive - switching mode restores everything.">
+     <button id="btnSetRef" title="use the hosts currently shown as the new reference list - all other hosts are removed and no longer pinged">SET REFERENCE</button>
+     <button id="btnZero" title="reset CH-TIME and CH NO for all hosts">ZERO CHANGES</button>
+     <button id="btnClear" class="danger" title="remove every host from the list, resets all state">CLEAR ALL</button>
+     <select id="selAddrMode" title="What happens when the same target is in the list as hostname AND as IP | KEEP ALL (NO DEDUP): both are pinged and shown as entered | DEDUP: KEEP HOSTNAME: an IP entry is dropped when a hostname resolves to the same address | DEDUP: KEEP IP: a hostname entry is dropped when its address is already listed as IP | RESOLVE ALL TO IP: every hostname is renamed to its IP (history kept); duplicates and unresolvable names are hidden. Non-destructive - switching mode restores everything.">
         <option value="0">KEEP ALL (NO DEDUP)</option>
         <option value="1">DEDUP: KEEP HOSTNAME</option>
         <option value="2">DEDUP: KEEP IP</option>
         <option value="3">RESOLVE ALL TO IP</option>
       </select>
-      <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
-      <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
-      <button id="btnJump" title="ping from a jump host via ssh instead of from this computer">JUMPHOST</button>
-      <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel">LOGGING</button>
-      <select id="selDownload" title="add hosts from a file on the server or from your computer, download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
+     <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
+     <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
+     <button id="btnJump" title="ping from a jump host via ssh instead of from this computer">JUMPHOST</button>
+     <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel">LOGGING</button>
+     <select id="selDownload" title="add hosts from a file on the server or from your computer, download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
         <option value="add_from_server">ADD HOSTS FILE FROM SERVER</option>
         <option value="add_from_client">ADD HOSTS FILE FROM CLIENT</option>
         <option value="save_hosts_file">SAVE HOSTS</option>
         <option value="choose_logfile">SERVER OPERATIONS</option>
       </select>
-      <input type="file" id="uploadServerFileInput" accept=".txt,.csv,.zip,text/csv,text/plain" style="display:none">
-      <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
-     </span>
-     <span class="fsbox">
-       <button id="fsMinus" title="smaller (-)">A&minus;</button>
-       <input type="range" id="fsRange" min="6" max="28" step="1">
-       <button id="fsPlus" title="bigger (+)">A+</button>
-     </span>
-    </span>
-    <span class="ctrls-row" id="ctrlsHosts">
-     <span class="grp">
-      <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="Display filter: regex">
-      <button id="btnMatchFilter" title="apply display filter">SET</button>
-      <button id="btnClearFilter" title="clear display filter">CLEAR</button>
-      <span class="sep">&nbsp;|&nbsp;</span>
-      <button id="btnAdvFilter" title="ADV FILTER (V): display filter on the inventory fields Model, Location, sysLocation, Type, Comment - only matching hosts are shown, every host keeps being pinged">ADV FILTER</button>
-     </span>
-     <span class="sep">&nbsp;|&nbsp;</span>
-     <span class="grp">
-      <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
-      <button id="btnAdd" title="add the given host(s) to the list - same input as DELETE">ADD</button>
-      <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
-      <button id="btnList" title="paste a list of hosts (one per line, or separated by comma/semicolon/blank) to add or delete - also opened by Ctrl/Cmd+V on the page">ADD/DEL LIST</button>
-     </span>
-     <span class="sep">&nbsp;|&nbsp;</span>
-     <span class="grp">
-      <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
-      <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
-     </span>
-     <span class="sep">&nbsp;|&nbsp;</span>
+     <input type="file" id="uploadServerFileInput" accept=".txt,.csv,.zip,text/csv,text/plain" style="display:none">
+     <input type="text" id="matchInput" title="display filter: only matching hosts are shown, every host keeps being pinged regardless" placeholder="Display filter: regex">
+     <button id="btnMatchFilter" title="apply display filter">SET</button>
+     <button id="btnClearFilter" title="clear display filter">CLEAR</button>
+     <button id="btnAdvFilter" title="ADV FILTER (V): display filter on the inventory fields Model, Location, sysLocation, Type, Comment - only matching hosts are shown, every host keeps being pinged">ADV FILTER</button>
+     <input type="text" id="addInput" placeholder="IPv4/IPv6, host, IPv4 CIDR, IPv6 /128, ip1-ip2">
+     <button id="btnAdd" title="add the given host(s) to the list - same input as DELETE">ADD</button>
+     <button id="btnDel" title="remove the given host(s) - same input as ADD">DELETE</button>
+     <button id="btnList" title="paste a list of hosts (one per line, or separated by comma/semicolon/blank) to add or delete - also opened by Ctrl/Cmd+V on the page">ADD/DEL LIST</button>
+     <input type="text" id="commentInput" title="free text, logged with a timestamp to the CSV (only while logging is on)" placeholder="comment for the log">
+     <button id="btnComment" title="append a timestamped comment row to the CSV log">COMMENT</button>
      <input type="file" id="fileInput" accept=".txt,.csv,.list,text/plain" style="display:none">
      <select id="selGenReport" title="analyse a logfile with epinga.py and open the report in a new tab">
        <option value="" selected disabled hidden>GENERATE REPORT</option>
@@ -4119,8 +4108,13 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="choose">CHOOSE LOGFILE</option>
        <option value="upload">UPLOAD FROM CLIENT</option>
       </select>
-     <span class="sep">&nbsp;|&nbsp;</span>
      <button id="btnPause" title="pause checking - no pings until RESUME, the table stays as it is">PAUSE</button>
+     <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
+     <span class="fsbox">
+       <button id="fsMinus" title="smaller (-)">A&minus;</button>
+       <input type="range" id="fsRange" min="6" max="28" step="1">
+       <button id="fsPlus" title="bigger (+)">A+</button>
+     </span>
     </span>
    </span>
   </div>
@@ -4181,27 +4175,33 @@ document.getElementById('fsMinus').onclick = function(){ setFont(fontSize - 1); 
 document.getElementById('fsPlus').onclick  = function(){ setFont(fontSize + 1); };
 document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.value,10)); };
 
-/* ---------------- responsive toolbar (staged compact mode) ----------------
-   shrinks #ctrlsRow1 (the ALL HOSTS...EXIT button row + the font-size slider)
-   in stages, each one MEASURED against an actual line wrap instead of a
-   guessed pixel breakpoint - label widths depend on font rendering and
-   OS/zoom, so a fixed width threshold reliably breaks at some other width
-   than the one it was tuned for. Stops at the first stage that fits, so a
-   window with room to spare keeps full-size buttons - only the font-size
-   slider (cheapest to give up, rarely touched) shrinks first; buttons/selects
-   only shrink too if that alone isn't enough. */
+/* ---------------- responsive toolbar ----------------
+   the controls are moved into 2-3 rows by fitToolbar(), widest layout first,
+   each step MEASURED against an actual overflow instead of a guessed pixel
+   breakpoint (label widths depend on font rendering and OS/zoom):
+     WIDE    2 rows  - all controls as before
+     MEDIUM  3 rows  - blocks separated by |, PAUSE/EXIT last row on the right,
+                       SCROLL hint shortened to >>; if still too wide the
+                       SET/ZERO/CLEAR/GET/ADV labels are shortened, then
+                       KEEP ALL / REPORT
+     below   MEDIUM with shrunk controls, rows wrap only as a last resort */
 var COMPACT_LABELS = [
   {sel:'#selAddrMode option[value="0"]', full:'KEEP ALL (NO DEDUP)', short:'KEEP ALL'},
   {sel:'#selGenReport option[value=""]', full:'GENERATE REPORT',  short:'REPORT'}
 ];
+var MED_LABELS = [
+  {sel:'#btnSetRef',     full:'SET REFERENCE', short:'SET'},
+  {sel:'#btnZero',       full:'ZERO CHANGES',  short:'ZERO'},
+  {sel:'#btnClear',      full:'CLEAR ALL',     short:'CLEAR'},
+  {sel:'#btnGetNames',   full:'GET NAMES',     short:'GET'},
+  {sel:'#btnAdvOptions', full:'ADV OPTIONS',   short:'ADV'}
+];
 // stage 3 only - the least-used labels, shortened further once stage 2 alone
 // still isn't enough (very small window)
 var MICRO_LABELS = [
-  {sel:'#btnSetRef',      full:'SET REFERENCE',  short:'SET'},
-  {sel:'#btnZero',        full:'ZERO CHANGES',   short:'ZERO'},
-  {sel:'#btnClear',       full:'CLEAR ALL',      short:'CLEAR'},
-  {sel:'#btnAdvOptions',  full:'ADV OPTIONS',    short:'ADV'},
-  {sel:'#btnResetLog',    full:'LOGGING',        short:'LOG'}
+  {sel:'#btnResetLog',    full:'LOGGING',        short:'LOG'},
+  {sel:'#btnAdvFilter',   full:'ADV FILTER',     short:'ADV'},
+  {sel:'#btnList',        full:'ADD/DEL LIST',   short:'LIST'}
 ];
 function applyLabelSet(labels, compact){
   labels.forEach(function(l){
@@ -4218,22 +4218,127 @@ function rowWrapped(el){
   }
   return false;
 }
+var SCROLL_HINT_LONG = 'SCROLL RIGHT FOR MORE - reduce font size to fit';
+var SCROLL_HINT = SCROLL_HINT_LONG;
+function setHint(t){
+  SCROLL_HINT = t;
+  var h = document.getElementById('scrollHint');
+  if(h && h.textContent) h.textContent = t;
+}
+// '|' = separator, '~' = spacer pushing the rest to the right, 'fsbox' = font size control
+var LAYOUTS = {
+  wide: [
+    ['selFilter','sortSel','btnSetRef','btnZero','btnClear','selAddrMode','btnGetNames','btnAdvOptions',
+     'btnJump','btnResetLog','selDownload','fsbox'],
+    ['matchInput','btnMatchFilter','btnClearFilter','|','btnAdvFilter','|','addInput','btnAdd','btnDel',
+     'btnList','|','commentInput','btnComment','|','selGenReport','|','btnPause','btnExit']
+  ],
+  medium: [
+    ['selFilter','sortSel','selAddrMode','|','btnSetRef','btnZero','btnClear','|','btnGetNames',
+     'btnAdvOptions','btnJump','fsbox'],
+    ['btnResetLog','selDownload','selGenReport','|','commentInput','btnComment'],
+    ['matchInput','btnMatchFilter','btnClearFilter','|','btnAdvFilter','|','addInput','btnAdd','btnDel',
+     'btnList','~','btnPause','btnExit']
+  ],
+  ro: [['fsbox']]
+};
+function ctlEl(id){
+  return id === 'fsbox' ? document.querySelector('.fsbox') : document.getElementById(id);
+}
+function layoutRows(name){
+  var stash = document.getElementById('ctrlStash'), rows = [], i;
+  for(i = 1; i <= 3; i++) rows.push(document.getElementById('ctrlsRow' + i));
+  rows.forEach(function(r){
+    while(r.firstChild){
+      var c = r.firstChild;
+      if(c.className === 'sep' || c.className === 'sp') r.removeChild(c);
+      else stash.appendChild(c);
+    }
+  });
+  LAYOUTS[name].forEach(function(ids, n){
+    ids.forEach(function(id){
+      var el;
+      if(id === '|'){ el = document.createElement('span'); el.className = 'sep'; el.innerHTML = '&nbsp;|&nbsp;'; }
+      else if(id === '~'){ el = document.createElement('span'); el.className = 'sp'; }
+      else el = ctlEl(id);
+      if(el) rows[n].appendChild(el);
+    });
+  });
+}
+function rowsOverflow(){
+  // a nowrap row grows to its content, so compare it with the room the bar offers
+  var bar = document.querySelector('.bar'), cs = getComputedStyle(bar);
+  var avail = bar.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  for(var i = 1; i <= 3; i++){
+    var r = document.getElementById('ctrlsRow' + i);
+    if(r.firstChild && r.scrollWidth > avail + 1) return true;
+  }
+  return false;
+}
+function fitHeader(){
+  // narrow window: drop tools.jeitler.cc first, then the date, until the header is one line
+  var t = document.getElementById('hdrTools'), c = document.getElementById('clock');
+  var ttl = document.querySelector('.title'), span = ttl.querySelector('span');
+  function wrapped(){
+    var lh = parseFloat(getComputedStyle(span).lineHeight) || 18;   // 'normal' -> estimate
+    return span.getBoundingClientRect().height > lh * 1.5 ||
+           c.getBoundingClientRect().top > ttl.getBoundingClientRect().top + 4;
+  }
+  var had = c.textContent;
+  if(!had) c.textContent = '00/00/0000 00:00:00';   // measure with a typical date width
+  t.style.display = ''; c.style.display = '';
+  if(wrapped()){
+    t.style.display = 'none';
+    if(wrapped()) c.style.display = 'none';
+  }
+  if(!had) c.textContent = '';
+}
 function fitToolbar(){
-  var row = document.getElementById('ctrlsRow1'), body = document.body;
-  if(!row) return;
-  // always start from full size - shrinking can only free up space, never
-  // require more, so re-measuring from scratch each time never oscillates
-  body.classList.remove('compact', 'compact-slider', 'compact-micro');
+  fitHeader();
+  var body = document.body, ae = document.activeElement, selS = null, selE = null;
+  if(ae && ae.tagName === 'INPUT'){ try{ selS = ae.selectionStart; selE = ae.selectionEnd; }catch(e){} }
+  function done(){
+    if(ae && ae !== document.body && ae.focus){
+      ae.focus();
+      if(selS !== null){ try{ ae.setSelectionRange(selS, selE); }catch(e){} }
+    }
+  }
+  // always start from the widest layout at full size - narrowing can only free
+  // up space, never require more, so re-measuring from scratch never oscillates
+  body.classList.remove('compact', 'compact-slider', 'compact-micro', 'lay-wide', 'lay-medium', 'lay-wrapok');
   applyLabelSet(COMPACT_LABELS, false);
+  applyLabelSet(MED_LABELS, false);
   applyLabelSet(MICRO_LABELS, false);
-  if(!rowWrapped(row)) return;                  // stage 0: full size fits
+  setHint(SCROLL_HINT_LONG);
+  if(document.getElementById('ctrls').classList.contains('readonly')){
+    layoutRows('ro'); done(); return;
+  }
+  // labels are shortened step by step as soon as a row would not fit (a wrapped
+  // label inside a button is the first sign of this)
+  var STAGES = [[], [MED_LABELS], [MED_LABELS, COMPACT_LABELS], [MED_LABELS, COMPACT_LABELS, MICRO_LABELS]];
+  function stage(n){
+    [MED_LABELS, COMPACT_LABELS, MICRO_LABELS].forEach(function(l){ applyLabelSet(l, STAGES[n].indexOf(l) >= 0); });
+  }
+  var names = ['wide', 'medium'], i, n;
+  for(i = 0; i < names.length; i++){
+    layoutRows(names[i]);
+    body.classList.remove('lay-wide', 'lay-medium');
+    body.classList.add('lay-' + names[i]);
+    setHint(names[i] === 'wide' ? SCROLL_HINT_LONG : '>>');
+    for(n = 0; n < STAGES.length; n++){
+      stage(n);
+      if(!rowsOverflow()){ done(); return; }
+    }
+    if(names[i] === 'wide'){ stage(0); }
+  }
+  // still too wide: MEDIUM with the font-size buttons and then all controls shrunk,
+  // finally rows may wrap
   body.classList.add('compact-slider');
-  if(!rowWrapped(row)) return;                  // stage 1: slider-only shrink fits
+  if(!rowsOverflow()){ done(); return; }
   body.classList.add('compact');
-  applyLabelSet(COMPACT_LABELS, true);
-  if(!rowWrapped(row)) return;                  // stage 2: shrink buttons + labels too
-  body.classList.add('compact-micro');
-  applyLabelSet(MICRO_LABELS, true);            // stage 3: shorten the least-used labels too
+  if(!rowsOverflow()){ done(); return; }
+  body.classList.add('lay-wrapok');
+  done();
 }
 fitToolbar();
 var fitRz;
@@ -6019,7 +6124,7 @@ function render(rows){
 
   var fits = grid.scrollWidth <= grid.clientWidth + 2;
   document.getElementById('scrollHint').textContent =
-    fits ? '' : 'SCROLL RIGHT FOR MORE - reduce font size to fit';
+    fits ? '' : SCROLL_HINT;
   setFoot('');
 }
 
@@ -6194,8 +6299,8 @@ function poll(){
     lastAppliedSeq = mySeq;
     document.getElementById('ver').textContent   = 'v'+s.version;
     if(s.readonly){
-      document.getElementById('ctrlsMain').style.display = 'none';
-      document.getElementById('ctrlsHosts').style.display = 'none';
+      var ctl = document.getElementById('ctrls');
+      if(!ctl.classList.contains('readonly')){ ctl.classList.add('readonly'); fitToolbar(); }
       document.getElementById('ro').textContent = '- read only, controlled from the terminal';
     }
     isReadOnly = !!s.readonly;
@@ -6207,6 +6312,7 @@ function poll(){
       bj.title = s.source ? ('pinging via jump host ' + s.source + ' - click to change') : 'ping from a jump host via ssh instead of from this computer';
     }
     document.getElementById('clock').textContent = s.datetime;
+    if(!window.__hdrFit){ window.__hdrFit = 1; fitHeader(); }
     document.getElementById('sHosts').textContent   = s.hosts;
     document.getElementById('sRuntime').textContent = s.run_time;
     document.getElementById('sRuntimeUnit').style.display = (s.run_time === 'n/a') ? 'none' : '';
@@ -10871,18 +10977,18 @@ if __name__=='__main__':
         hosts_down = '{m: <6}'.format(m=hosts_count_down)
         hosts_flap = '{m: <6}'.format(m=hosts_count_flap)
         screen_output(rows - 1, 1,  'HOSTS: '   + str(hosts_count_up + hosts_count_down), 1, 1)
+        screen_output(rows - 1, 14, 'SHOWN: '   + str(hosts_count_shown), 1, 1)
         _runtime_txt = ('RUNTIME: ' + run_time if run_time == RUNTIME_UNAVAILABLE
                         else 'RUNTIME: ' + str(run_time) + 's')
-        screen_output(rows - 1, 14, _runtime_txt, 1, 1)
-        screen_output(rows - 1, 35, 'RUNS: '    + str(run_counter), 1, 1)
-        screen_output(rows - 1, 50, '| HOST UP: ', 1, 1)
-        screen_output(rows - 1, 61, hosts_up, 2, 1)
-        screen_output(rows - 1, 67, 'DOWN: ', 1, 1)
-        screen_output(rows - 1, 73, hosts_down, 3, 1)
-        screen_output(rows - 1, 79, 'FLAPPING: ', 1, 1)
-        screen_output(rows - 1, 89, hosts_flap.rstrip(), 1, 1)
-        screen_output(rows - 1, 96, 'SHOWN: ', 1, 1)
-        screen_output(rows - 1, 103, ('{m: <6}'.format(m=hosts_count_shown)).rstrip() + ' |', 1, 1)
+        screen_output(rows - 1, 28, _runtime_txt, 1, 1)
+        screen_output(rows - 1, 49, 'RUNS: '    + str(run_counter), 1, 1)
+        screen_output(rows - 1, 64, '| HOST UP: ', 1, 1)
+        screen_output(rows - 1, 75, hosts_up, 2, 1)
+        screen_output(rows - 1, 81, 'DOWN: ', 1, 1)
+        screen_output(rows - 1, 87, hosts_down, 3, 1)
+        screen_output(rows - 1, 93, 'FLAPPING: ', 1, 1)
+        screen_output(rows - 1, 103, hosts_flap.rstrip(), 1, 1)
+        screen_output(rows - 1, 110, '|', 1, 1)
         if args.disable_logging:
             screen_output(rows - 1, 113, 'LOGGING-ON: ' + logfile_file_name, 1, 1)
         else:
