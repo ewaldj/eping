@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.72'
+VERSION = '4.74'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -127,6 +127,7 @@ ADDR_MODE_LABELS = ['keep all', 'dedup: keep hostname', 'dedup: keep ip', 'resol
 # FLAP group takes precedence over its current state; NO-DNS counts as DOWN. Inside the
 # UP and DOWN group the usual order applies (IPv4 numerically, hostnames after that);
 # inside FLAP the state comes first in the direction of the mode, then the change count.
+SORT_DEF = 2                         # default sort order: DOWN/FLAP/UP
 SORT_MODES = [
     ('ADDRESS',       'ADDR',  None),
     ('UP/FLAP/DOWN',  'U/F/D', ('up', 'flap', 'down')),
@@ -3533,7 +3534,7 @@ web_state = {
     'filter_mode'      : 0,
     'filter_label'     : FILTER_MODES[0][0],
     'addr_mode'        : 0,
-    'sort_mode'        : 0,
+    'sort_mode'        : SORT_DEF,
     'readonly'         : False,
     'learning_phase'   : True,
     'learning_run'     : 0,
@@ -4432,6 +4433,9 @@ document.getElementById('sortSel').onchange = function(){
 var chooseLogModal = document.getElementById('chooseLogModal');
 function chooseLogOpen(){ return chooseLogModal.style.display !== 'none'; }
 function closeChooseLog(){ chooseLogModal.style.display = 'none'; }
+function fileSizeText(f){            // zip: unpacked size -> packed size
+  return (f.usize !== undefined && f.usize !== null ? humanBytes(f.usize) + ' \u2192 ' : '') + humanBytes(f.size);
+}
 function humanBytes(n){
   if(n === undefined || n === null) return '';
   if(n < 1024) return n + ' B';
@@ -4545,7 +4549,7 @@ function chooseLogRenderList(){
     tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
     var tdSize = document.createElement('td');
     tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdSize.textContent = humanBytes(f.size);
+    tdSize.textContent = fileSizeText(f);
     var tdDate = document.createElement('td');
     tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
     tdDate.textContent = formatFileDate(f.mtime);
@@ -5395,7 +5399,7 @@ function addFromServerRenderList(){
     tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
     var tdSize = document.createElement('td');
     tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdSize.textContent = humanBytes(f.size);
+    tdSize.textContent = fileSizeText(f);
     var tdDate = document.createElement('td');
     tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
     tdDate.textContent = formatFileDate(f.mtime);
@@ -5666,7 +5670,7 @@ function chooseReportRenderList(){
     tdName.textContent = f.name + (f.active ? '  (ACTIVE)' : '');
     var tdSize = document.createElement('td');
     tdSize.style.cssText = 'padding:3px 10px 3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
-    tdSize.textContent = humanBytes(f.size);
+    tdSize.textContent = fileSizeText(f);
     var tdDate = document.createElement('td');
     tdDate.style.cssText = 'padding:3px 0;text-align:right;white-space:nowrap;color:var(--dim)';
     tdDate.textContent = formatFileDate(f.mtime);
@@ -6301,7 +6305,7 @@ function poll(){
         pendingSortMode = null;
       }
       if(pendingSortMode === null) ss.value = String(s.sort_mode || 0);
-      ss.className = s.sort_mode ? 'on' : '';
+      ss.className = (s.sort_mode !== 2) ? 'on' : '';   // 2 = default DOWN/FLAP/UP
     }
     // keep the local 'working ...' note until the server actually answers something new
     // msg_seq (not text) drives this: two commands in a row can produce the exact
@@ -7298,8 +7302,16 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                             st = os.stat(name)
                         except OSError:
                             continue
-                        files.append({'name': name, 'size': st.st_size,
-                                     'mtime': st.st_mtime, 'active': name == active})
+                        _f = {'name': name, 'size': st.st_size,
+                              'mtime': st.st_mtime, 'active': name == active}
+                        if is_zip_log(name):                       # unpacked size from the zip directory (no unpacking)
+                            try:
+                                with zipfile.ZipFile(name) as _zf:
+                                    _f['usize'] = sum(zi.file_size for zi in _zf.infolist()
+                                                      if not zi.filename.endswith('/'))
+                            except (OSError, zipfile.BadZipFile):
+                                pass
+                        files.append(_f)
             except OSError:
                 pass
             files.sort(key=lambda f: f['mtime'], reverse=True)
@@ -8216,7 +8228,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     # PREFER HOSTNAME / IP ONLY toggles - see ADDR_MODE_LABELS above.
     addr_mode         = 0
     ip_only_map       = {}
-    sort_mode         = 0
+    sort_mode         = SORT_DEF
     down_streak       = {}
     learning_done     = (up_check_runs == 0)
     up_seen           = set()
@@ -8372,7 +8384,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 try:
                     sort_mode = int(value) % len(SORT_MODES)
                 except ValueError:
-                    sort_mode = 0
+                    sort_mode = SORT_DEF
                 message = 'sort: ' + SORT_MODES[sort_mode][0]
             elif cmd == 'add':
                 add_stats = {}
@@ -10337,7 +10349,7 @@ if __name__=='__main__':
             try:
                 sort_mode = int(bval) % len(SORT_MODES)
             except ValueError:
-                sort_mode = 0
+                sort_mode = SORT_DEF
             screen.clear()
             message = 'sort: ' + SORT_MODES[sort_mode][0]
 
@@ -10760,7 +10772,7 @@ if __name__=='__main__':
                               # addr_mode dropdown's 3rd option (apply_prefer_ip)
     ip_only_mode   = False
     ip_only_map    = {}
-    sort_mode      = 0
+    sort_mode      = SORT_DEF
     display_list   = []
     hosts_count_up = 0
     hosts_count_down = 0
@@ -11026,7 +11038,7 @@ if __name__=='__main__':
         for idx, label in enumerate(keys):
             highlight = ((idx == 0 and filter_mode != 0) or (idx == 1 and match_filter_re is not None)
                         or (idx == 2 and bool(adv_filter))
-                        or (idx == 6 and sort_mode != 0)
+                        or (idx == 6 and sort_mode != SORT_DEF)
                         or (idx == 11 and (prefer_hostname or prefer_ip))
                         or (idx == 13 and bool(ssh_cfg)))
             screen_output(rows - 2, key_col, label, 2 if highlight else 1, 1 if highlight else 0)

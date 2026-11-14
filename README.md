@@ -1,4 +1,4 @@
-# eping.py 4.72
+# eping.py 4.74
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -328,8 +328,8 @@ ALWAYS-DOWN, CURRENTLY-DOWN, DOWN+FLAPPING, NO-DNS.
 | NO-DNS | unresolvable now |
 
 CLI `O` and web GUI's sort select/`O` picker reach the same 5 sort orders directly; the
-web GUI's own `O` keyboard shortcut cycles them one at a time. `ADDRESS` (default),
-`UP/FLAP/DOWN`, `DOWN/FLAP/UP`, `FLAP/UP/DOWN`, `FLAP/DOWN/UP`. FLAP group contains both
+web GUI's own `O` keyboard shortcut cycles them one at a time. `ADDRESS`,
+`UP/FLAP/DOWN`, `DOWN/FLAP/UP` (default), `FLAP/UP/DOWN`, `FLAP/DOWN/UP`. FLAP group contains both
 UP and DOWN flapping hosts; NO-DNS counts as DOWN. Inside FLAP: state first (direction
 per mode), then change count (highest first), then address. Both view and order apply
 immediately, order re-evaluated every round.
