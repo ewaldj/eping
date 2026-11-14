@@ -1,4 +1,4 @@
-# eping.py 4.66
+# eping.py 4.71
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -247,7 +247,7 @@ Single self-contained page, no external resources.
 - Toolbar, two rows (wraps if narrow):
   - Row 1: view select (9 views), sort order select, SET REFERENCE, ZERO CHANGES,
     CLEAR ALL, address mode select, GET NAMES, ADV OPTIONS, LOGGING, FILE OPERATIONS
-    select, EXIT, font size.
+    select, STOP, font size.
   - Row 2: match filter (SET/CLEAR), ADV FILTER, host field (ADD/DELETE), ADD/DEL LIST, comment
     field (COMMENT), GENERATE REPORT select, PAUSE/RESUME button.
   - **PAUSE / RESUME** (last button of row 2): `PAUSE` pauses the check - no pings are sent, the table, the
@@ -381,7 +381,6 @@ Same bounds as the matching CLI flags (`-lms`/`-lmf` for the last two - see *Out
 | POST | `/api/command` | `{"cmd":"...","value":"..."}` | control (see cmd list below) |
 | POST | `/api/advvalues` | `{"filter":{...}}` | ADV FILTER: values still selectable for a draft selection (same format as `adv_filter`) |
 | POST | `/api/upload` | host list, text | add hosts |
-| POST | `/api/log_sources` | `{"names":[...],"upload":false}` | SOURCE values of the named logfiles (empty = active logfile; `upload:true` = files stored by `/api/reportupload`), for the jump host dialog of GENERATE REPORT |
 | POST | `/api/jumphost` | `{"action":"info|test|trust|connect|local","host":...,"port":...,"user":...,"secret":...,"hostkey":"ask|accept-new|off","key":...}` | JUMPHOST window (see *SSH source (JUMPHOST)*) |
 
 `cmd` values: `up_only`, `set_filter`, `addr_mode`, `get_names`, `match_filter`,
@@ -584,7 +583,7 @@ exit, a full notice prints once:
     https://github.com/ewaldj/eping
 ```
 
-Shown on any terminal-driven exit (CLI `[E]`/Ctrl-C, `-web`'s EXIT/Ctrl-C in its
+Shown on any terminal-driven exit (CLI `[E]`/Ctrl-C, `-web`'s STOP/Ctrl-C in its
 terminal). The web GUI's in-browser banner is separate and shorter.
 
 ## Run analysis on exit
@@ -597,7 +596,7 @@ Run an analysis of this logfile with epinga.py now? [y/N]:
 
 `y` (case-insensitive) runs `epinga.py -f <logfile>` before exit; anything else skips
 it. Only asked on a terminal-driven exit (CLI `[E]`/Ctrl-C, or `-wv`/`-wvc`'s own
-keyboard `[E]`/Ctrl-C); exiting via a browser's EXIT button never asks. No prompt if
+keyboard `[E]`/Ctrl-C); exiting via a browser's STOP button never asks. No prompt if
 logging is off or the logfile is empty/missing.
 
 ## GENERATE REPORT (web gui) / ANALYSE NOW (CLI `N`)
@@ -607,21 +606,15 @@ running - not just at exit. Web: GENERATE REPORT dropdown, four entries - `ACTIV
 LOGFILE` analyses the active CSV log (needs logging on, non-empty logfile, else the tab
 closes and a footer error is shown), `CHOOSE LOGFILE` picks one or more `.csv` files in
 the working dir - table (name/size/date), "select all" checkbox, nothing preselected;
-up to 25 files per report, checking a 26th is refused. If a log holds more than one source (`local` and jump hosts, log column `SOURCE`), a
-selection dialog follows automatically - all checked, ENTER = GENERATE; only the periods of the checked sources are calculated (see *Source filter* in the
-epinga.py section).
+up to 25 files per report, checking a 26th is refused. If a log holds more than one source (`local` and jump hosts, log column `SOURCE`), the report contains all of them and a
+source switch (see *Source switch in the HTML report*); no dialog.
 
-All report entries (`ACTIVE LOGFILE`, `CHOOSE LOGFILE`, `UPLOAD FROM CLIENT`) check the selected log(s) first: if they hold more than one
-source (measuring host changed between local and jump hosts, or between jump hosts), a dialog offers to analyse all,
-one or several sources (all checked = default; CANCEL aborts the report). With one source the report starts directly.
-The report tab opens only after this choice; if the browser blocks it (e.g. after a long upload), a REPORT READY dialog with an OPEN REPORT button appears.
+The report tab opens right away; if the browser blocks it (e.g. after a long upload), a REPORT READY dialog with an OPEN REPORT button appears.
 While the report is generated the waiting tab shows a progress bar with the step (merging files / analysing / analysing source N of M / writing report), the percentage and an estimated remaining time (extrapolated from the elapsed time, shown after a few seconds); without a tab the same text is shown in the footer. The percentage covers all passes (the main analysis plus one per source, see *Source switch*).
 
 `UPLOAD FROM CLIENT` picks one or more `.csv` logfiles on the computer running the browser (max 25, 1 GB each);
 they are uploaded to a server temp dir, merged like `CHOOSE LOGFILE` and analysed as one report. Temp files and
 report are removed when eping.py exits or on the next upload.
-
-![SELECT JUMPHOST](docs/img/select-jumphost.png)
 
 More than one selected file is merged chronologically (by the row timestamps, streamed) into one temporary
 CSV, analysed as a single logfile, then the temp file is removed. Result opens in a new
@@ -736,7 +729,7 @@ With `-debug` a round longer than 10 s is also logged as a `SLOW ROUND` comment 
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - Needs an fping with `-l` and per-target sequence numbers (fping 4.3 or newer; the Windows / macOS packages have it).
 
-# epinga.py 2.45
+# epinga.py 2.47
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and

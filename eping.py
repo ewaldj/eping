@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.66'
+VERSION = '4.71'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -3928,19 +3928,6 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
-  <div id="reportSrcModal" class="modal-overlay" style="display:none">
-    <div class="modal-box wide">
-      <h3>SELECT JUMPHOST</h3>
-      <p id="reportSrcText">Active logfile. Select the jump hosts (or local) to analyse - only their
-         periods are calculated. ENTER = GENERATE (default: all sources).</p>
-      <div id="reportSrcList" style="max-height:220px;overflow-y:auto;margin-bottom:14px;
-           border:1px solid var(--ctrl-line);border-radius:4px;padding:6px 10px;box-sizing:border-box"></div>
-      <div class="modal-buttons">
-        <button id="modalBtnReportSrcGo">GENERATE</button>
-        <button id="modalBtnReportSrcCancel">CANCEL</button>
-      </div>
-    </div>
-  </div>
   <div id="reportReadyModal" class="modal-overlay" style="display:none">
     <div class="modal-box">
       <h3>REPORT READY</h3>
@@ -4109,7 +4096,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
        <option value="upload">UPLOAD FROM CLIENT</option>
       </select>
      <button id="btnPause" title="pause checking - no pings until RESUME, the table stays as it is">PAUSE</button>
-     <button id="btnExit" class="danger" title="stop eping.py">EXIT</button>
+     <button id="btnExit" class="danger" title="stop eping.py">STOP</button>
      <span class="fsbox">
        <button id="fsMinus" title="smaller (-)">A&minus;</button>
        <input type="range" id="fsRange" min="6" max="28" step="1">
@@ -4180,7 +4167,7 @@ document.getElementById('fsRange').oninput = function(){ setFont(parseInt(this.v
    each step MEASURED against an actual overflow instead of a guessed pixel
    breakpoint (label widths depend on font rendering and OS/zoom):
      WIDE    2 rows  - all controls as before
-     MEDIUM  3 rows  - blocks separated by |, PAUSE/EXIT last row on the right,
+     MEDIUM  3 rows  - blocks separated by |, PAUSE/STOP last row on the right,
                        SCROLL hint shortened to >>; if still too wide the
                        SET/ZERO/CLEAR/GET/ADV labels are shortened, then
                        KEEP ALL / REPORT
@@ -5510,33 +5497,11 @@ function openReportTab(){
     reportWindow.document.close();
   }
 }
-function runReport(values, sources, upload){
+function runReport(values, upload){
   var names = Array.isArray(values) ? values : (values ? [values] : []);
-  if(sources !== undefined){            // sources already decided (SELECT JUMPHOST)
-    openReportTab();                    // still inside the click handler
-    note(PENDING.run_report, true);
-    postReport(names, sources || null, upload);
-    return;
-  }
-  reportSrcAsk(names, upload);          // no tab yet - only after the jump host choice
-}
-// A log with more than one SOURCE (local / jump hosts) means the measuring host
-// changed during the run: ask which sources to analyse before generating.
-var reportSrcCtx = null;
-function reportSrcAsk(names, upload){
-  note('checking jump hosts ...', true);
-  function go(){ openReportTab(); note(PENDING.run_report, true); postReport(names, null, upload); }
-  fetch('api/log_sources', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({names: names, upload: !!upload})})
-    .then(function(r){ return r.json(); })
-    .then(function(j){
-      if(j && j.sources && j.sources.length > 1){
-        reportSrcCtx = {names: names, upload: upload};
-        note('', false);
-        openReportSources(j.sources, true);
-      } else { go(); }
-    })
-    .catch(go);
+  openReportTab();                      // still inside the click handler
+  note(PENDING.run_report, true);
+  postReport(names, upload);            // the report holds every source (source switch inside the report)
 }
 function reportAbort(msg){
   if(reportWindow && !reportWindow.closed) reportWindow.close();
@@ -5544,11 +5509,10 @@ function reportAbort(msg){
   reportExpect = false;
   note(msg, false);
 }
-function postReport(names, sources, upload){
+function postReport(names, upload){
   // post() only carries a single 'value' string - multi-file selection needs
   // its own 'values' array, so this bypasses post().
   var body = names.length ? {cmd: 'run_report', values: names} : {cmd: 'run_report', value: ''};
-  if(sources) body.sources = sources;
   if(upload) body.upload = true;   // use the files stored by api/reportupload
   fetch('api/command', {method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body)})
@@ -5563,71 +5527,6 @@ function postReport(names, sources, upload){
     })
     .catch(function(){ reportAbort('report failed: request error'); });
 }
-var reportSrcModal = document.getElementById('reportSrcModal');
-function reportSrcOpen(){ return reportSrcModal.style.display === 'flex'; }
-function openReportSourcesPick(){
-  // SELECT SOURCES: sources of the active logfile -> pick -> report
-  fetch('api/log_sources', {method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({names: []})})
-    .then(function(r){ return r.json(); })
-    .then(function(j){
-      if(j && j.sources && j.sources.length > 1){ openReportSources(j.sources); }
-      else { note('the active logfile has only one jump host / source' + (j && j.sources && j.sources.length ? ' (' + j.sources[0] + ')' : ''), false); }
-    })
-    .catch(function(){ note('failed to read the sources', false); });
-}
-function openReportSources(sources, auto){
-  document.getElementById('reportSrcText').textContent = auto
-    ? 'The logfile(s) hold more than one source - the measuring host changed (local / jump hosts). '
-      + 'Select the sources to analyse - all, one or several. ENTER = GENERATE.'
-    : 'Active logfile. Select the jump hosts (or local) to analyse - only their periods are calculated. '
-      + 'ENTER = GENERATE (default: all sources).';
-  var list = document.getElementById('reportSrcList');
-  list.innerHTML = '';
-  sources.forEach(function(sname){
-    var lab = document.createElement('label');
-    lab.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;color:var(--fg);font-size:13px;cursor:pointer';
-    var cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.className = 'reportSrcCb'; cb.value = sname; cb.checked = true;
-    cb.onchange = function(){
-      document.getElementById('modalBtnReportSrcGo').disabled = !document.querySelectorAll('.reportSrcCb:checked').length;
-    };
-    lab.appendChild(cb);
-    lab.appendChild(document.createTextNode(sname));
-    list.appendChild(lab);
-  });
-  document.getElementById('modalBtnReportSrcGo').disabled = false;
-  reportSrcModal.style.display = 'flex';
-  document.getElementById('modalBtnReportSrcGo').focus();
-}
-function closeReportSources(){ reportSrcModal.style.display = 'none'; }
-function runReportSources(){
-  if(!reportSrcOpen()) return;
-  var all = document.querySelectorAll('.reportSrcCb');
-  var sel = document.querySelectorAll('.reportSrcCb:checked');
-  if(!sel.length) return;
-  closeReportSources();
-  var chosen = sel.length === all.length ? null
-    : Array.prototype.map.call(sel, function(cb){ return cb.value; });
-  if(reportSrcCtx){                     // tab is already open (reportSrcAsk)
-    var ctx = reportSrcCtx;
-    reportSrcCtx = null;
-    openReportTab();                    // GENERATE click = user gesture
-    note(PENDING.run_report, true);
-    postReport(ctx.names, chosen, ctx.upload);
-    return;
-  }
-  runReport('', chosen);
-}
-function cancelReportSources(){
-  closeReportSources();
-  if(reportSrcCtx){                     // abort the report that waits for this choice
-    reportSrcCtx = null;
-    note('', false);
-  }
-}
-document.getElementById('modalBtnReportSrcGo').onclick = runReportSources;
-document.getElementById('modalBtnReportSrcCancel').onclick = cancelReportSources;
 var pausedOn = false;
 function renderPause(p){
   pausedOn = !!p;
@@ -5647,7 +5546,6 @@ document.getElementById('selGenReport').onchange = function(){
   this.value = '';                              // reset - a select, not a toggle
   if(what === 'active'){ runReport(''); }
   else if(what === 'choose'){ openChooseReport(); }
-  else if(what === 'sources'){ openReportSourcesPick(); }
   else if(what === 'upload'){ openUploadReport(); }
 };
 // UPLOAD FROM CLIENT - local *.csv files are POSTed one by one to
@@ -5703,7 +5601,7 @@ function runReportUpload(){
   var i = 0;
   function next(){
     if(i >= files.length){
-      reportSrcAsk([], true);
+      runReport([], true);
       return;
     }
     note('uploading ' + (i + 1) + '/' + files.length + ' ...', true);
@@ -5913,11 +5811,6 @@ document.addEventListener('keydown', function(e){
   }
   if(uploadReportOpen()){
     if(e.key === 'Escape'){ closeUploadReport(); e.preventDefault(); }
-    return;
-  }
-  if(reportSrcOpen()){
-    if(e.key === 'Escape'){ cancelReportSources(); e.preventDefault(); }
-    else if(e.key === 'Enter'){ runReportSources(); e.preventDefault(); }
     return;
   }
   if(jumpOpen()){
@@ -6606,20 +6499,145 @@ def zip_logfile(path):
             pass
 
 
+_LOG_TS_RE = re.compile(rb'^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d', re.M)
+
+
+_merge_prog = {'done': 0, 'total': 0, 't0': 0.0}   # merge progress: bytes written / unpacked bytes to write
+
+
+def _log_total_bytes(paths):
+    """Unpacked size of the csv data of the given logfiles (0 if unknown)."""
+    tot = 0
+    for p in paths:
+        try:
+            if is_zip_log(p):
+                with zipfile.ZipFile(p) as zf:
+                    tot += sum(zi.file_size for zi in zf.infolist() if zi.filename.lower().endswith('.csv'))
+            else:
+                tot += os.path.getsize(p)
+        except (OSError, zipfile.BadZipFile):
+            return 0
+    return tot
+
+
+def _bin_log_streams(path, stack):
+    """Binary streams of a logfile (one per *.csv member of a zip), closed with 'stack'."""
+    if not is_zip_log(path):
+        return [stack.enter_context(open(path, 'rb'))]
+    try:
+        zf = stack.enter_context(zipfile.ZipFile(path))
+        names = sorted(zi.filename for zi in zf.infolist()
+                       if not zi.filename.endswith('/') and zi.filename.lower().endswith('.csv'))
+    except zipfile.BadZipFile as e:
+        raise OSError(str(e))
+    if not names:
+        raise OSError('no csv file inside ' + os.path.basename(path))
+    return [stack.enter_context(zf.open(n)) for n in names]
+
+
+def _concat_logfiles(ordered, out_path, chunk=8 << 20):
+    """Fast path of merge_logfiles(): append the files as raw bytes (no csv parsing) while
+    checking that every file starts at or after the latest timestamp of the files before it
+    (file time ranges do not overlap) - then the result is identical to the timestamp merge,
+    even if single rows inside a file are slightly out of order. Returns False (caller falls
+    back to the row merge) when a header differs or the ranges overlap. Raises OSError."""
+    header, prev_max = None, b''
+    with contextlib.ExitStack() as stack, open(out_path, 'wb') as out:
+        for p in ordered:
+            for f in _bin_log_streams(p, stack):
+                cur_max = b''
+                hdr = f.readline()
+                if not hdr.startswith(b'TIMESTAMP,'):
+                    return False
+                if header is None:
+                    header = hdr
+                    out.write(hdr if hdr.endswith(b'\n') else hdr + b'\n')
+                elif hdr != header:
+                    return False
+                rem = b''
+                while True:
+                    data = f.read(chunk)
+                    buf = rem + data
+                    if data:
+                        cut = buf.rfind(b'\n') + 1       # whole lines only
+                        if cut == 0:
+                            rem = buf
+                            continue
+                        part, rem = buf[:cut], buf[cut:]
+                    else:
+                        part, rem = buf, b''
+                        if part and not part.endswith(b'\n'):
+                            part += b'\n'
+                    ts = _LOG_TS_RE.findall(part)
+                    if ts:
+                        if min(ts) < prev_max:
+                            return False
+                        hi = max(ts)
+                        if hi > cur_max:
+                            cur_max = hi
+                    out.write(part)
+                    _merge_prog['done'] += len(part)
+                    if not data:
+                        break
+                if cur_max > prev_max:
+                    prev_max = cur_max
+    return True
+
+
+def _log_order_key(path):
+    """Sort key of a logfile for merging: timestamp of its first row, then the rotation number
+    of the name (name.csv, name-1.csv, name-2.csv ...) - independent of file dates, which
+    copies and downloads scramble (a wrong order would force the slow row merge)."""
+    ts = b''
+    try:
+        with contextlib.ExitStack() as stack:
+            f = _bin_log_streams(path, stack)[0]
+            f.readline()                                  # header
+            for _i in range(200):
+                line = f.readline()
+                if not line:
+                    break
+                m = _LOG_TS_RE.match(line)
+                if m:
+                    ts = m.group(0)
+                    break
+    except (OSError, ValueError):
+        pass
+    m = re.match(r'^(.*?)(?:-(\d+))?$', log_base(os.path.basename(path)))
+    return (ts, m.group(1), int(m.group(2) or 0))
+
+
 def merge_logfiles(paths):
     """Merge multiple CSV logfiles (same header) into one temp CSV, for
     GENERATE REPORT's multi-file selection - the merged file is analysed by
     epinga.py as a single logfile, then removed by the caller.
 
+    Fast path: when the files follow each other in time (the usual rotation case) they are
+    just concatenated (_concat_logfiles); otherwise - or on any doubt - the row merge below.
     The files are merged by the TIMESTAMP of their rows (streamed, constant memory),
     not by file date: epinga.py needs every host's rows in time order, and file dates
-    are unreliable (copies, parallel runs). Each file is read in order; on equal
-    timestamps the older file (by mtime) comes first. Only the first header is kept.
+    are unreliable (copies, parallel runs). The files are ordered by their first row (then by
+    rotation number: name, name-1, name-2 ...); on equal timestamps the earlier file comes
+    first. Only the first header is kept.
     Returns the temp file path, or None on error.
     """
-    ordered = sorted(paths, key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0)
+    ordered = sorted(paths, key=_log_order_key)
     fd, tmp_path = tempfile.mkstemp(prefix='eping-merged_', suffix='.csv',
                                     dir=os.path.dirname(paths[0]) or '.')
+    os.close(fd)
+    _merge_prog.update(done=0, total=_log_total_bytes(ordered), t0=time.time())
+    try:
+        if _concat_logfiles(ordered, tmp_path):
+            return tmp_path
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        return None
+
+    global _report_phase
+    _report_phase = 'merging files (by timestamp)'
 
     def rows_of(f):
         rd = csv.reader(f)
@@ -6629,16 +6647,23 @@ def merge_logfiles(paths):
         ti = hdr.index('TIMESTAMP') if 'TIMESTAMP' in hdr else 0
         def gen():
             last = ''                       # a row without a usable timestamp keeps the previous key
+            n = 0                           # approx. bytes read, flushed in batches (progress)
             for r in rd:
                 if not r:
                     continue
                 if len(r) > ti and r[ti].strip():
                     last = r[ti].strip()
+                n += sum(map(len, r)) + len(r)
+                if n > 4000000:
+                    _merge_prog['done'] += n
+                    n = 0
                 yield last, r
+            _merge_prog['done'] += n
         return hdr, gen()
 
     try:
-        with contextlib.ExitStack() as stack, os.fdopen(fd, 'w', encoding='UTF8', newline='') as out:
+        _merge_prog.update(done=0, t0=time.time())     # row merge (time ranges overlap): progress restarts
+        with contextlib.ExitStack() as stack, open(tmp_path, 'w', encoding='UTF8', newline='') as out:
             writer = csv.writer(out)
             gens, header = [], None
             for p in ordered:
@@ -6747,26 +6772,6 @@ def render_view_file_page(name, content, queue_names):
     )
 
 
-def log_sources(paths):
-    """Distinct SOURCE values of the given logfiles ('local' first); [] without SOURCE column."""
-    out = set()
-    for p in paths:
-        try:
-            for _s in log_streams(p):
-                with _s as f:
-                    rd = csv.reader(f)
-                    hdr = next(rd, None)
-                    if not hdr or 'SOURCE' not in hdr or 'HOSTNAME' not in hdr:
-                        continue
-                    i, h = hdr.index('SOURCE'), hdr.index('HOSTNAME')
-                    for r in rd:
-                        if len(r) > i and len(r) > h and r[h] not in ('#COMMENT#', '#INFO#'):
-                            out.add(r[i].strip() or 'local')
-        except OSError:
-            pass
-    return sorted(out, key=lambda x: (x != 'local', x))
-
-
 _report_phase     = ''    # GENERATE REPORT: step before epinga.py reports its own progress
 _report_prog_path = ''    # epinga.py --progress-file of the running report
 
@@ -6778,7 +6783,15 @@ def report_progress():
             d = json.load(fh)
         return {'pct': d.get('pct'), 'eta': d.get('eta'), 'phase': d.get('phase') or ''}
     except (OSError, ValueError, TypeError):
-        return {'pct': None, 'eta': None, 'phase': _report_phase}
+        pct = eta = None
+        tot = _merge_prog['total']
+        if _report_phase.startswith('merging files') and tot > 0:
+            frac = min(_merge_prog['done'] / float(tot), 1.0)
+            pct = round(frac * 100, 1)
+            el = time.time() - _merge_prog['t0']
+            if frac >= 0.02 and el >= 2:
+                eta = int(round(el * (1 - frac) / frac))
+        return {'pct': pct, 'eta': eta, 'phase': _report_phase}
 
 def generate_epinga_report(logpaths, sources=None, workdir=None):
     """Run epinga.py against one or more logfiles and produce an HTML report -
@@ -7610,33 +7623,6 @@ class EpingWebHandler(http.server.BaseHTTPRequestHandler):
                 return
             self._respond(200, 'application/json; charset=utf-8',
                           json.dumps({'ok': not errors, 'added': added, 'errors': errors}))
-            return
-
-        if path in ('/api/log_sources', 'api/log_sources'):
-            # SOURCE values of the logfile(s) a report would analyse (empty names = active logfile)
-            raw = self._read_body(WEB_MAX_UPLOAD)
-            try:
-                data = json.loads(raw.decode('utf-8', 'replace')) if raw else {}
-            except Exception:
-                data = {}
-            names = data.get('names') if isinstance(data, dict) else None
-            names = [str(n)[:256] for n in names[:REPORT_MAX_FILES]] if isinstance(names, list) else []
-            paths = []
-            for n in names:
-                if not safe_cwd_filename(n, LOG_EXTS) or not os.path.isfile(n):
-                    self._respond(400, 'application/json; charset=utf-8',
-                                  json.dumps({'ok': False, 'error': 'invalid filename'}))
-                    return
-                paths.append(n)
-            if not paths and isinstance(data, dict) and data.get('upload'):
-                with _report_upload_lock:
-                    paths = [p for p in _report_upload_files if os.path.isfile(p)]
-            elif not paths:
-                with web_lock:
-                    act = web_state.get('logfile') or ''
-                paths = [act] if act and os.path.isfile(act) else []
-            self._respond(200, 'application/json; charset=utf-8',
-                          json.dumps({'ok': True, 'sources': log_sources(paths)}))
             return
 
         if path in ('/api/delete_logfile', 'api/delete_logfile'):

@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.45'
+VERSION = '2.47'
 version = VERSION   # legacy alias
 
 import re
@@ -89,11 +89,20 @@ def check_version_online(url, tool_name, timeout=2.0):
 # ── timestamp parsing ─────────────────────────────────────────────────────────
 TS_FMT = '%Y-%m-%d %H:%M:%S'
 
+_TS_CACHE = {}      # rows of one second share a timestamp - strptime is the costliest call per row
+
 def parse_ts(s):
+    r = _TS_CACHE.get(s)
+    if r is not None:
+        return r
     try:
-        return datetime.datetime.strptime(s.strip(), TS_FMT)
+        r = datetime.datetime.strptime(s.strip(), TS_FMT)
     except ValueError:
         return None
+    if len(_TS_CACHE) > 50000:
+        _TS_CACHE.clear()
+    _TS_CACHE[s] = r
+    return r
 
 # ── byte-tracking file wrapper (tell() fails with next(), so we count ourselves) ──
 class _ByteTracker:
@@ -1765,6 +1774,37 @@ const META_FILTERS = [
   {{key: 'type',     label: 'Type'}},
   {{key: 'comment',  label: 'Comment'}},
 ].filter(f => RAW.hosts.some(h => h[f.key]));
+// the options of each drop-down only list what exists among the hosts that pass the OTHER
+// inventory drop-downs, with matching host counts (e.g. Model = X: Location lists only
+// the locations that have model X). `cur` = selection to keep (default: the live one).
+function fillMetaOptions(cur) {{
+  if (!cur) {{
+    cur = {{}};
+    META_FILTERS.forEach(f => {{ cur[f.key] = document.getElementById('mf_' + f.key).value; }});
+  }}
+  META_FILTERS.forEach(f => {{
+    const others = META_FILTERS.filter(g => g.key !== f.key && cur[g.key]);
+    const counts = new Map();
+    let nNone = 0;
+    RAW.hosts.forEach(h => {{
+      for (const g of others) {{
+        const v = cur[g.key];
+        if (v === NONE_VAL ? !!h[g.key] : h[g.key] !== v) return;
+      }}
+      if (h[f.key]) counts.set(h[f.key], (counts.get(h[f.key]) || 0) + 1); else nNone++;
+    }});
+    const sel = document.getElementById('mf_' + f.key);
+    sel.innerHTML = '';
+    const add = (val, text) => {{ const o = document.createElement('option'); o.value = val; o.textContent = text; sel.appendChild(o); }};
+    add('', 'ALL');
+    [...counts.keys()].sort((a, b) => a.localeCompare(b, undefined, {{numeric: true}}))
+      .forEach(v => add(v, v + '  (' + counts.get(v) + ')'));
+    if (nNone) add(NONE_VAL, '(empty)  (' + nNone + ')');
+    const want = cur[f.key];
+    if (want && ![...sel.options].some(o => o.value === want)) add(want, (want === NONE_VAL ? '(empty)' : want) + '  (0)');
+    sel.value = want || '';
+  }});
+}}
 function initMetaFilters() {{
   const box = document.getElementById('metaFilters');
   // a saved copy of this report (Download) keeps its selection as `selected` options
@@ -1772,9 +1812,6 @@ function initMetaFilters() {{
   META_FILTERS.forEach(f => {{ const old = document.getElementById('mf_' + f.key); if (old) prev[f.key] = old.value; }});
   box.innerHTML = '';
   META_FILTERS.forEach(f => {{
-    const counts = new Map();
-    let nNone = 0;
-    RAW.hosts.forEach(h => {{ if (h[f.key]) counts.set(h[f.key], (counts.get(h[f.key]) || 0) + 1); else nNone++; }});
     const grp = document.createElement('div');
     grp.className = 'mf';
     const lab = document.createElement('label');
@@ -1783,17 +1820,14 @@ function initMetaFilters() {{
     const sel = document.createElement('select');
     sel.id = 'mf_' + f.key;
     sel.title = 'show only hosts with this ' + f.label;
-    sel.onchange = () => applyFilter();
-    const add = (val, text) => {{ const o = document.createElement('option'); o.value = val; o.textContent = text; sel.appendChild(o); }};
-    add('', 'ALL');
-    [...counts.keys()].sort((a, b) => a.localeCompare(b, undefined, {{numeric: true}}))
-      .forEach(v => add(v, v + '  (' + counts.get(v) + ')'));
-    if (nNone) add(NONE_VAL, '(empty)  (' + nNone + ')');
-    if (prev[f.key] !== undefined && [...sel.options].some(o => o.value === prev[f.key])) sel.value = prev[f.key];
+    sel.onchange = () => {{ fillMetaOptions(); applyFilter(); }};
     grp.appendChild(lab);
     grp.appendChild(sel);
     box.appendChild(grp);
   }});
+  const cur = {{}};
+  META_FILTERS.forEach(f => {{ cur[f.key] = prev[f.key] || ''; }});
+  fillMetaOptions(cur);
 }}
 // Reset: text filter, Show selection and every inventory drop-down back to 'all'
 // (sort order, IP View and deduplication are display modes, not filters - left alone)
@@ -1801,6 +1835,7 @@ function resetFilters() {{
   document.getElementById('search').value = '';
   document.getElementById('stateFilter').value = '';
   META_FILTERS.forEach(f => {{ document.getElementById('mf_' + f.key).value = ''; }});
+  fillMetaOptions();
   applyFilter();
 }}
 function syncMetaSelected() {{
