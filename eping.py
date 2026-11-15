@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.74'
+VERSION = '4.76'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -6428,6 +6428,48 @@ def report_upload_store(rfile, length, name, first):
         return 'write failed: ' + str(e)
     if remaining:
         return 'upload incomplete'
+    if path.lower().endswith('.zip'):
+        return _report_upload_expand(path)
+    return None
+
+
+def _report_upload_expand(path):
+    """A multi-file DOWNLOAD is a zip holding several *.csv / *.csv.zip members. Unpack such a
+    container into the upload dir as single logfiles (the container is removed), so it can be
+    uploaded as downloaded. A plain zipped log (csv members only) is kept as is. Returns an
+    error string or None."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            members = [zi for zi in zf.infolist() if not zi.filename.endswith('/')
+                       and zi.filename.lower().endswith(LOG_EXTS)]
+            if not any(zi.filename.lower().endswith('.zip') for zi in members):
+                return None
+            if sum(zi.file_size for zi in members) > REPORT_UPLOAD_MAX * 4:
+                return 'zip content too large'
+            for zi in members:
+                base = os.path.basename(zi.filename.replace('\\', '/'))
+                base = re.sub(r'[^\w. -]', '_', base).strip(' .')[:200]
+                if len(base) <= 4 or zi.file_size > REPORT_UPLOAD_MAX:
+                    return 'file too large or bad name inside zip'
+                with _report_upload_lock:
+                    if len(_report_upload_files) >= REPORT_MAX_FILES + 1:
+                        return 'too many files'
+                    dst, n = os.path.join(_report_upload_dir, base), 1
+                    while os.path.exists(dst):
+                        dst = os.path.join(_report_upload_dir, str(n) + '_' + base)
+                        n += 1
+                    _report_upload_files.append(dst)
+                with zf.open(zi) as src, open(dst, 'wb') as out:
+                    shutil.copyfileobj(src, out, 1048576)
+    except (OSError, zipfile.BadZipFile) as e:
+        return 'bad zip: ' + str(e)
+    with _report_upload_lock:
+        if path in _report_upload_files:
+            _report_upload_files.remove(path)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
     return None
 
 
@@ -6807,7 +6849,65 @@ def report_progress():
                 eta = int(round(el * (1 - frac) / frac))
         return {'pct': pct, 'eta': eta, 'phase': _report_phase}
 
+def _is_container_zip(path):
+    """True for a multi-file download: a zip that holds *.csv.zip members."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return any(not zi.filename.endswith('/') and zi.filename.lower().endswith('.zip')
+                       for zi in zf.infolist())
+    except (OSError, zipfile.BadZipFile):
+        return False
+
+
+def _expand_container_zips(paths):
+    """Replace multi-file download zips in 'paths' by their members, unpacked into a temp dir
+    next to the first file. Returns (paths, temp dir or None); the caller removes the dir.
+    Plain files and plain zipped logs pass through unchanged. Raises OSError."""
+    if not any(is_zip_log(p) and _is_container_zip(p) for p in paths):
+        return list(paths), None
+    d = tempfile.mkdtemp(prefix='eping-expand_', dir=os.path.dirname(os.path.abspath(paths[0])))
+    out_paths, n = [], 0
+    try:
+        for p in paths:
+            if not (is_zip_log(p) and _is_container_zip(p)):
+                out_paths.append(p)
+                continue
+            with zipfile.ZipFile(p) as zf:
+                for zi in zf.infolist():
+                    if zi.filename.endswith('/') or not zi.filename.lower().endswith(LOG_EXTS):
+                        continue
+                    n += 1
+                    base = re.sub(r'[^\w. -]', '_', os.path.basename(zi.filename.replace('\\', '/')))
+                    dst = os.path.join(d, '%03d_%s' % (n, base[:200]))
+                    with zf.open(zi) as src, open(dst, 'wb') as out:
+                        shutil.copyfileobj(src, out, 1048576)
+                    out_paths.append(dst)
+    except (OSError, zipfile.BadZipFile) as e:
+        shutil.rmtree(d, ignore_errors=True)
+        raise OSError(str(e))
+    return out_paths, d
+
+
 def generate_epinga_report(logpaths, sources=None, workdir=None):
+    """Wrapper of _generate_epinga_report: multi-file download zips (zip holding several
+    csv / csv.zip files) are unpacked first, the report is named after the original files."""
+    if isinstance(logpaths, str):
+        logpaths = [logpaths] if logpaths else []
+    logpaths = [p for p in logpaths if p]
+    if not logpaths or any(not os.path.exists(p) or os.path.getsize(p) == 0 for p in logpaths):
+        return None, 'no active logfile with data yet'
+    try:
+        paths, exp_dir = _expand_container_zips(logpaths)
+    except OSError as e:
+        return None, 'failed to unpack zip: ' + str(e)
+    try:
+        return _generate_epinga_report(paths, sources, workdir, name_paths=logpaths)
+    finally:
+        if exp_dir:
+            shutil.rmtree(exp_dir, ignore_errors=True)
+
+
+def _generate_epinga_report(logpaths, sources=None, workdir=None, name_paths=None):
     """Run epinga.py against one or more logfiles and produce an HTML report -
     core logic shared by the web gui's GENERATE REPORT (run_epinga_report, below)
     and the curses [N] ANALYSE NOW key. logpaths is a single path (str) or a
@@ -6841,10 +6941,11 @@ def generate_epinga_report(logpaths, sources=None, workdir=None):
         if not merged_tmp:
             return None, 'failed to read / merge the selected logfiles'
         analyse_path = merged_tmp
-        if len(logpaths) > 1:
-            report_base = log_base(min(logpaths, key=os.path.getmtime)) + '_merged'
+        _np = name_paths or logpaths
+        if len(_np) > 1:
+            report_base = log_base(min(_np, key=os.path.getmtime)) + '_merged'
         else:
-            report_base = log_base(logpaths[0])
+            report_base = log_base(_np[0])
     else:
         analyse_path = logpaths[0]
         report_base  = log_base(analyse_path)

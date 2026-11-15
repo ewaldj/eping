@@ -1,4 +1,4 @@
-# eping.py 4.74
+# eping.py 4.76
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -613,7 +613,11 @@ The report tab opens right away; if the browser blocks it (e.g. after a long upl
 While the report is generated the waiting tab shows a progress bar with the step (merging files / analysing / analysing source N of M / writing report), the percentage and an estimated remaining time (extrapolated from the elapsed time, shown after a few seconds); without a tab the same text is shown in the footer. The percentage covers all passes (the main analysis plus one per source, see *Source switch*).
 
 `UPLOAD FROM CLIENT` picks one or more `.csv` logfiles on the computer running the browser (max 25, 1 GB each);
-they are uploaded to a server temp dir, merged like `CHOOSE LOGFILE` and analysed as one report. Temp files and
+they are uploaded to a server temp dir, merged like `CHOOSE LOGFILE` and analysed as one report.
+A multi-file download (a `.zip` holding several `.csv` / `.csv.zip` files) can be uploaded as is - it is unpacked into
+single logfiles on the server (counts toward the 25 files).
+`CHOOSE LOGFILE` does the same for such a zip on the server: it is unpacked to a temporary folder next to it
+for the report and removed afterwards; the report is named after the zip. Temp files and
 report are removed when eping.py exits or on the next upload.
 
 More than one selected file is merged chronologically (by the row timestamps, streamed) into one temporary
