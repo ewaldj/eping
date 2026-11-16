@@ -1,4 +1,4 @@
-# eping.py 4.81
+# eping.py 4.83
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -354,6 +354,7 @@ directly, `D` resets the selected option to its default, `R` resets all, ESC/`X`
 | RATE | 10 – 25000 pps | — |
 | FLAP WINDOW | 1 – 72000 min | — |
 | DNS TTL | 0 – 3600 s | — |
+| IP FAMILY | AUTO / IPv4 / IPv6 | same as `-4` / `-6`: A or AAAA record first for names; applies live (cached names are refreshed) |
 | DNS SERVERS | up to 2 IPs, presets or custom | empty = `SYSTEM` (OS resolver); GET NAMES only. With a jump host the lookups run on it - probed at connect: `python3`, else `dig`, else its own resolver |
 | TIMEZONE | -24 – +24 h | — |
 | MAX LOG SIZE | 0, 10 – 2500 MB | default `500`; `0` = no rotation |

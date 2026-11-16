@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.81'
+VERSION = '4.83'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1457,6 +1457,19 @@ DNS_SERVERS_MAX  = 2
 DNS_PORT         = 53          # tests point this at a local fake server
 DNS_QUERY_TIMEOUT = 2.0        # s per attempt, 2 attempts (second one on the other server)
 _dns_rr          = itertools.count()
+
+
+def set_ip_family(v):
+    """Name preference 'auto' / '4' (A first) / '6' (AAAA first), live: cached names are
+    marked expired, so the background resolver refreshes them (old address stays in use
+    until the new one is there)."""
+    global dns_family
+    if v == dns_family:
+        return
+    dns_family = v
+    with _dns_lock:
+        for n, e in list(_dns_cache.items()):
+            _dns_cache[n] = (e[0], 0)
 
 
 def parse_dns_servers(text):
@@ -4395,7 +4408,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   </div>
   <div id="advOptionsModal" class="modal-overlay" style="display:none">
     <div class="modal-box wide">
-      <h3>ADV OPTIONS</h3>
+      <h3>ADVANCED OPTIONS</h3>
       <p>Runtime settings for timers, fping and timezone.</p>
       <div id="advOptionsRows"></div>
       <div class="modal-buttons">
@@ -5219,10 +5232,11 @@ function advPollCheck(){
     var actual = lastOptions[key];
     if(actual === undefined) continue;   // no options snapshot yet
     var a = parseFloat(actual), e = parseFloat(p.sentVal);
-    var same = (key !== 'dns_servers' && !isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(p.sentVal));
+    var same = (key !== 'dns_servers' && key !== 'ip_family' && !isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(p.sentVal));
     if(same){ delete advPending[key]; continue; }
     if(Date.now() < p.deadline) continue;   // still might land - keep waiting
     if(key === 'dns_servers') populateDns(actual);
+    if(key === 'ip_family') populateFam(String(actual));
     if(p.sl && !isNaN(a)) p.sl.value = actual;
     if(p.tx) p.tx.value = actual;
     p.row.classList.add('adv-rejected');
@@ -5286,6 +5300,7 @@ function buildAdvRows(){
     mi.addEventListener('click', function(){ step_by(-1); });
     pl.addEventListener('click', function(){ step_by(1); });
   });
+  buildFamRow(c);
   buildDnsRow(c);
   advRowsBuilt = true;
 }
@@ -5309,6 +5324,27 @@ function dnsSend(){
   var val = dnsCollect();
   post('set_option', 'dns_servers=' + val);
   advCheckApplied(document.getElementById('advDnsRow'), null, null, 'dns_servers', val);
+}
+function buildFamRow(c){
+  var desc = 'Which address a hostname is pinged with when it has both an A and an AAAA record. AUTO = IPv4 first, IPv6 only if there is no A record. '
+    + 'IPV4 / IPV6 = prefer that family (-4 / -6), the other one is used only if the name has no record of the preferred family. Applies to the whole list; cached names are refreshed in the background.';
+  var row = document.createElement('div');
+  row.className = 'adv-row';
+  row.id = 'advFamRow';
+  row.title = desc;
+  row.innerHTML = '<label title="' + esc(desc) + '">IP FAMILY <span class="adv-desc">| A or AAAA record for names</span></label>'
+    + '<div class="adv-input-line"><select id="advFamSel" title="' + esc(desc) + '">'
+    + '<option value="auto">AUTO (IPv4 first)</option><option value="4">PREFER IPv4 (-4)</option><option value="6">PREFER IPv6 (-6)</option></select></div>';
+  c.appendChild(row);
+  document.getElementById('advFamSel').addEventListener('change', function(){
+    var v = this.value;
+    post('set_option', 'ip_family=' + v);
+    advCheckApplied(row, null, null, 'ip_family', v);
+  });
+}
+function populateFam(v){
+  var sel = document.getElementById('advFamSel');
+  if(sel) sel.value = (v === '4' || v === '6') ? v : 'auto';
 }
 function buildDnsRow(c){
   var desc = 'Resolvers used by GET NAMES (reverse lookup and forward check), up to 2, used in turn - the other one is the fallback. '
@@ -5355,6 +5391,7 @@ function populateDns(val){
   });
 }
 function populateAdvOptions(opts){
+  if(opts.ip_family !== undefined) populateFam(String(opts.ip_family));
   if(opts.dns_servers !== undefined && !(document.activeElement && document.activeElement.className === 'advDnsTx')) populateDns(opts.dns_servers);
   ADV_OPTIONS_UI.forEach(function(o){
     var key = o[0], val = opts[key];
@@ -8466,6 +8503,7 @@ ADV_OPTIONS = [
     ('log_max_size',    'int',   LOG_MAX_SIZE_MIN, LOG_MAX_SIZE_MAX, 50, 'MB', 0),   # 0 = no limit
     ('log_max_files',   'int',   0,   LOG_MAX_FILES_MAX,         10,  '',    None),  # 0 = unlimited
     ('dns_servers',     'str',   0,   0,                         0,   '',    None),  # GET NAMES resolvers, '' = OS
+    ('ip_family',       'str',   0,   0,                         0,   '',    None),  # auto / 4 / 6 = -4 / -6
 ]
 ADV_OPTION_KEYS = set(o[0] for o in ADV_OPTIONS)
 
@@ -8488,6 +8526,7 @@ ADV_OPTION_LABELS = {
     'log_max_size':    'MAX LOG SIZE',
     'log_max_files':   'MAX LOG FILES',
     'dns_servers':     'DNS SERVERS',
+    'ip_family':       'IP FAMILY',
 }
 
 # keys kept as local variables inside run_web_mode() (not read from args each
@@ -8512,6 +8551,15 @@ def apply_adv_option(key, raw, args):
         return False, None, 'unknown option: ' + str(key)
     _, kind, lo, hi, _step, _unit, auto_sentinel = spec
     raw = str(raw).strip()
+    if kind == 'str' and key == 'ip_family':           # name preference: auto / 4 (A) / 6 (AAAA)
+        v = raw.lower().replace('ipv', '').replace('-', '').strip()
+        if v in ('', 'auto', 'default', 'off'):
+            v = 'auto'
+        if v not in ('auto', '4', '6'):
+            return False, None, key + ': auto, 4 or 6'
+        set_ip_family(v)
+        args.force_ipv4, args.force_ipv6 = (v == '4'), (v == '6')
+        return True, v, key + ' set to ' + v
     if kind == 'str':                                  # dns_servers: up to 2 IPs, '' = OS resolver
         lst = parse_dns_servers(raw)
         if lst is None:
@@ -8590,6 +8638,7 @@ def adv_option_values(args, flap_window, confirm, tz_offset):
         'log_max_size':   args.log_max_size,
         'log_max_files':  args.log_max_files,
         'dns_servers':    getattr(args, 'dns_servers', ''),
+        'ip_family':      dns_family,
         'timeout':        str(timeout),
         'retries':        str(retries),
     }
@@ -8629,6 +8678,8 @@ def format_option_cli(key, val):
     maps the auto/off sentinels back to the CLI's own spelling (interval=''
     -> -1, num_of_threads='auto' stays 'auto').
     """
+    if key == 'ip_family':
+        return {'4': '-4', '6': '-6'}.get(val, 'IP family auto (no -4 / -6)')
     flag = ADV_OPTION_CLI_FLAG[key]
     if key == 'interval':
         shown = '-1' if val in ('', None) else str(int(val))
@@ -8661,6 +8712,7 @@ def current_option_value(key, args, timeout, retries, flap_window, confirm, tz_o
     if key == 'log_max_size':   return int(args.log_max_size)
     if key == 'log_max_files':  return int(args.log_max_files)
     if key == 'dns_servers':    return getattr(args, 'dns_servers', '')
+    if key == 'ip_family':      return dns_family
     return None
 
 
@@ -10725,6 +10777,8 @@ if __name__=='__main__':
             _, kind, _lo, _hi, _step, unit, _auto_sentinel = spec
             val = _cur(key)
             if kind == 'str':
+                if key == 'ip_family':
+                    return {'4': 'IPV4 (A)', '6': 'IPV6 (AAAA)'}.get(val, 'AUTO')
                 return val or 'SYSTEM'
             if val in ('', None):
                 return 'AUTO'
@@ -10764,7 +10818,7 @@ if __name__=='__main__':
                 for dy in range(dialog_h):
                     screen_output(dialog_y + dy, dialog_x, ' ' * dialog_w, 1, 0)
                 screen_output(dialog_y,     dialog_x, '┌' + '─' * (dialog_w - 2) + '┐', 1, 1)
-                screen_output(dialog_y + 1, dialog_x, '│' + 'ADV OPTIONS'.center(dialog_w - 2) + '│', 1, 1)
+                screen_output(dialog_y + 1, dialog_x, '│' + 'ADVANCED OPTIONS'.center(dialog_w - 2) + '│', 1, 1)
                 screen_output(dialog_y + 2, dialog_x, '│' + '─' * (dialog_w - 2) + '│', 1, 0)
                 for row in range(visible):
                     i = top + row
@@ -10807,8 +10861,8 @@ if __name__=='__main__':
                 elif kind == 'str' and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, ord('-'), ord('_'),
                                               ord('+'), ord('=')):
                     # cycle SYSTEM -> Cloudflare -> Google -> Cisco Umbrella (ENTER types any IPs)
-                    _presets = ['', '1.1.1.1,1.0.0.1', '8.8.8.8,8.8.4.4',
-                                '208.67.222.222,208.67.220.220']
+                    _presets = (['auto', '4', '6'] if key == 'ip_family' else
+                                ['', '1.1.1.1,1.0.0.1', '8.8.8.8,8.8.4.4', '208.67.222.222,208.67.220.220'])
                     _now = _cur(key)
                     _i = _presets.index(_now) if _now in _presets else -1
                     _i = (_i + (-1 if ch in (curses.KEY_LEFT, ord('-'), ord('_')) else 1)) % len(_presets)
@@ -10828,7 +10882,8 @@ if __name__=='__main__':
                 elif ch in (10, 13):                    # ENTER = type exact value
                     unit_txt = (' ' + unit) if unit else ''
                     typed = input_dialog('SET ' + label,
-                                         (label + ' (IP[,IP] or SYSTEM):') if kind == 'str' else
+                                         ((label + ' (auto, 4 or 6):') if key == 'ip_family' else
+                                          (label + ' (IP[,IP] or SYSTEM):')) if kind == 'str' else
                                          label + ' (' + str(lo) + '..' + str(hi) + unit_txt + '):')
                     if typed:
                         ok, _val, msg = _apply(key, typed)
