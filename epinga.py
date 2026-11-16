@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.47'
+VERSION = '2.48'
 version = VERSION   # legacy alias
 
 import re
@@ -194,7 +194,7 @@ class HostStats:
     __slots__ = ('first_ts', 'last_ts', 'current_state', 'prev_ts',
                  'rtt_min', 'rtt_max', 'rtt_sum', 'rtt_cnt',
                  'time_up', 'time_down', 'time_nodns',
-                 'changes', 'no_of_changes', 'ip', 'meta', 'gaps', 'gap_total')
+                 'changes', 'no_of_changes', 'ip', 'ip_hist', 'meta', 'gaps', 'gap_total')
 
     def __init__(self, ts, state, ip=''):
         self.first_ts      = ts
@@ -211,6 +211,7 @@ class HostStats:
         self.changes       = []          # [(ts, prev_state, new_state)]
         self.no_of_changes = 0
         self.ip             = ip or ''   # last known pinged IP (from the CSV's IP column)
+        self.ip_hist        = [(ts, self.ip)] if self.ip else []   # [(ts, ip)] first-seen time of each address change (capped)
         self.meta           = None       # dict of inventory columns (see META_LOG_COLS), created on first value
         self.gaps           = []         # [(start, end)] periods of other sources (only with --source)
         self.gap_total      = datetime.timedelta(0)
@@ -243,6 +244,10 @@ class HostStats:
             pass
 
         if ip_raw:
+            if ip_raw != self.ip:
+                self.ip_hist.append((ts, ip_raw))
+                if len(self.ip_hist) > 50:
+                    del self.ip_hist[0]
             self.ip = ip_raw
 
     def new_segment(self, ts, state=''):
@@ -755,6 +760,7 @@ def build_report_data(hosts, host_order, filename, rows_read, base='', comments=
             'rtt_cnt':       s.rtt_cnt,
             'changes':       s.real_changes,
             'ip':            s.ip,
+            'ips':           [[t.strftime(TS_FMT) if t else '', i] for t, i in s.ip_hist] if len(s.ip_hist) > 1 else [],
             'inv_name':      (s.meta or {}).get('inv_name', ''),
             'serial':        (s.meta or {}).get('serial', ''),
             'model':         (s.meta or {}).get('model', ''),
@@ -1450,7 +1456,7 @@ function renderTable(data) {{
     tr.id = 'r' + idx;
     tr.dataset.idx = idx;
     tr.innerHTML = `
-      <td class="host">${{escHtml(hostLabel(h))}}${{ secondaryLabel(h) ? ` <span class="host-ip">| ${{escHtml(secondaryLabel(h))}}</span>` : '' }} <span class="chevron">&#8964;</span></td>
+      <td class="host">${{escHtml(hostLabel(h))}}${{ secondaryLabel(h) ? ` <span class="host-ip">| ${{escHtml(secondaryLabel(h))}}</span>` : '' }}${{ ipHistMark(h) }} <span class="chevron">&#8964;</span></td>
       <td style="text-align:center;white-space:nowrap">${{stateBadge(h.state, h.changes)}}</td>
       <td style="padding:0 12px"><div style="width:200px">${{buildTimeline(h)}}</div></td>
       <td style="text-align:right">${{uptimeBar(h.uptime, h.changes > 0)}}</td>
@@ -1535,6 +1541,7 @@ function buildDetail(h) {{
       <h4>STATISTICS</h4>
       <div class="stat-list">
         <div class="kv"><span class="k">Ip</span><span class="v">${{escHtml(h.ip || h.name)}}</span></div>
+        ${{ (h.ips && h.ips.length > 1) ? `<div class="kv"><span class="k">Ip history</span><span class="v">${{h.ips.slice().reverse().map(e => escHtml(e[1]) + ' (since ' + escHtml(e[0]) + ')').join('<br>')}}</span></div>` : '' }}
         ${{[['inv_name', 'Name'], ['serial', 'Serial'], ['model', 'Model'], ['location', 'Location'], ['sysloc', 'sysLocation'], ['type', 'Type'], ['comment', 'Comment']]
             .filter(([k]) => h[k]).map(([k, l]) => `<div class="kv"><span class="k">${{l}}</span><span class="v">${{escHtml(h[k])}}</span></div>`).join('')}}
         <div class="kv"><span class="k">Uptime</span><span class="v">${{escHtml(h.time_up)}}</span></div>
@@ -1656,6 +1663,12 @@ function isDeduped(h) {{
 
 // primary label for a host row/tag - IP when 'IP View' is on and an ip is known,
 // hostname otherwise; applied everywhere a host is displayed (table + all buckets)
+function ipHistMark(h) {{
+  if (!h.ips || h.ips.length < 2) return '';
+  const NL = String.fromCharCode(10);
+  const tip = 'IP changed ' + (h.ips.length - 1) + 'x:' + NL + h.ips.slice().reverse().map(e => e[1] + '  since ' + e[0]).join(NL);
+  return ` <span class="host-ip" title="${{escHtml(tip)}}">&#8644;${{h.ips.length}}</span>`;
+}}
 function hostLabel(h) {{
   return (showIp && h.ip) ? h.ip : h.name;
 }}

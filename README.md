@@ -1,4 +1,4 @@
-# eping.py 4.83
+# eping.py 4.84
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -663,6 +663,11 @@ Web GUI: colliding/unresolvable hosts are hidden (not pinged) while active, rest
 automatically when switching away.
 The web GUI mouse-over of a renamed host shows the hostname it had before (`hostname` row).
 
+IP history: when a hostname resolves to a different address over time (DNS refresh), the web GUI mouse-over
+shows `ip changes` and an `ip history` list (address + first-seen time, newest first, max 50). The log's `IP`
+column already carries the pinged address every round; epinga.py marks such hosts in the report with `⇄N`
+after the address (tooltip: all addresses with first-seen time) and lists them in the host detail panel.
+
 CLI `P` and the web GUI's address mode select/`P` picker reach the same 4 exclusive
 modes: `KEEP ALL (NO DEDUP)` (default), `DEDUP: KEEP HOSTNAME`,
 `DEDUP: KEEP IP`, `RESOLVE ALL TO IP`. The web GUI additionally has its own `P`/`I` keyboard shortcuts
@@ -739,7 +744,7 @@ With `-debug` a round longer than 10 s is also logged as a `SLOW ROUND` comment 
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - Needs an fping with `-l` and per-target sequence numbers (fping 4.3 or newer; the Windows / macOS packages have it).
 
-# epinga.py 2.47
+# epinga.py 2.48
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and

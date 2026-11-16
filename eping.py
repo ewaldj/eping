@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.83'
+VERSION = '4.84'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -1693,6 +1693,8 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
         host_state[new] = entry
     if old in host_last_up:
         host_last_up[new] = host_last_up.pop(old)
+    if old in host_ip_hist:
+        host_ip_hist[new] = host_ip_hist.pop(old)
     if old in host_hist:
         host_hist[new] = host_hist.pop(old)
     if old in up_seen:
@@ -2521,6 +2523,7 @@ def apply_ip_only_on(original_hosts_list, active_hosts_list, host_state, up_seen
                     lst.remove(h)
             host_state.pop(h, None)
             host_last_up.pop(h, None)
+            host_ip_hist.pop(h, None)
             up_seen.discard(h)
             down_streak.pop(h, None)
             dropped += 1
@@ -2682,6 +2685,7 @@ _EMPTY_META    = ('',) * len(_CSV_META_COLS)
 host_meta      = {}   # host entry or IP -> tuple of _CSV_META_COLS values (log columns 10..16)
 host_csv_ip    = {}   # host entry -> its 'IP Address' from the inventory CSV (SAVE HOSTS FILE)
 host_state     = {}   # host entry -> state row (rebound by the main block at startup)
+host_ip_hist   = {}   # host entry -> [(timestamp, ip), ...] every address it was pinged at (IP change history, capped)
 host_last_up   = {}   # host entry -> (rtt, timestamp) of its last real UP answer (mouse-over popup)
 
 # ---- change history per host (mouse-over popup) ----
@@ -2969,6 +2973,7 @@ def remove_hosts_from(targets, active_list, original_list, host_state):
     for h in tset:
         host_state.pop(h, None)
         host_last_up.pop(h, None)
+        host_ip_hist.pop(h, None)
     return removed
 
 def prune_dropped_hosts(dropped, host_state, up_seen, down_streak):
@@ -2981,6 +2986,7 @@ def prune_dropped_hosts(dropped, host_state, up_seen, down_streak):
     for h in dropped:
         host_state.pop(h, None)
         host_last_up.pop(h, None)
+        host_ip_hist.pop(h, None)
         up_seen.discard(h)
         down_streak.pop(h, None)
 
@@ -3129,6 +3135,12 @@ def update_host_state(host_state, fping_result_data_sorted, tz_offset,
         host_state[hostname] = [hostname, new_state, timestamp, rtt, old_state, changes, change_ts, tbd, resolved_ip]
         if fresh_up:
             host_last_up[hostname] = (str(rtt), str(timestamp))
+        if resolved_ip:
+            _ih = host_ip_hist.setdefault(hostname, [])
+            if not _ih or _ih[-1][1] != resolved_ip:
+                _ih.append((str(timestamp), str(resolved_ip)))
+                if len(_ih) > 50:
+                    del _ih[0]
 
         # up_seen tracks "seen UP at least once" for the whole run - fed here so
         # the one-time learning-phase seeding read (active_hosts_list =
@@ -6548,6 +6560,10 @@ function tipRowsOf(d){
   if(d.changes > 0) add('previous', d.prev);
   if(d.dns_fb) add('dns', 'no DNS record - pinged by the CSV address', 'down');
   if(d.ip && d.ip !== d.host) add('address', d.ip);
+  if(d.ip_hist && d.ip_hist.length > 1){
+    add('ip changes', d.ip_hist.length - 1 + 'x - ' + d.ip_hist.length + ' addresses seen', 'down');
+    for(var j = 0; j < d.ip_hist.length && j < 6; j++) add(j ? '' : 'ip history', d.ip_hist[j][1] + '  (since ' + d.ip_hist[j][0] + ')');
+  }
   add('rtt (ms)', d.rtt && d.rtt.indexOf('-') !== 0 ? d.rtt : '');
   if(!up && d.last_up_rtt) add('last up rtt (ms)', d.last_up_rtt + (d.last_up_ts ? '  (' + d.last_up_ts + ')' : ''));
   add('last check', d.last_check);
@@ -8428,6 +8444,7 @@ def host_details(name, tz_offset=0):
             'csv_hostname': meta[0], 'serial': meta[1], 'model': meta[2],
             'location': meta[3], 'sysloc': meta[4], 'type': meta[5], 'comment': meta[6],
             'orig_host': _ip_only_names.get(name, ''),
+            'ip_hist': [list(e) for e in reversed(host_ip_hist.get(name, []))] if len(host_ip_hist.get(name, [])) > 1 else [],
             'hist': hist_list(name, tz_offset)}
 
 
@@ -9297,6 +9314,7 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
                 original_hosts_list[:] = []
                 host_state.clear()
                 host_last_up.clear()
+                host_ip_hist.clear()
                 host_hist.clear()
                 host_meta.clear()
                 host_csv_ip.clear()
@@ -11145,6 +11163,7 @@ if __name__=='__main__':
             original_hosts_list[:] = []
             host_state.clear()
             host_last_up.clear()
+            host_ip_hist.clear()
             host_hist.clear()
             host_meta.clear()
             host_csv_ip.clear()
@@ -11879,6 +11898,7 @@ if __name__=='__main__':
             original_hosts_list = []
             host_state.clear()
             host_last_up.clear()
+            host_ip_hist.clear()
             host_hist.clear()
             host_meta.clear()
             host_csv_ip.clear()
