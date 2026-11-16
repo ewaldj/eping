@@ -1,4 +1,4 @@
-# eping.py 4.76
+# eping.py 4.81
 
 Continuous ICMP reachability monitor built on `fping`. Scans a host list in a loop,
 reports each host UP/DOWN/NO-DNS, counts state changes. CLI (curses) or web GUI.
@@ -354,6 +354,7 @@ directly, `D` resets the selected option to its default, `R` resets all, ESC/`X`
 | RATE | 10 – 25000 pps | — |
 | FLAP WINDOW | 1 – 72000 min | — |
 | DNS TTL | 0 – 3600 s | — |
+| DNS SERVERS | up to 2 IPs, presets or custom | empty = `SYSTEM` (OS resolver); GET NAMES only. With a jump host the lookups run on it - probed at connect: `python3`, else `dig`, else its own resolver |
 | TIMEZONE | -24 – +24 h | — |
 | MAX LOG SIZE | 0, 10 – 2500 MB | default `500`; `0` = no rotation |
 | MAX LOG FILES | 0 – 500 | `0` = unlimited |
@@ -453,6 +454,7 @@ separated) · `-r` IP range (comma separated, shortened end)
 | `-ra` | 10 – 25000 | 1000 | ICMP packets/s |
 | `-fw` | 1 – 72000 | 72000 | minutes to count as flapping |
 | `-dns` | 0 – 3600 | 300 | hostname cache TTL (s, `0` off) |
+| `-ds` | up to 2 IPs | system | DNS servers for GET NAMES, e.g. `1.1.1.1,1.0.0.1` (own DNS client, used in turn, the other is the fallback; a rate-limited cloud resolver is slow) |
 | `-4` / `-6` | — | auto | prefer IPv4/IPv6, mutually exclusive |
 | `-ph` | — | off | start with DEDUP: KEEP HOSTNAME |
 | `-ipo` | — | off | start with IP ONLY |
@@ -611,6 +613,9 @@ source switch (see *Source switch in the HTML report*); no dialog.
 
 The report tab opens right away; if the browser blocks it (e.g. after a long upload), a REPORT READY dialog with an OPEN REPORT button appears.
 While the report is generated the waiting tab shows a progress bar with the step (merging files / analysing / analysing source N of M / writing report), the percentage and an estimated remaining time (extrapolated from the elapsed time, shown after a few seconds); without a tab the same text is shown in the footer. The percentage covers all passes (the main analysis plus one per source, see *Source switch*).
+
+`GET NAMES` shows its progress (`PTR x/y`, then `VERIFY x/y, n renamed`) in the status line (TUI and web GUI) and renames
+confirmed hosts while it still runs (a name shared by several IPs is decided only when all of them are checked).
 
 `UPLOAD FROM CLIENT` picks one or more `.csv` logfiles on the computer running the browser (max 25, 1 GB each);
 they are uploaded to a server temp dir, merged like `CHOOSE LOGFILE` and analysed as one report.

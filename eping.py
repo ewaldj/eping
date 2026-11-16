@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.76'
+VERSION = '4.81'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -178,6 +178,9 @@ import urllib.parse
 import zipfile
 import gzip
 import socket
+import struct
+import itertools
+import inspect
 import shlex
 import getpass
 import tempfile
@@ -583,6 +586,8 @@ class SshCfg(object):
         self.host, self.user, self.port = host, (user or None), (port or None)
         self.resolve = bool(resolve)     # wish: resolve names on the jump host
         self.resolver = ''               # tool that works there ('' = none / not checked)
+        self.dns_key  = None             # DNS_SERVERS the dns_tool probe was made for
+        self.dns_tool = ''               # 'python3' / 'dig' that reaches DNS_SERVERS from there, '' = none
         self.hostkey = hostkey if hostkey in SSH_HOSTKEY_MODES else 'accept-new'
         self.key = os.path.expanduser(key) if key else None
         self.secret = secret or ''
@@ -735,10 +740,110 @@ _JR_REV = {
     'host':     r'r=$(host -W 3 "$0" 2>/dev/null | awk "/domain name pointer/{print \$NF; exit}")',
 }
 
-def _jr_run(mode, items, c):
+# --- GET NAMES with own DNS servers on the jump host ---------------------------------
+# Same idea as the local DNS client: the lookups go straight to DNS_SERVERS, executed ON the
+# jump host (its network view). Tool: python3 (ships the _dns_* functions of this file, 32
+# threads) or dig; neither / servers not reachable from there = the jump host's own resolver.
+# Only GET NAMES uses it (dns=True) - resolving the monitored names stays on its resolver.
+_JR_DNS_FUNCS = ('_dns_name_wire', '_dns_read_name', '_dns_parse', '_dns_ask', 'dns_query')
+_JR_PY_MAIN = '''
+import sys, concurrent.futures as cf
+def one(it):
+    try:
+        if MODE == 'rev':
+            r = dns_query(ipaddress.ip_address(it).reverse_pointer, 12)
+            if r is None:
+                return it + ' ERR'
+            n = [v for t, v in r if t == 12]
+            return it + ' ' + (n[0] if n else '')
+        a, b = dns_query(it, 1), dns_query(it, 28)
+        if a is None and b is None:
+            return it + ' ERR'
+        return it + ' ' + ' '.join(sorted(set(v for t, v in (a or []) + (b or []) if t in (1, 28))))
+    except Exception:
+        return it + ' ERR'
+items = [l.strip() for l in sys.stdin if l.strip()]
+with cf.ThreadPoolExecutor(32) as ex:
+    for line in ex.map(one, items):
+        print(line)
+'''
+
+def _jr_py_code(mode):
+    funcs = '\n'.join(inspect.getsource(globals()[n]) for n in _JR_DNS_FUNCS)
+    head = ('import socket, struct, random, time, itertools, ipaddress\n'
+            'MODE = %r\nDNS_SERVERS = %r\nDNS_PORT = %d\nDNS_QUERY_TIMEOUT = %r\n_dns_rr = itertools.count()\n'
+            % (mode, list(DNS_SERVERS), DNS_PORT, DNS_QUERY_TIMEOUT))
+    return head + funcs + _JR_PY_MAIN
+
+_JR_DIG_PRE = 'D="dig +short +time=2 +tries=1 -p %d"; S1=%s; S2=%s; export D S1 S2\n'
+_JR_DIG_FWD = (r'if [ $(($$ % 2)) = 0 ]; then A=$S1; B=$S2; else A=$S2; B=$S1; fi; r=""; e=0; '
+               r'for t in A AAAA; do x=$($D @$A $t "$0" 2>/dev/null); q=$?; '
+               r'if [ $q -ne 0 ]; then x=$($D @$B $t "$0" 2>/dev/null); q=$?; fi; '
+               r'if [ $q -ne 0 ]; then e=1; else r="$r $(echo "$x" | grep -E "^[0-9a-fA-F:.]+\$")"; fi; done; '
+               r'if [ $e = 1 ] && [ -z "$(echo $r)" ]; then r=ERR; else r=$(echo $r | tr " " "\n" | sort -u | tr "\n" " "); fi')
+_JR_DIG_REV = (r'if [ $(($$ % 2)) = 0 ]; then A=$S1; B=$S2; else A=$S2; B=$S1; fi; '
+               r'x=$($D @$A -x "$0" 2>/dev/null); q=$?; '
+               r'if [ $q -ne 0 ]; then x=$($D @$B -x "$0" 2>/dev/null); q=$?; fi; '
+               r'if [ $q -ne 0 ]; then r=ERR; else r=$(echo "$x" | head -1); fi')
+
+
+def _jr_dns_exec(tool, mode, items, c):
+    """Run the lookups of 'items' with python3 / dig on jump host c against DNS_SERVERS.
+    Returns {item: [answer tokens]} (a failed lookup has ['ERR']); items of a failed ssh batch
+    are missing."""
+    out = {}
+    items = [i for i in items if re.match(r'^[A-Za-z0-9._:-]{1,253}$', i)]
+    if tool == 'python3':
+        script = 'exec python3 -c ' + shlex.quote(_jr_py_code(mode))
+        chunk_n = 2000
+    else:
+        sv = list(DNS_SERVERS)
+        script = (_JR_DIG_PRE % (DNS_PORT, shlex.quote(sv[0]), shlex.quote(sv[-1]))
+                  + 'XP=-P16; echo x | xargs -P16 -n1 true >/dev/null 2>&1 || XP=""\n'
+                  + "xargs -n1 $XP sh -c '" + (_JR_DIG_FWD if mode == 'fwd' else _JR_DIG_REV)
+                  + '; echo "$0 $r"' + "'")
+        chunk_n = JR_CHUNK
+    for k in range(0, len(items), chunk_n):
+        chunk = items[k:k + chunk_n]
+        rc, text = ssh_exec(c, script, timeout=30 + len(chunk) // 5, stdin_text='\n'.join(chunk) + '\n')
+        if rc != 0:
+            continue
+        for line in text.splitlines():
+            parts = line.split()
+            if parts and parts[0] in chunk:
+                out[parts[0]] = parts[1:]
+    return out
+
+
+def _jr_dns_tool(c):
+    """Tool ('python3' / 'dig') that can query DNS_SERVERS from jump host c, '' if none
+    (then GET NAMES uses the jump host's own resolver). Probed once per server setting."""
+    key = tuple(DNS_SERVERS)
+    if c.dns_key == key:
+        return c.dns_tool
+    tool = ''
+    if key:
+        for t in ('python3', 'dig'):
+            try:
+                got = _jr_dns_exec(t, 'fwd', ['localhost'], c)
+            except Exception:
+                got = {}
+            if got.get('localhost') not in (None, ['ERR']):
+                tool = t
+                break
+    c.dns_key, c.dns_tool = key, tool
+    return tool
+
+
+def _jr_run(mode, items, c, dns=False):
     """Look up items ('fwd': names -> addresses, 'rev': addresses -> name) on jump host c
     with its resolver tool. Returns {item: [answer tokens]}; items of a failed batch are
     missing. Input is validated (no shell metacharacters) and goes in via stdin."""
+    if dns and DNS_SERVERS:
+        tool = _jr_dns_tool(c)
+        if tool:
+            got = _jr_dns_exec(tool, mode, items, c)
+            return dict((k, v) for k, v in got.items() if v != ['ERR'])
     body = (_JR_FWD if mode == 'fwd' else _JR_REV)[c.resolver]
     script = ('XP=-P16; echo x | xargs -P16 -n1 true >/dev/null 2>&1 || XP=""\n'
               "xargs -n1 $XP sh -c '" + body + '; echo "$0 $r"' + "'")
@@ -766,7 +871,7 @@ def _jr_ttl():
     except Exception:
         return 300.0
 
-def jr_forward(names):
+def jr_forward(names, dns=False):
     """{name: [addresses]} resolved on the jump host (cached, one ssh call for all
     uncached names). A name whose batch failed is missing in the result."""
     c = ssh_cfg
@@ -774,22 +879,23 @@ def jr_forward(names):
         return {}
     now = time.time()
     res, todo = {}, []
+    ck = (lambda n: ('D', n)) if (dns and DNS_SERVERS) else (lambda n: n)   # own cache for GET NAMES
     with _jr_cache_lock:
         for n in set(names):
-            e = _jr_fwd.get(n)
+            e = _jr_fwd.get(ck(n))
             if e and e[1] > now:
                 res[n] = e[0]
             else:
                 todo.append(n)
     if todo:
         with _jr_run_lock:
-            got = _jr_run('fwd', todo, c)
+            got = _jr_run('fwd', todo, c, dns)
         now, ttl = time.time(), _jr_ttl()
         with _jr_cache_lock:
             for n in todo:
                 if n not in got:
                     res[n] = []
-                    _jr_fwd[n] = ([], now + DNS_FAIL_TTL)    # failed batch / bad name: retry later
+                    _jr_fwd[ck(n)] = ([], now + DNS_FAIL_TTL)    # failed batch / bad name: retry later
                     continue
                 ips = []
                 for a in got[n]:
@@ -798,37 +904,38 @@ def jr_forward(names):
                         ips.append(a)
                     except ValueError:
                         pass
-                _jr_fwd[n] = (ips, now + (ttl if ips else min(ttl, DNS_FAIL_TTL)))
+                _jr_fwd[ck(n)] = (ips, now + (ttl if ips else min(ttl, DNS_FAIL_TTL)))
                 res[n] = ips
     return res
 
-def jr_reverse(ips):
+def jr_reverse(ips, dns=False):
     """{ip: hostname or None} (PTR) looked up on the jump host, cached."""
     c = ssh_cfg
     if not jr_active():
         return {}
     now = time.time()
     res, todo = {}, []
+    ck = (lambda i: ('D', i)) if (dns and DNS_SERVERS) else (lambda i: i)
     with _jr_cache_lock:
         for i in set(ips):
-            e = _jr_rev.get(i)
+            e = _jr_rev.get(ck(i))
             if e and e[1] > now:
                 res[i] = e[0]
             else:
                 todo.append(i)
     if todo:
         with _jr_run_lock:
-            got = _jr_run('rev', todo, c)
+            got = _jr_run('rev', todo, c, dns)
         now, ttl = time.time(), _jr_ttl()
         with _jr_cache_lock:
             for i in todo:
                 if i in got:
                     nm = got[i][0].rstrip('.') if got[i] else None
-                    _jr_rev[i] = (nm or None, now + (ttl if nm else min(ttl, DNS_FAIL_TTL)))
+                    _jr_rev[ck(i)] = (nm or None, now + (ttl if nm else min(ttl, DNS_FAIL_TTL)))
                     res[i] = nm or None
                 else:
                     res[i] = None
-                    _jr_rev[i] = (None, now + DNS_FAIL_TTL)
+                    _jr_rev[ck(i)] = (None, now + DNS_FAIL_TTL)
     return res
 
 _ssh_fam6 = set()     # hostnames tried with fping -6 on the jump host (no resolver there, see below)
@@ -1113,6 +1220,10 @@ def jump_handle(req):
         note = ('; names are resolved on the jump host (%s)' % c.resolver if (c.resolve and c.resolver)
                 else ('; names are resolved locally (option off)' if not c.resolve
                       else '; names are resolved locally (no working getent/dig/nslookup/host there)'))
+    if r['ok'] and DNS_SERVERS and c.resolve and c.resolver:     # DNS servers for GET NAMES: what works there?
+        t = _jr_dns_tool(c)
+        note += (('; GET NAMES asks %s via %s on the jump host' % (','.join(DNS_SERVERS), t)) if t else
+                 '; DNS servers not reachable from the jump host (no python3/dig, or blocked) - GET NAMES uses its resolver')
     if act == 'test' or not r['ok']:
         c.close()
         if r['ok']:
@@ -1337,14 +1448,182 @@ def forget_names(names):
         for n in names:
             _dns_cache.pop(n, None)
 
+# --- own DNS client for GET NAMES (PTR + forward confirmation) -------------------------
+# The OS resolver is used by default. With DNS_SERVERS set (ADV OPTIONS / -ds) the lookups
+# go straight to these servers (UDP, TCP on truncation): up to DNS_SERVERS_MAX, used round
+# robin, the other one is the fallback. Ping-time name resolution stays on the OS resolver.
+DNS_SERVERS      = []
+DNS_SERVERS_MAX  = 2
+DNS_PORT         = 53          # tests point this at a local fake server
+DNS_QUERY_TIMEOUT = 2.0        # s per attempt, 2 attempts (second one on the other server)
+_dns_rr          = itertools.count()
+
+
+def parse_dns_servers(text):
+    """List of normalized server IPs from 'a,b' (separators , ; blank), [] for SYSTEM /
+    empty, None when invalid (bad address or more than DNS_SERVERS_MAX)."""
+    t = str(text or '').strip()
+    if t.lower() in ('', 'system', 'os', 'default', 'off', 'none'):
+        return []
+    out = []
+    for p in [x for x in re.split(r'[,;\s]+', t) if x]:
+        try:
+            ip = str(ipaddress.ip_address(p))
+        except ValueError:
+            return None
+        if ip not in out:
+            out.append(ip)
+    return out if 0 < len(out) <= DNS_SERVERS_MAX else None
+
+
+def set_dns_servers(lst):
+    global DNS_SERVERS
+    DNS_SERVERS = list(lst)
+
+
+def _dns_name_wire(name):
+    out = b''
+    for label in name.rstrip('.').split('.'):
+        b = label.encode('ascii')
+        if not 0 < len(b) < 64:
+            raise ValueError('bad label')
+        out += bytes([len(b)]) + b
+    return out + b'\0'
+
+
+def _dns_read_name(msg, pos):
+    labels, end = [], None
+    for _ in range(128):
+        ln = msg[pos]
+        if ln == 0:
+            pos += 1
+            break
+        if ln & 0xC0 == 0xC0:
+            if end is None:
+                end = pos + 2
+            pos = ((ln & 0x3F) << 8) | msg[pos + 1]
+            continue
+        labels.append(msg[pos + 1:pos + 1 + ln].decode('ascii', 'replace'))
+        pos += 1 + ln
+    else:
+        raise ValueError('name loop')
+    return '.'.join(labels), (end if end is not None else pos)
+
+
+def _dns_parse(msg, qid):
+    """(rcode, truncated, [(type, value)]) of a reply; PTR name / A / AAAA records only."""
+    if len(msg) < 12:
+        raise ValueError('short reply')
+    rid, flags, qd, an = struct.unpack('>HHHH', msg[:8])
+    if rid != qid or not flags & 0x8000:
+        raise ValueError('not our reply')
+    pos = 12
+    for _ in range(qd):
+        pos = _dns_read_name(msg, pos)[1] + 4
+    recs = []
+    for _ in range(an):
+        pos = _dns_read_name(msg, pos)[1]
+        rtype, _cls, _ttl, rdlen = struct.unpack('>HHIH', msg[pos:pos + 10])
+        rd, pos = pos + 10, pos + 10 + rdlen
+        if rtype == 12:
+            recs.append((12, _dns_read_name(msg, rd)[0]))
+        elif rtype == 1 and rdlen == 4:
+            recs.append((1, socket.inet_ntoa(msg[rd:rd + 4])))
+        elif rtype == 28 and rdlen == 16:
+            recs.append((28, socket.inet_ntop(socket.AF_INET6, msg[rd:rd + 16])))
+    return flags & 0xF, bool(flags & 0x200), recs
+
+
+def _dns_ask(server, qname, qtype, timeout):
+    """One query to one server -> (rcode, records). Raises OSError / ValueError."""
+    qid = random.getrandbits(16)
+    pkt = (struct.pack('>HHHHHH', qid, 0x0100, 1, 0, 0, 0) + _dns_name_wire(qname)
+           + struct.pack('>HH', qtype, 1))
+    fam = socket.AF_INET6 if ':' in server else socket.AF_INET
+    deadline = time.time() + timeout
+    s = socket.socket(fam, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(timeout)
+        s.sendto(pkt, (server, DNS_PORT))
+        while True:
+            data = s.recv(4096)
+            try:
+                rc, trunc, recs = _dns_parse(data, qid)
+                break
+            except (ValueError, IndexError, struct.error):
+                left = deadline - time.time()          # stray / late packet - keep waiting
+                if left <= 0:
+                    raise socket.timeout()
+                s.settimeout(left)
+    finally:
+        s.close()
+    if trunc:                                          # too big for UDP: ask again over TCP
+        t = socket.socket(fam, socket.SOCK_STREAM)
+        try:
+            t.settimeout(timeout)
+            t.connect((server, DNS_PORT))
+            t.sendall(struct.pack('>H', len(pkt)) + pkt)
+            buf = b''
+            while len(buf) < 2:
+                c = t.recv(2 - len(buf))
+                if not c:
+                    raise OSError('closed')
+                buf += c
+            need, data = struct.unpack('>H', buf)[0], b''
+            while len(data) < need:
+                c = t.recv(need - len(data))
+                if not c:
+                    raise OSError('closed')
+                data += c
+            rc, _trunc, recs = _dns_parse(data, qid)
+        finally:
+            t.close()
+    return rc, recs
+
+
+def dns_query(qname, qtype):
+    """Records for qname via DNS_SERVERS: a list ([] = no such name / no record), None when
+    no server answered."""
+    servers = DNS_SERVERS
+    n = len(servers)
+    first = next(_dns_rr) % n
+    for i in range(max(2, n)):
+        try:
+            rc, recs = _dns_ask(servers[(first + i) % n], qname, qtype, DNS_QUERY_TIMEOUT)
+        except (OSError, ValueError, UnicodeError):
+            continue
+        if rc in (0, 3):                               # NOERROR / NXDOMAIN
+            return recs
+    return None
+
+
+def _dns_ptr(ip):
+    recs = dns_query(ipaddress.ip_address(ip).reverse_pointer, 12)
+    for t, v in (recs or []):
+        if t == 12 and v:
+            return v.rstrip('.') or None
+    return None
+
+
+def _dns_forward_confirms(name, ip):
+    want = ipaddress.ip_address(ip)
+    recs = dns_query(name, 28 if want.version == 6 else 1) or []
+    return any(t in (1, 28) and ipaddress.ip_address(v) == want for t, v in recs)
+
+
 def _reverse_lookup_one(ip):
+    if DNS_SERVERS:
+        try:
+            return _dns_ptr(ip)
+        except Exception:
+            return None
     try:
         name = socket.gethostbyaddr(ip)[0].rstrip('.')
         return name or None
     except Exception:
         return None
 
-def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS):
+def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS, progress=None):
     """Reverse-DNS a batch of IPs in parallel. Returns {ip: hostname_or_None}.
 
     socket.gethostbyaddr() has no per-call timeout, so the process-wide default is
@@ -1355,7 +1634,9 @@ def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS):
     if not ip_list:
         return {}
     if jr_active():                       # PTR lookups on the jump host
-        got = jr_reverse(list(ip_list))
+        got = jr_reverse(list(ip_list), dns=True)
+        if progress is not None:
+            progress['done'] = len(ip_list)
         return dict((ip, got.get(ip)) for ip in ip_list)
     old_timeout = socket.getdefaulttimeout()
     socket.setdefaulttimeout(timeout)
@@ -1366,12 +1647,14 @@ def get_names_for_ips(ip_list, timeout=DNS_PTR_TIMEOUT, workers=DNS_RESOLVERS):
             futs = {pool.submit(_reverse_lookup_one, ip): ip for ip in ip_list}
             for fut in concurrent.futures.as_completed(futs):
                 results[futs[fut]] = fut.result()
+                if progress is not None:
+                    progress['done'] = len(results)      # shown as GET NAMES progress
     finally:
         socket.setdefaulttimeout(old_timeout)
     return results
 
 def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
-                          host_state, up_seen, down_streak):
+                          host_state, up_seen, down_streak, lists=True):
     """Rename one host list entry everywhere it is tracked - both host lists,
     host_state, up_seen, down_streak - preserving history/uptime. A rename, not a
     delete+re-add. Shared by GET NAMES (IP -> hostname) and IP ONLY (hostname -> IP).
@@ -1382,10 +1665,11 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
     live ping fields come from 'old' (the more recent observation), but the change
     counter/timestamp (the actual monitoring history) is kept from whichever side
     has more of it, instead of being silently reset to 0."""
-    for lst in (original_hosts_list, active_hosts_list):
-        for i, h in enumerate(lst):
-            if h == old:
-                lst[i] = new
+    if lists:                      # lists=False: caller already renamed the lists (bulk)
+        for lst in (original_hosts_list, active_hosts_list):
+            for i, h in enumerate(lst):
+                if h == old:
+                    lst[i] = new
     if old in host_state:
         entry    = host_state.pop(old)
         entry[0] = new
@@ -1410,6 +1694,18 @@ def _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
     elif old in host_csv_ip:
         host_csv_ip.setdefault(new, host_csv_ip[old])
     forget_names([new])   # force a fresh forward lookup for the new identity
+
+def _rename_hosts_bulk(pairs, original_hosts_list, active_hosts_list, host_state, up_seen,
+                       down_streak):
+    """Rename many hosts [(old, new), ...]: one pass over each list instead of one per host."""
+    if not pairs:
+        return
+    mp = dict(pairs)
+    for lst in (original_hosts_list, active_hosts_list):
+        lst[:] = [mp.get(h, h) for h in lst]
+    for old, new in pairs:
+        _rename_host_in_place(old, new, original_hosts_list, active_hosts_list,
+                              host_state, up_seen, down_streak, lists=False)
 
 def merge_csv_ips_into_lists(hosts, original_hosts_list, active_hosts_list,
                              host_state, up_seen, down_streak):
@@ -1437,7 +1733,12 @@ def _forward_confirms(name, ip):
     matching forward record must not be used to rename a host, or pinging it
     afterwards by name would fail (NO-DNS) or silently hit a different address."""
     if jr_active():
-        return ip in (jr_forward([name]).get(name) or [])
+        return ip in (jr_forward([name], dns=True).get(name) or [])
+    if DNS_SERVERS:
+        try:
+            return _dns_forward_confirms(name, ip)
+        except Exception:
+            return False
     try:
         af = socket.AF_INET6 if ip_version_str(ip) == '6' else socket.AF_INET
         infos = socket.getaddrinfo(name, None, af, socket.SOCK_DGRAM)
@@ -1448,23 +1749,37 @@ def _forward_confirms(name, ip):
     except Exception:
         return False
 
-def _get_names_lookup(candidates):
+def _get_names_lookup(candidates, hold=None):
     """Reverse-DNS 'candidates' via get_names_for_ips(), then for every IP whose PTR
     name passes the fqdn format check, confirm it forward-resolves back to that same
     IP (in parallel, same worker budget as the PTR batch). Returns (ptr, fwd_ok): ptr
     is get_names_for_ips()'s {ip: name_or_None}; fwd_ok is {ip: True/False} for every
-    ip that had a plausible PTR name."""
-    ptr = get_names_for_ips(candidates)
+    ip that had a plausible PTR name.
+    hold (optional dict, read by the main loop): phase 'PTR' / 'VERIFY' / 'DONE', done,
+    total, and - from VERIFY on - ptr, checkable and the growing fwd_ok, so confirmed
+    names can be applied while the lookup still runs (see get_names_step)."""
+    if hold is None:
+        hold = {}
+    hold.update(phase='PTR', done=0, total=len(candidates))
+    if DNS_SERVERS and jr_active():          # which way the jump host reaches the DNS servers
+        t = _jr_dns_tool(ssh_cfg)
+        hold['dns_note'] = (('DNS %s via %s on the jump host' % (','.join(DNS_SERVERS), t)) if t else
+                            'DNS servers not reachable from the jump host (no python3/dig, or blocked) - its own resolver used')
+    ptr = get_names_for_ips(candidates, progress=hold)
     checkable = [ip for ip in candidates if ptr.get(ip) and match_re(ptr[ip], fqdn_re)]
     fwd_ok = {}
+    hold.update(ptr=ptr, checkable=checkable, fwd_ok=fwd_ok, done=0, total=len(checkable),
+                phase='VERIFY')
     if checkable and jr_active():
-        jr_forward([ptr[ip] for ip in checkable])      # one ssh call for all forward checks
+        jr_forward([ptr[ip] for ip in checkable], dns=True)   # one ssh call per chunk
     if checkable:
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max(1, min(DNS_RESOLVERS, len(checkable)))) as pool:
             futs = {pool.submit(_forward_confirms, ptr[ip], ip): ip for ip in checkable}
             for fut in concurrent.futures.as_completed(futs):
                 fwd_ok[futs[fut]] = fut.result()
+                hold['done'] = len(fwd_ok)
+    hold['phase'] = 'DONE'
     return ptr, fwd_ok
 
 def _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
@@ -1545,8 +1860,9 @@ def apply_get_names(original_hosts_list, active_hosts_list, host_state, up_seen,
     if not candidates:
         return 'get names: no eligible IP host(s)'
 
-    ptr, fwd_ok = _get_names_lookup(candidates)
-    return _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
+    hold = {}
+    _get_names_lookup(candidates, hold)
+    return get_names_finish(candidates, hold, original_hosts_list, active_hosts_list,
                             host_state, up_seen, down_streak)
 
 def get_names_start(original_hosts_list, dns_ttl):
@@ -1571,24 +1887,94 @@ def get_names_start(original_hosts_list, dns_ttl):
     if not candidates:
         return None, None, candidates
 
-    result_holder = {}
+    result_holder = {'phase': 'PTR', 'done': 0, 'total': len(candidates)}
     def _worker():
-        ptr, fwd_ok = _get_names_lookup(candidates)
-        result_holder['ptr']    = ptr
-        result_holder['fwd_ok'] = fwd_ok
+        _get_names_lookup(candidates, result_holder)
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
     return thread, result_holder, candidates
 
+def get_names_progress(hold):
+    """Text for the status line while GET NAMES runs, e.g. 'PTR 5200/16276' or
+    'VERIFY 800/9500, 650 renamed'."""
+    if not hold:
+        return ''
+    t = '%s %d/%d' % (hold.get('phase', 'PTR'), hold.get('done', 0), hold.get('total', 0))
+    st = hold.get('step')
+    if st and st['renamed']:
+        t += ', %d renamed' % st['renamed']
+    return t
+
+def get_names_step(hold, original_hosts_list, active_hosts_list, host_state, up_seen,
+                   down_streak):
+    """Apply the names confirmed so far (main thread, call once per loop while the lookup
+    thread runs, and a last time from get_names_finish). Same rules as _get_names_apply:
+    hosts sharing one PTR name are decided together, i.e. only when the forward check of
+    every one of them is done - so a name is never given to one of several claimants."""
+    if not hold or hold.get('phase') not in ('VERIFY', 'DONE'):
+        return
+    st = hold.get('step')
+    if st is None:
+        st = hold['step'] = {'groups': {}, 'handled': set(), 'renamed': 0, 'no_fwd': 0,
+                             'collisions': 0, 'shared': 0}
+        for ip in hold['checkable']:
+            st['groups'].setdefault(hold['ptr'][ip].lower(), []).append(ip)
+    ptr, fwd = hold['ptr'], hold['fwd_ok']
+    present  = set(original_hosts_list)                 # hosts deleted meanwhile are skipped
+    existing = set(h.lower() for h in original_hosts_list)
+    pairs = []
+    for ip in list(fwd):
+        if ip in st['handled']:
+            continue
+        key = ptr[ip].lower()
+        grp = st['groups'][key]
+        if any(m not in fwd for m in grp):
+            continue                                    # wait for the rest of the group
+        st['handled'].update(grp)
+        ok = [m for m in grp if fwd[m]]
+        st['no_fwd'] += len(grp) - len(ok)
+        if len(ok) > 1:
+            st['shared'] += len(ok)
+        elif ok and ok[0] in present:
+            if key in existing:
+                st['collisions'] += 1
+            else:
+                existing.add(key)
+                pairs.append((ok[0], ptr[ok[0]]))
+                st['renamed'] += 1
+    _rename_hosts_bulk(pairs, original_hosts_list, active_hosts_list, host_state, up_seen,
+                       down_streak)
+    # the forward check just proved name -> ip: seed the resolver cache, so the renamed hosts
+    # are pinged at once instead of being looked up a second time one by one
+    try:
+        ttl = float(getattr(globals().get('args'), 'dns_ttl', DNS_CACHE_TTL))
+    except (TypeError, ValueError):
+        ttl = 0
+    if pairs and ttl > 0:
+        now = time.time()
+        with _dns_lock:
+            for old, new in pairs:
+                _dns_cache[new] = (old, now + random.uniform(DNS_TTL_JITTER_LO, 1.0) * ttl)
+
 def get_names_finish(candidates, result_holder, original_hosts_list, active_hosts_list,
                      host_state, up_seen, down_streak):
-    """[G] GET NAMES, background: apply the PTR/forward-check results a
-    get_names_start() thread has finished computing. Call only after
-    thread.is_alive() is False."""
-    ptr    = result_holder.get('ptr', {})    if result_holder else {}
-    fwd_ok = result_holder.get('fwd_ok', {}) if result_holder else {}
-    return _get_names_apply(candidates, ptr, fwd_ok, original_hosts_list, active_hosts_list,
-                            host_state, up_seen, down_streak)
+    """[G] GET NAMES, background: apply what is left and return the status message.
+    Call only after thread.is_alive() is False."""
+    get_names_step(result_holder, original_hosts_list, active_hosts_list, host_state,
+                   up_seen, down_streak)
+    h  = result_holder or {}
+    st = h.get('step') or {'renamed': 0, 'no_fwd': 0, 'collisions': 0, 'shared': 0}
+    unresolved = len(candidates) - len(h.get('checkable', []))
+    parts = [str(st['renamed']) + ' renamed']
+    if unresolved:
+        parts.append(str(unresolved) + ' no PTR')
+    if st['no_fwd']:
+        parts.append(str(st['no_fwd']) + ' no matching A/AAAA (kept as IP)')
+    if st['collisions']:
+        parts.append(str(st['collisions']) + ' name collision')
+    if st['shared']:
+        parts.append(str(st['shared']) + ' shared PTR (kept as IP)')
+    return 'get names: ' + ', '.join(parts) + (' [' + h['dns_note'] + ']' if h.get('dns_note') else '')
 
 def prepare_targets(hosts, ttl, progress_cb=None):
     """Map the host list to what is actually handed to fping.
@@ -3543,6 +3929,7 @@ web_state = {
     'stopped'          : False,
     'paused'           : False,   # PAUSE button: no pings until RESUME
     'message'          : '',
+    'gn_text'          : '',     # GET NAMES progress while it runs
     'msg_seq'          : 0,
     'scan_info'        : '',
     'phase_info'       : '',
@@ -4832,9 +5219,10 @@ function advPollCheck(){
     var actual = lastOptions[key];
     if(actual === undefined) continue;   // no options snapshot yet
     var a = parseFloat(actual), e = parseFloat(p.sentVal);
-    var same = (!isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(p.sentVal));
+    var same = (key !== 'dns_servers' && !isNaN(a) && !isNaN(e)) ? Math.abs(a - e) < 0.05 : (String(actual) === String(p.sentVal));
     if(same){ delete advPending[key]; continue; }
     if(Date.now() < p.deadline) continue;   // still might land - keep waiting
+    if(key === 'dns_servers') populateDns(actual);
     if(p.sl && !isNaN(a)) p.sl.value = actual;
     if(p.tx) p.tx.value = actual;
     p.row.classList.add('adv-rejected');
@@ -4898,9 +5286,76 @@ function buildAdvRows(){
     mi.addEventListener('click', function(){ step_by(-1); });
     pl.addEventListener('click', function(){ step_by(1); });
   });
+  buildDnsRow(c);
   advRowsBuilt = true;
 }
+// DNS SERVERS (GET NAMES): two slots, each a preset list or CUSTOM (free IP). Sent as
+// 'ip1,ip2' ('' = OS resolver); the server validates and normalizes (max 2 addresses).
+var DNS_PRESETS = [
+  ['1.1.1.1', '1.1.1.1  Cloudflare'], ['1.0.0.1', '1.0.0.1  Cloudflare'],
+  ['8.8.8.8', '8.8.8.8  Google'], ['8.8.4.4', '8.8.4.4  Google'],
+  ['208.67.222.222', '208.67.222.222  Cisco Umbrella'], ['208.67.220.220', '208.67.220.220  Cisco Umbrella']
+];
+function dnsCollect(){
+  var out = [];
+  document.querySelectorAll('#advDnsRow .advDnsSel').forEach(function(sel, i){
+    var tx = document.querySelectorAll('#advDnsRow .advDnsTx')[i];
+    var v = sel.value === '__custom__' ? tx.value.trim() : sel.value;
+    if(v && out.indexOf(v) < 0) out.push(v);
+  });
+  return out.join(',');
+}
+function dnsSend(){
+  var val = dnsCollect();
+  post('set_option', 'dns_servers=' + val);
+  advCheckApplied(document.getElementById('advDnsRow'), null, null, 'dns_servers', val);
+}
+function buildDnsRow(c){
+  var desc = 'Resolvers used by GET NAMES (reverse lookup and forward check), up to 2, used in turn - the other one is the fallback. '
+    + 'SYSTEM = the OS resolver. A cloud resolver (e.g. OCI 169.254.169.254) is often rate limited to ~60 queries/s, a public resolver is several times faster. '
+    + 'Only GET NAMES uses it, not the name resolution for pinging. With a jump host the lookups run there (python3, else dig; if neither works or the servers are not reachable from there, its own resolver is used).';
+  var row = document.createElement('div');
+  row.className = 'adv-row';
+  row.id = 'advDnsRow';
+  row.title = desc;
+  var html = '<label title="' + esc(desc) + '">DNS SERVERS <span class="adv-desc">| resolvers for GET NAMES</span></label>'
+           + '<div class="adv-input-line" style="flex-wrap:wrap;gap:6px">';
+  for(var slot = 0; slot < 2; slot++){
+    html += '<select class="advDnsSel" data-slot="' + slot + '" title="' + esc(desc) + '">'
+          + '<option value="">' + (slot ? '(none)' : 'SYSTEM (OS RESOLVER)') + '</option>'
+          + DNS_PRESETS.map(function(p){ return '<option value="' + p[0] + '">' + esc(p[1]) + '</option>'; }).join('')
+          + '<option value="__custom__">CUSTOM ...</option></select>'
+          + '<input type="text" class="advDnsTx" data-slot="' + slot + '" placeholder="IPv4 / IPv6" '
+          + 'style="display:none;width:150px" title="' + esc(desc) + '">';
+  }
+  row.innerHTML = html + '</div>';
+  c.appendChild(row);
+  row.querySelectorAll('.advDnsSel').forEach(function(sel, i){
+    var tx = row.querySelectorAll('.advDnsTx')[i];
+    sel.addEventListener('change', function(){
+      tx.style.display = sel.value === '__custom__' ? '' : 'none';
+      if(sel.value === '__custom__'){ tx.focus(); return; }   // sent on Enter / leaving the field
+      dnsSend();
+    });
+    tx.addEventListener('change', dnsSend);
+    tx.addEventListener('keydown', function(e){ if(e.key === 'Enter') tx.blur(); });
+  });
+}
+function populateDns(val){
+  var row = document.getElementById('advDnsRow');
+  if(!row) return;
+  var vals = String(val || '').split(',').filter(function(x){ return x; });
+  row.querySelectorAll('.advDnsSel').forEach(function(sel, i){
+    var tx = row.querySelectorAll('.advDnsTx')[i];
+    var v = vals[i] || '';
+    var known = v === '' || DNS_PRESETS.some(function(p){ return p[0] === v; });
+    sel.value = known ? v : '__custom__';
+    tx.style.display = known ? 'none' : '';
+    tx.value = known ? '' : v;
+  });
+}
 function populateAdvOptions(opts){
+  if(opts.dns_servers !== undefined && !(document.activeElement && document.activeElement.className === 'advDnsTx')) populateDns(opts.dns_servers);
   ADV_OPTIONS_UI.forEach(function(o){
     var key = o[0], val = opts[key];
     if(val === undefined) return;
@@ -6253,8 +6708,9 @@ function poll(){
       reportExpect = false;
       note('report failed: ' + (rep.error || ''), false);
     }
-    document.getElementById('sLog').innerHTML = s.logging
-      ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF';
+    var gnT = s.gn_text ? ' &nbsp; <span class="u"><b>GET NAMES ' + esc(s.gn_text) + '</b></span>' : '';   // class u = green
+    document.getElementById('sLog').innerHTML = gnT + ' &nbsp; ' + (s.logging
+      ? 'LOGGING-ON: <b>'+esc(s.logfile)+'</b>' : 'LOGGING-OFF');
     loggingOn = !!s.logging;
     renderPause(s.paused);
     saveCsv        = !!s.save_csv;
@@ -7136,7 +7592,8 @@ _OPT_KEY_DEST = {'timeout': 'timeout', 'retries': 'retries',
                  'num_of_threads': 'num_of_threads', 'waittime': 'waittime',
                  'confirm': 'confirm', 'new_grace': 'new_grace', 'silent_periods': 'silent_periods', 'rate_pps': 'rate_pps', 'flap_window': 'flap_window',
                  'dns_ttl': 'dns_ttl', 'tz_offset': 'time_zone_adjust',
-                 'log_max_size': 'log_max_size', 'log_max_files': 'log_max_files'}
+                 'log_max_size': 'log_max_size', 'log_max_files': 'log_max_files',
+                 'dns_servers': 'dns_servers'}
 
 def _same_opt_value(a, b):
     try:
@@ -8008,6 +8465,7 @@ ADV_OPTIONS = [
     ('tz_offset',       'int',   -24, 24,                        1,   'h',   None),
     ('log_max_size',    'int',   LOG_MAX_SIZE_MIN, LOG_MAX_SIZE_MAX, 50, 'MB', 0),   # 0 = no limit
     ('log_max_files',   'int',   0,   LOG_MAX_FILES_MAX,         10,  '',    None),  # 0 = unlimited
+    ('dns_servers',     'str',   0,   0,                         0,   '',    None),  # GET NAMES resolvers, '' = OS
 ]
 ADV_OPTION_KEYS = set(o[0] for o in ADV_OPTIONS)
 
@@ -8029,6 +8487,7 @@ ADV_OPTION_LABELS = {
     'tz_offset':       'TIMEZONE',
     'log_max_size':    'MAX LOG SIZE',
     'log_max_files':   'MAX LOG FILES',
+    'dns_servers':     'DNS SERVERS',
 }
 
 # keys kept as local variables inside run_web_mode() (not read from args each
@@ -8053,6 +8512,13 @@ def apply_adv_option(key, raw, args):
         return False, None, 'unknown option: ' + str(key)
     _, kind, lo, hi, _step, _unit, auto_sentinel = spec
     raw = str(raw).strip()
+    if kind == 'str':                                  # dns_servers: up to 2 IPs, '' = OS resolver
+        lst = parse_dns_servers(raw)
+        if lst is None:
+            return False, None, key + ': up to ' + str(DNS_SERVERS_MAX) + ' IP addresses or SYSTEM'
+        args.dns_servers = ','.join(lst)
+        set_dns_servers(lst)
+        return True, args.dns_servers, key + ' set to ' + (args.dns_servers or 'SYSTEM')
     try:
         if key == 'num_of_threads' and raw.lower() == 'auto':
             val = 'auto'
@@ -8123,6 +8589,7 @@ def adv_option_values(args, flap_window, confirm, tz_offset):
         'tz_offset':      str(tz_offset),
         'log_max_size':   args.log_max_size,
         'log_max_files':  args.log_max_files,
+        'dns_servers':    getattr(args, 'dns_servers', ''),
         'timeout':        str(timeout),
         'retries':        str(retries),
     }
@@ -8151,6 +8618,7 @@ ADV_OPTION_CLI_FLAG = {
     'tz_offset':       '-tz',
     'log_max_size':    '-lms',
     'log_max_files':   '-lmf',
+    'dns_servers':     '-ds',
 }
 
 
@@ -8166,6 +8634,8 @@ def format_option_cli(key, val):
         shown = '-1' if val in ('', None) else str(int(val))
     elif key == 'num_of_threads':
         shown = 'auto' if val == 'auto' else str(int(val))
+    elif key == 'dns_servers':
+        shown = val or 'system'
     else:
         shown = str(val)
     return flag + ' ' + shown
@@ -8190,6 +8660,7 @@ def current_option_value(key, args, timeout, retries, flap_window, confirm, tz_o
     if key == 'tz_offset':      return tz_offset
     if key == 'log_max_size':   return int(args.log_max_size)
     if key == 'log_max_files':  return int(args.log_max_files)
+    if key == 'dns_servers':    return getattr(args, 'dns_servers', '')
     return None
 
 
@@ -8230,6 +8701,8 @@ def build_cli_snapshot(args, timeout, retries, flap_window,
         parts.append('-du')
     parts.append('-ra ' + str(args.rate_pps))
     parts.append('-dns ' + str(args.dns_ttl))
+    if getattr(args, 'dns_servers', ''):
+        parts.append('-ds ' + args.dns_servers)
     if args.force_ipv4:
         parts.append('-4')
     if args.force_ipv6:
@@ -8379,11 +8852,17 @@ def run_web_mode(original_hosts_list, host_state, args, logfile_file_name,
     while True:
         # --- [G] background PTR lookup: apply results once the thread is done ---
         gn_just_finished = False
+        if gn_thread is not None and gn_thread.is_alive():
+            get_names_step(gn_result, original_hosts_list, active_hosts_list, host_state,
+                           up_seen, down_streak)               # partial results
         if gn_thread is not None and not gn_thread.is_alive():
             message = get_names_finish(gn_candidates, gn_result, original_hosts_list,
                                        active_hosts_list, host_state, up_seen, down_streak)
             gn_thread         = None
             gn_just_finished  = True
+        with web_lock:
+            web_state['gn_text'] = (get_names_progress(gn_result)
+                                    if gn_thread is not None else '')
 
         # --- commands coming from the browser ---
         with web_lock:
@@ -9058,6 +9537,7 @@ if __name__=='__main__':
     parser.add_argument('-du', '--disable_versioncheck', action="store_true", help="disable online versioncheck")
     parser.add_argument('-ra', '--rate', default=str(DEFAULT_RATE_PPS), dest='rate_pps', help="ICMP packets per second, range " + str(MIN_RATE_PPS) + "-" + str(MAX_RATE_PPS) + " (default: " + str(DEFAULT_RATE_PPS) + "; -i cannot go below 1ms, so one process per group tops out near 1000 - higher values have no effect. Use -i 0 to remove the limit entirely)")
     parser.add_argument('-dns', '--dns_ttl', default=str(DNS_CACHE_TTL), dest='dns_ttl', help="seconds a resolved hostname is cached, range 0-" + str(DNS_TTL_MAX) + " (default: " + str(DNS_CACHE_TTL) + ", 0 = let fping resolve every run)")
+    parser.add_argument('-ds', '--dns_servers', default='', dest='dns_servers', help="DNS servers for GET NAMES (reverse lookup + forward check), up to 2 IP addresses comma separated, e.g. 1.1.1.1,1.0.0.1 (default: system resolver; much faster than a rate-limited cloud resolver)")
     parser.add_argument('-lms', '--log_max_size', default='500', dest='log_max_size', help="max CSV log file size in MB before rotating to a new file, range " + str(LOG_MAX_SIZE_MIN) + "-" + str(LOG_MAX_SIZE_MAX) + " (default: 500, 0 = no limit)")
     parser.add_argument('-lnz', '--log_no_zip', action="store_true", dest='log_no_zip', help="do not zip logfiles finished by size rotation (default: zipped to <name>.csv.zip in the background)")
     parser.add_argument('-lmf', '--log_max_files', default='0', dest='log_max_files', help="max number of eping-log_*.csv files to keep, oldest deleted first once exceeded, range 0-" + str(LOG_MAX_FILES_MAX) + " (default: 0 = unlimited)")
@@ -9265,6 +9745,13 @@ if __name__=='__main__':
             error_handler("ERROR: --dns_ttl: must be between 0 and " + str(DNS_TTL_MAX))
     except ValueError:
         error_handler("ERROR: --dns_ttl: must be between 0 and " + str(DNS_TTL_MAX))
+
+    # DNS servers for GET NAMES
+    _dsl = parse_dns_servers(args.dns_servers)
+    if _dsl is None:
+        error_handler("ERROR: --dns_servers: up to " + str(DNS_SERVERS_MAX) + " IP addresses (comma separated) or SYSTEM")
+    args.dns_servers = ','.join(_dsl)
+    set_dns_servers(_dsl)
 
     # log rotation: max CSV log file size in MB before starting a new file (0 = no limit)
     try:
@@ -10237,6 +10724,8 @@ if __name__=='__main__':
         def _display(key, spec):
             _, kind, _lo, _hi, _step, unit, _auto_sentinel = spec
             val = _cur(key)
+            if kind == 'str':
+                return val or 'SYSTEM'
             if val in ('', None):
                 return 'AUTO'
             if val == 'auto':
@@ -10286,7 +10775,8 @@ if __name__=='__main__':
                     r_label = ADV_OPTION_LABELS.get(r_key, r_key.upper())
                     r_value = _display(r_key, r_spec)
                     is_sel  = (i == sel)
-                    line = (('>' if is_sel else ' ') + ' ' + r_label).ljust(dialog_w - 14) + r_value.rjust(12)
+                    _vw  = max(12, len(r_value))
+                    line = (('>' if is_sel else ' ') + ' ' + r_label).ljust(max(1, dialog_w - 3 - _vw)) + r_value.rjust(_vw)
                     screen_output(dialog_y + 3 + row, dialog_x,
                                   '│' + line[:dialog_w - 2].ljust(dialog_w - 2) + '│',
                                   2 if is_sel else 1, 1 if is_sel else 0)
@@ -10314,6 +10804,15 @@ if __name__=='__main__':
                     sel = max(0, sel - visible)
                 elif ch == curses.KEY_NPAGE:
                     sel = min(len(ADV_OPTIONS) - 1, sel + visible)
+                elif kind == 'str' and ch in (curses.KEY_LEFT, curses.KEY_RIGHT, ord('-'), ord('_'),
+                                              ord('+'), ord('=')):
+                    # cycle SYSTEM -> Cloudflare -> Google -> Cisco Umbrella (ENTER types any IPs)
+                    _presets = ['', '1.1.1.1,1.0.0.1', '8.8.8.8,8.8.4.4',
+                                '208.67.222.222,208.67.220.220']
+                    _now = _cur(key)
+                    _i = _presets.index(_now) if _now in _presets else -1
+                    _i = (_i + (-1 if ch in (curses.KEY_LEFT, ord('-'), ord('_')) else 1)) % len(_presets)
+                    _apply(key, _presets[_i] or 'system')
                 elif ch in (curses.KEY_LEFT, ord('-'), ord('_')):
                     cur = _numeric(key, spec) - step
                     cur = max(lo, min(hi, round(cur, 2) if kind == 'float' else int(cur)))
@@ -10329,6 +10828,7 @@ if __name__=='__main__':
                 elif ch in (10, 13):                    # ENTER = type exact value
                     unit_txt = (' ' + unit) if unit else ''
                     typed = input_dialog('SET ' + label,
+                                         (label + ' (IP[,IP] or SYSTEM):') if kind == 'str' else
                                          label + ' (' + str(lo) + '..' + str(hi) + unit_txt + '):')
                     if typed:
                         ok, _val, msg = _apply(key, typed)
@@ -10993,7 +11493,7 @@ if __name__=='__main__':
             screen_print_center_top('Update available - please visit https://www.jeitler.cc', 3)
         elif gn_thread is not None and gn_thread.is_alive():
             screen_print_center_top(
-                'GET NAMES running in background (%d host(s))...' % len(gn_candidates), 2)
+                'GET NAMES running in background (%s)...' % get_names_progress(gn_result), 2)
         elif match_filter_re is not None or adv_filter:
             _ft = []
             if match_filter_re is not None:
@@ -11221,6 +11721,9 @@ if __name__=='__main__':
     while True:
 
         # --- [G] background PTR lookup: apply results once the thread is done ---
+        if gn_thread is not None and gn_thread.is_alive():
+            get_names_step(gn_result, original_hosts_list, active_hosts_list, host_state,
+                           up_seen, down_streak)               # partial results
         if gn_thread is not None and not gn_thread.is_alive():
             gn_msg    = get_names_finish(gn_candidates, gn_result, original_hosts_list,
                                          active_hosts_list, host_state, up_seen, down_streak)
@@ -11230,6 +11733,8 @@ if __name__=='__main__':
                 draw_screen()
                 screen.refresh()
             notice(gn_msg.upper(), 2, 3)
+        with web_lock:                       # progress for the web view of the TUI (-wvc / -web)
+            web_state['gn_text'] = (get_names_progress(gn_result) if gn_thread is not None else '')
 
         # --- [N] ANALYSE NOW: apply the epinga.py report result once it's done ---
         if report_thread is not None and not report_thread.is_alive():
