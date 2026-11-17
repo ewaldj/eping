@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.85'
+VERSION = '4.86'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
@@ -3999,6 +3999,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
   button.srcon{border-color:var(--up);color:var(--up);font-weight:700}
   button.paused{border-color:var(--down);color:var(--down);font-weight:700}
   button.danger:hover{border-color:var(--down);color:var(--down)}
+  button.logoff{border-color:var(--down);color:var(--down)}
   #deleteFilesBtn{background:var(--down);border-color:var(--down);color:var(--bg);font-weight:600}
   #deleteFilesBtn:hover{background:var(--down);border-color:var(--down);color:var(--bg)}
   #deleteFilesBtn:disabled{opacity:.4;cursor:default}
@@ -4491,7 +4492,7 @@ WEB_INDEX_HTML = r"""<!DOCTYPE html>
      <button id="btnGetNames" title="reverse-DNS resolve IP hosts and rename them to their hostname">GET NAMES</button>
      <button id="btnAdvOptions" title="adjust fping/timer/timezone options live">ADV OPTIONS</button>
      <button id="btnJump" title="ping from a jump host via ssh instead of from this computer">JUMPHOST</button>
-     <button id="btnResetLog" class="danger" title="Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel">LOGGING</button>
+     <button id="btnResetLog" class="danger logoff" title="Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel">LOGGING</button>
      <select id="selDownload" title="add hosts from a file on the server or from your computer, download the full reference list, only the currently shown hosts, the active logfile, or pick any .csv/.txt/.html file; upload a *.txt/*.csv file to this eping.py's working directory, save the currently shown hosts as the server's hosts file, view a *.txt/*.csv file read-only, or delete files from it">
         <option value="" selected disabled hidden>FILE OPERATIONS</option>
         <option value="add_from_server">ADD HOSTS FILE FROM SERVER</option>
@@ -6773,6 +6774,7 @@ function poll(){
     shownHostsCount = s.hosts_shown || 0;
     var brl = document.getElementById('btnResetLog');
     brl.textContent = 'LOGGING';
+    brl.classList.toggle('logoff', !loggingOn);   // red while logging is off
     brl.title = loggingOn
       ? 'Y=clear this file, N=start a fresh file (old kept), S=stop logging, ESC/ENTER=cancel'
       : 'start logging right away, no confirmation needed';
