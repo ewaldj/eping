@@ -7,7 +7,7 @@
 # I knew how it worked.
 # Now, only god knows it!
 # - - - - - - - - - - - - - - - - - - - - - - - -
-VERSION = '4.84'
+VERSION = '4.85'
 version = VERSION  # legacy alias (kept for existing references)
 
 # --- scaling limits ---
