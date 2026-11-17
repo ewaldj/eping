@@ -666,7 +666,15 @@ The web GUI mouse-over of a renamed host shows the hostname it had before (`host
 IP history: when a hostname resolves to a different address over time (DNS refresh), the web GUI mouse-over
 shows `ip changes` and an `ip history` list (address + first-seen time, newest first, max 50). The log's `IP`
 column already carries the pinged address every round; epinga.py marks such hosts in the report with `⇄N`
-after the address (tooltip: all addresses with first-seen time) and lists them in the host detail panel.
+after the address (tooltip: all addresses with first-seen time) and lists them in the host detail panel. A `MULTI-IP` summary card (before NO-DNS) counts them and
+`Show: MULTI-IP` filters the host list to them. All summary cards are buttons: a click sets the matching
+`Show` filter (incl. the new `DUPLICATES`), a second click clears it. The DUPLICATES card counts hostname/IP
+pairs (each pair once); the filter lists both entries of every pair.
+
+Large reports: the host table is windowed (virtual scrolling, only rows near the viewport exist in the DOM) and
+detail panels are built when a host is expanded, so filter/sort time and memory no longer grow with the host
+count. The report's *Download* button saves the page without the rendered rows/buckets (rebuilt on load), so
+the file stays the size of the generated report.
 
 CLI `P` and the web GUI's address mode select/`P` picker reach the same 4 exclusive
 modes: `KEEP ALL (NO DEDUP)` (default), `DEDUP: KEEP HOSTNAME`,
@@ -744,7 +752,7 @@ With `-debug` a round longer than 10 s is also logged as a `SLOW ROUND` comment 
 - `-p` > 1 and `-i 0` reduce accuracy (false DOWN) — defaults avoid both.
 - Needs an fping with `-l` and per-target sequence numbers (fping 4.3 or newer; the Windows / macOS packages have it).
 
-# epinga.py 2.48
+# epinga.py 2.52
 
 Analyses an eping.py CSV log: terminal summary + self-contained HTML report (no
 server, no external assets) with per-host detail, state-change timelines, and

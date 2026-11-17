@@ -6,7 +6,7 @@
 # Streams the CSV row-by-row – RAM usage stays flat even for GB-sized logs
 # - - - - - - - - - - - - - - - - - - - - - - - -
 
-VERSION = '2.48'
+VERSION = '2.52'
 version = VERSION   # legacy alias
 
 import re
@@ -815,22 +815,12 @@ def _is_ip_host(name):
 
 
 def count_duplicate_hosts(rows):
-    """Hosts monitored under both a hostname and an IP resolving to it - both
-    sides of every such pair count (mirrors REDUNDANT_IPS/REDUNDANT_NAMES in the
-    report's JS - see there for the exact matching rule). Used for the
-    DUPLICATES stat card, independent of which dedup mode is selected.
+    """Number of duplicate hostname/IP pairs: IP-only hosts whose address is also the
+    pinged address of a named host (mirrors REDUNDANT_IPS in the report's JS). Each
+    pair counts once; the DUPLICATES filter shows both entries of every pair.
     """
     name_hosts_ips = set(h['ip'] for h in rows if h['ip'] and not _is_ip_host(h['name']))
-    ip_hosts_names = set(h['name'] for h in rows if _is_ip_host(h['name']))
-    n = 0
-    for h in rows:
-        if _is_ip_host(h['name']):
-            if h['name'] in name_hosts_ips:
-                n += 1
-        else:
-            if h['ip'] and h['ip'] in ip_hosts_names:
-                n += 1
-    return n
+    return sum(1 for h in rows if _is_ip_host(h['name']) and h['name'] in name_hosts_ips)
 
 
 def generate_html(data, out_path):
@@ -863,6 +853,7 @@ def generate_html(data, out_path):
     n_down    = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'DOWN')
     n_nodns   = sum(1 for h in data['hosts'] if h['changes'] == 0 and h['state'] == 'NO-DNS')
     n_dup     = count_duplicate_hosts(data['hosts'])
+    n_multi   = sum(1 for h in data['hosts'] if len(h.get('ips') or []) > 1)
     filename_html = html_lib.escape(str(data['filename']))
 
     html = f"""<!DOCTYPE html>
@@ -920,10 +911,14 @@ a {{ color: var(--cyan); text-decoration: none; }}
                            align-items: flex-end; justify-content: center; }}
 .card .num {{ font-size: 28px; font-weight: 700; }}
 .card .lbl, .card .info-sub {{ flex: 0 0 auto; font-size: 11px; color: var(--dim); }}
+.card[data-f] {{ cursor: pointer; }}
+.card[data-f]:hover {{ border-color: var(--dim); }}
+.card.sel {{ border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }}
 .card.up    .num {{ color: var(--green);  }}
 .card.flap  .num {{ color: var(--orange); }}
 .card.down  .num {{ color: var(--red);    }}
 .card.nodns .num {{ color: var(--red);    }}
+.card.multi .num {{ color: #a371f7;        }}
 .card.dup   .num {{ color: var(--cyan);   }}
 .card.dup .info {{ font-size: 14px; font-weight: 700; line-height: 1.2;
                    color: var(--green); letter-spacing: .3px; }}
@@ -1004,6 +999,9 @@ tbody tr {{
   transition: background .1s; }}
 tbody tr:hover {{ background: var(--bg2); }}
 tbody tr.expanded {{ background: var(--bg2); }}
+tbody tr.vs, tbody tr.vs:hover {{ border: 0; background: none; cursor: default; }}
+tbody tr.vs td {{ padding: 0; border: 0; }}
+tbody {{ overflow-anchor: none; }}
 tbody tr.detail-row {{ cursor: default; background: var(--bg3); }}
 tbody tr.detail-row:hover {{ background: var(--bg3); }}
 td {{ padding: 7px 12px; white-space: nowrap; }}
@@ -1130,12 +1128,13 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
 </div>
 
 <div class="cards">
-  <div class="card" id="cardTotal"><div class="num">{n_total}</div><div class="lbl">TOTAL HOSTS</div></div>
-  <div class="card up" id="cardUp">  <div class="num">{n_up}</div>   <div class="lbl">ALWAYS UP</div></div>
-  <div class="card flap" id="cardFlap"><div class="num">{n_flap}</div> <div class="lbl">FLAPPING</div></div>
-  <div class="card down" id="cardDown"><div class="num">{n_down}</div> <div class="lbl">ALWAYS DOWN</div></div>
-  <div class="card nodns" id="cardNodns"><div class="num">{n_nodns}</div><div class="lbl">NO-DNS</div></div>
-  <div class="card dup" id="cardDup"><div class="num">{n_dup}</div><div class="lbl">DUPLICATES</div></div>
+  <div class="card" id="cardTotal" role="button" tabindex="0" data-f="" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}"><div class="num">{n_total}</div><div class="lbl">TOTAL HOSTS</div></div>
+  <div class="card up" id="cardUp" role="button" tabindex="0" data-f="ALWAYS-UP" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}">  <div class="num">{n_up}</div>   <div class="lbl">ALWAYS UP</div></div>
+  <div class="card flap" id="cardFlap" role="button" tabindex="0" data-f="FLAP" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}"><div class="num">{n_flap}</div> <div class="lbl">FLAPPING</div></div>
+  <div class="card down" id="cardDown" role="button" tabindex="0" data-f="ALWAYS-DOWN" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}"><div class="num">{n_down}</div> <div class="lbl">ALWAYS DOWN</div></div>
+  <div class="card multi" id="cardMulti" role="button" tabindex="0" data-f="MULTI-IP" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}" title="Hosts that were pinged at more than one IP address"><div class="num">{n_multi}</div><div class="lbl">MULTI-IP</div></div>
+  <div class="card nodns" id="cardNodns" role="button" tabindex="0" data-f="NO-DNS" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}"><div class="num">{n_nodns}</div><div class="lbl">NO-DNS</div></div>
+  <div class="card dup" id="cardDup" role="button" tabindex="0" title="Duplicate hostname/IP pairs - click to show both entries of each pair" data-f="DUPLICATES" onclick="cardFilter(this)" onkeydown="if(event.key==='Enter'||event.key===' '){{event.preventDefault();cardFilter(this);}}"><div class="num">{n_dup}</div><div class="lbl">DUPLICATES</div></div>
   <div class="meta-filters" id="metaFilters"></div>
   <div class="side-widget">
   <a href="https://jeitler.cc/nelly/" class="cat-link" target="_blank" rel="noopener" aria-label="More about Nelly">
@@ -1202,6 +1201,8 @@ footer a:hover {{ color: var(--text); text-decoration-color: currentColor; }}
     <option value="ALWAYS-DOWN">ALWAYS-DOWN</option>
     <option value="DOWN+FLAP">DOWN+FLAPPING</option>
     <option value="NO-DNS">NO-DNS</option>
+    <option value="MULTI-IP">MULTI-IP</option>
+    <option value="DUPLICATES">DUPLICATES</option>
   </select>
   <label>Sort:</label>
   <select id="sortSel" onchange="sortBySelect()">
@@ -1447,15 +1448,16 @@ function rttCell(v) {{
   return v !== null ? v.toFixed(2) + ' ms' : '<span style="color:var(--dim)">–</span>';
 }}
 
-function renderTable(data) {{
-  const tbody = document.getElementById('tbody');
-  tbody.innerHTML = '';
-  data.forEach((h, idx) => {{
-    const noc_col = h.changes > 0 ? 'color:var(--orange)' : 'color:var(--dim)';
-    const tr = document.createElement('tr');
-    tr.id = 'r' + idx;
-    tr.dataset.idx = idx;
-    tr.innerHTML = `
+// Host table is windowed (virtual scrolling): only the rows around the viewport
+// exist in the DOM, spacer rows stand in for the rest. Detail rows are built on
+// demand for the one expanded host. Keeps filter/sort time and page size
+// independent of the host count; all data stays in RAW.
+const VS = {{ data: [], start: 0, end: 0, exp: -1, detailH: 0, rowH: 34, measured: false, tick: false }};
+const VS_BUF = 15;
+function vsRowHtml(h, idx) {{
+  const noc_col = h.changes > 0 ? 'color:var(--orange)' : 'color:var(--dim)';
+  const open = idx === VS.exp;
+  return `<tr id="r${{idx}}" data-idx="${{idx}}"${{open ? ' class="expanded"' : ''}}>
       <td class="host">${{escHtml(hostLabel(h))}}${{ secondaryLabel(h) ? ` <span class="host-ip">| ${{escHtml(secondaryLabel(h))}}</span>` : '' }}${{ ipHistMark(h) }} <span class="chevron">&#8964;</span></td>
       <td style="text-align:center;white-space:nowrap">${{stateBadge(h.state, h.changes)}}</td>
       <td style="padding:0 12px"><div style="width:200px">${{buildTimeline(h)}}</div></td>
@@ -1463,16 +1465,61 @@ function renderTable(data) {{
       <td style="text-align:right">${{rttCell(h.rtt_avg)}}</td>
       <td style="text-align:right">${{rttCell(h.rtt_min)}}</td>
       <td style="text-align:right">${{rttCell(h.rtt_max)}}</td>
-      <td style="${{noc_col}};text-align:center">${{h.changes}}</td>`;
-    tr.onclick = () => toggleDetail(tr, h);
-    tbody.appendChild(tr);
-
-    const dtr = document.createElement('tr');
-    dtr.className = 'detail-row hidden';
-    dtr.id = 'd' + idx;
-    dtr.innerHTML = `<td colspan="8"><div class="detail-inner">${{buildDetail(h)}}</div></td>`;
-    tbody.appendChild(dtr);
-  }});
+      <td style="${{noc_col}};text-align:center">${{h.changes}}</td></tr>`
+    + (open ? `<tr class="detail-row" id="d${{idx}}"><td colspan="8"><div class="detail-inner">${{buildDetail(h)}}</div></td></tr>` : '');
+}}
+function vsSpacer(px) {{
+  return `<tr class="vs" aria-hidden="true"><td colspan="8" style="height:${{Math.max(0, Math.round(px))}}px"></td></tr>`;
+}}
+function vsSetSpacers() {{
+  const tb = document.getElementById('tbody');
+  const n = VS.data.length, dh = VS.exp >= 0 ? VS.detailH : 0;
+  const t = tb.firstElementChild, b = tb.lastElementChild;
+  if (!t || !b || !t.classList.contains('vs') || !b.classList.contains('vs')) return;
+  t.firstElementChild.style.height = Math.max(0, Math.round(VS.start * VS.rowH + (VS.exp >= 0 && VS.exp < VS.start ? dh : 0))) + 'px';
+  b.firstElementChild.style.height = Math.max(0, Math.round((n - VS.end) * VS.rowH + (VS.exp >= VS.end ? dh : 0))) + 'px';
+}}
+function vsPaint(force) {{
+  const tb = document.getElementById('tbody');
+  const n = VS.data.length;
+  if (!n) {{ tb.innerHTML = ''; VS.start = VS.end = 0; return; }}
+  const rh = VS.rowH, exp = VS.exp, dh = exp >= 0 ? VS.detailH : 0;
+  const top = tb.getBoundingClientRect().top;
+  const y0 = Math.max(0, -top), y1 = y0 + window.innerHeight;
+  const at = y => {{
+    if (exp >= 0) {{
+      if (y >= (exp + 1) * rh + dh) return Math.floor((y - dh) / rh);
+      if (y >= (exp + 1) * rh) return exp;
+    }}
+    return Math.floor(y / rh);
+  }};
+  const v0 = Math.min(n - 1, Math.max(0, at(y0))), v1 = Math.min(n, at(y1) + 1);
+  if (!force && v0 >= VS.start && v1 <= VS.end && tb.children.length) return;
+  const s = Math.max(0, v0 - VS_BUF), e = Math.min(n, v1 + VS_BUF);
+  const parts = [];
+  for (let i = s; i < e; i++) parts.push(vsRowHtml(VS.data[i], i));
+  VS.start = s; VS.end = e;
+  const topH = s * rh + (exp >= 0 && exp < s ? dh : 0);
+  const botH = (n - e) * rh + (exp >= e ? dh : 0);
+  tb.innerHTML = vsSpacer(topH) + parts.join('') + vsSpacer(botH);
+  const d = exp >= 0 ? document.getElementById('d' + exp) : null;
+  if (d && Math.abs(d.offsetHeight - VS.detailH) > 1) {{ VS.detailH = d.offsetHeight; vsSetSpacers(); }}
+  if (!VS.measured && tb.offsetParent !== null && e > s) {{
+    // real row height (only measurable while the host list is visible)
+    const m = (tb.offsetHeight - topH - botH - (d ? d.offsetHeight : 0)) / (e - s);
+    if (m > 10) {{ VS.rowH = m; VS.measured = true; vsPaint(true); }}
+  }}
+}}
+function vsSchedule() {{
+  if (VS.tick) return;
+  VS.tick = true;
+  requestAnimationFrame(() => {{ VS.tick = false; vsPaint(false); }});
+}}
+window.addEventListener('scroll', vsSchedule, {{passive: true}});
+window.addEventListener('resize', () => vsPaint(true));
+function renderTable(data) {{
+  VS.data = data; VS.exp = -1; VS.detailH = 0; VS.start = VS.end = 0;
+  vsPaint(true);
 }}
 
 function escHtml(s) {{
@@ -1555,18 +1602,15 @@ function buildDetail(h) {{
   </div>`;
 }}
 
-function toggleDetail(tr, h) {{
-  const idx = tr.dataset.idx;
-  const dtr = document.getElementById('d' + idx);
-  const expanded = !dtr.classList.contains('hidden');
-  // close all
-  document.querySelectorAll('.detail-row').forEach(r => r.classList.add('hidden'));
-  document.querySelectorAll('tbody tr:not(.detail-row)').forEach(r => r.classList.remove('expanded'));
-  if (!expanded) {{
-    dtr.classList.remove('hidden');
-    tr.classList.add('expanded');
-  }}
+function toggleDetail(idx) {{
+  VS.exp = (VS.exp === idx) ? -1 : idx;
+  VS.detailH = 0;
+  vsPaint(true);
 }}
+document.getElementById('tbody').addEventListener('click', ev => {{
+  const tr = ev.target.closest('tr[data-idx]');
+  if (tr) toggleDetail(parseInt(tr.dataset.idx, 10));
+}});
 
 // updates header arrows/order badges to match the current sortChain
 function updateSortHeaders() {{
@@ -1690,7 +1734,8 @@ function toggleShowIp() {{
   renderBuckets();
 }}
 
-// total hosts involved in a duplicate hostname/IP pair - both sides count,
+// host is one side of a duplicate hostname/IP pair (used by the DUPLICATES filter,
+// which shows both sides); the card counts pairs, see updateCards()
 // independent of dedupMode (mirrors count_duplicate_hosts() server-side, used
 // for the initial DUPLICATES card before any JS has run)
 function isDuplicatePair(h) {{
@@ -1708,18 +1753,20 @@ function updateCards() {{
   const nFlap  = active.filter(h => h.changes > 0).length;
   const nDown  = active.filter(h => h.changes === 0 && h.state === 'DOWN').length;
   const nNodns = active.filter(h => h.changes === 0 && h.state === 'NO-DNS').length;
+  const nMulti = active.filter(h => h.ips && h.ips.length > 1).length;
   document.querySelector('#cardTotal .num').textContent = nTotal;
   document.querySelector('#cardUp .num').textContent    = nUp;
   document.querySelector('#cardFlap .num').textContent  = nFlap;
   document.querySelector('#cardDown .num').textContent  = nDown;
   document.querySelector('#cardNodns .num').textContent = nNodns;
+  document.querySelector('#cardMulti .num').textContent = nMulti;
   // dedup on -> the redundant side of every pair is hidden, so none of what's
   // left counts as a duplicate anymore; a '0' there reads as 'no problem found'
   // which is misleading while dedup is hiding the very thing it would count,
   // so show an active-state message instead, same card size either way
   const dupCard = document.getElementById('cardDup');
   if (dedupMode === '') {{
-    const nDup = RAW.hosts.filter(isDuplicatePair).length;
+    const nDup = RAW.hosts.filter(h => isIpHost(h.name) && REDUNDANT_IPS.has(h.name)).length;   // pairs
     dupCard.innerHTML = '<div class="num">' + nDup + '</div><div class="lbl">DUPLICATES</div>';
   }} else {{
     const nFiltered = RAW.hosts.filter(isDeduped).length;
@@ -1741,7 +1788,11 @@ function onDedupSelectChange() {{
 // reproduces it exactly, same filename convention as --html/epinga.py itself
 function downloadHtml() {{
   syncMetaSelected();
-  const blob = new Blob(['<!DOCTYPE html>\\n' + document.documentElement.outerHTML], {{type: 'text/html'}});
+  // rendered rows/buckets are rebuilt from RAW on load - leave them out (page stays small)
+  const clone = document.documentElement.cloneNode(true);
+  const tb = clone.querySelector('#tbody'); if (tb) tb.innerHTML = '';
+  const bk = clone.querySelector('#buckets'); if (bk) bk.innerHTML = '';
+  const blob = new Blob(['<!DOCTYPE html>\\n' + clone.outerHTML], {{type: 'text/html'}});
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url;
@@ -1857,9 +1908,17 @@ function syncMetaSelected() {{
     if (sel) [...sel.options].forEach(o => o.toggleAttribute('selected', o.value === sel.value));
   }});
 }}
+// summary cards act as filter buttons: click sets 'Show', click again clears it
+function cardFilter(el) {{
+  const sel = document.getElementById('stateFilter');
+  const f = el.getAttribute('data-f');
+  sel.value = (sel.value === f) ? '' : f;
+  applyFilter();
+}}
 function applyFilter() {{
   const qRaw  = document.getElementById('search').value;
   const state = document.getElementById('stateFilter').value;
+  document.querySelectorAll('.card[data-f]').forEach(c => c.classList.toggle('sel', state !== '' && c.getAttribute('data-f') === state));
   const searchEl = document.getElementById('search');
   // plain text is used as a substring match (old behaviour, unaffected); anything
   // that does not parse as valid regex syntax just falls back to substring too, so
@@ -1898,6 +1957,8 @@ function applyFilter() {{
       case 'ALWAYS-UP':   if (h.state !== 'UP'     || h.changes > 0) return false; break;
       case 'ALWAYS-DOWN': if (h.state !== 'DOWN'   || h.changes > 0) return false; break;
       case 'NO-DNS':      if (h.state !== 'NO-DNS' || h.changes > 0) return false; break;
+      case 'DUPLICATES':  if (!isDuplicatePair(h)) return false; break;
+      case 'MULTI-IP':    if (!(h.ips && h.ips.length > 1)) return false; break;
       case 'FLAP':        if (h.changes === 0) return false; break;
       case 'UP+FLAP':     if (!(h.state === 'UP'   || h.changes > 0)) return false; break;
       case 'DOWN+FLAP':   if (!(h.state === 'DOWN' || h.changes > 0)) return false; break;
@@ -2118,6 +2179,7 @@ function renderBuckets() {{
 function toggleBucket(suffix) {{
   const el = document.getElementById('bucket-' + suffix);
   if (el) el.classList.toggle('collapsed');
+  vsPaint(true);   // host list may have just become visible
 }}
 
 function stateOrder(h) {{
