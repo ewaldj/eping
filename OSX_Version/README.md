@@ -4,6 +4,7 @@ Web GUI version of [eping](https://github.com/ewaldj/eping) for macOS 10.13+ (Ap
 A small launcher app (`eping.app`) starts eping in the background, opens the web GUI and shows a small window with
 Start / Stop / Restart / port / Open web GUI / Console log / Update. Same functions as the Windows version.
 If the web port is in use, the launcher tries the next ports (up to 32) and shows the port actually used (orange note in the status line, port field updated).
+*New instance* (own row below *Working dir*) starts another launcher, up to 9 side by side, on the next free web port. All instances share the working folder `~/eping`.
 The browser opens as soon as eping answers. Python 3.11 (for Apple Silicon and Intel) and fping 5.5 (universal) are included.
 
 ## Download

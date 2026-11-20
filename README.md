@@ -60,7 +60,7 @@ Details: [OSX_Version](https://github.com/ewaldj/eping/tree/main/OSX_Version/)
 - Portable: unpack [`eping-mac.zip`](https://github.com/ewaldj/eping/raw/main/OSX_Version/eping-mac.zip)
   and open `eping.app`.
 - The apps are not notarized: use right-click / Open, or `xattr -dr com.apple.quarantine <folder>` once.
-- `eping.app` shows the same window as the Windows launcher; the update check uses the `eping-mac` line in `eversions`.
+- `eping.app` shows the same window as the Windows launcher; the update check uses the `eping-mac` line in `eversions`. *New instance* (own row below *Working dir*) starts a further launcher (up to 9, `open -n`) on the next free web port; all instances share the working folder `<home>/eping` like on Windows, the window title shows the instance number. Starting `eping.app` with `open -n` or from a terminal also takes the next free instance.
 
 ## Quick start
 
